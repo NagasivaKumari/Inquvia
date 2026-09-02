@@ -1,0 +1,36 @@
+{
+  "name": "inquvia",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "tsx test/composite.test.ts",
+    "test:matrix": "tsx test/testnet-matrix.ts"
+  },
+  "dependencies": {
+    "@perawallet/connect": "^1.6.0",
+    "@types/mongoose": "^5.11.96",
+    "@x402/avm": "^2.24.0",
+    "@x402/core": "^2.24.0",
+    "@x402/fetch": "^2.24.0",
+    "algosdk": "^3.7.0",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.10",
+    "mongoose": "^9.9.4",
+    "nanoid": "^5.0.9",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

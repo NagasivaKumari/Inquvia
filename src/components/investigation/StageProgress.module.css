@@ -1,0 +1,125 @@
+.list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  position: relative;
+}
+
+.indicator {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  background: var(--color-accent);
+  border-radius: var(--radius-full);
+}
+
+.dotPending {
+  width: 10px;
+  height: 10px;
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+.check {
+  color: var(--color-success);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.fail {
+  color: var(--color-danger);
+  font-size: 0.875rem;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.activeItem .label {
+  color: var(--color-accent);
+}
+
+.activeLabel {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.connector {
+  position: absolute;
+  left: 11px;
+  top: 36px;
+  width: 2px;
+  height: calc(100% - 12px);
+  background: var(--color-border);
+}
+
+.connectorDone {
+  background: var(--color-success);
+}
+
+.completed .label {
+  color: var(--color-text-muted);
+}
+
+.failed .label {
+  color: var(--color-danger);
+}
+
+.pending .label {
+  color: var(--color-text-muted);
+  opacity: 0.6;
+}
+
+@media (min-width: 769px) {
+  .list {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .item {
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--space-3);
+  }
+
+  .connector {
+    position: absolute;
+    left: calc(50% + 16px);
+    top: 20px;
+    width: calc(100% - 32px);
+    height: 2px;
+  }
+
+  .content {
+    align-items: center;
+  }
+}

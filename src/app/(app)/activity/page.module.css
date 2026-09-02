@@ -1,0 +1,108 @@
+.page {
+  max-width: 800px;
+}
+
+.header {
+  margin-bottom: var(--space-8);
+}
+
+.header p {
+  margin-top: var(--space-2);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-8);
+}
+
+.summaryCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+}
+
+.summaryLabel {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.summaryValue {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.item {
+  padding: var(--space-5);
+}
+
+.itemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.invLink {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.invLink:hover {
+  color: var(--color-accent);
+}
+
+.capability {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.amountValue {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.blockReason {
+  margin-top: var(--space-3);
+  font-size: 0.8125rem;
+  color: var(--color-danger);
+}
+
+.details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  align-items: center;
+}
+
+.ref {
+  font-family: monospace;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 768px) {
+  .summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

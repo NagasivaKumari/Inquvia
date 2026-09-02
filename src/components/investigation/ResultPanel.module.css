@@ -1,0 +1,140 @@
+.section {
+  margin-bottom: var(--space-8);
+}
+
+.assessment {
+  padding: var(--space-8);
+  margin-bottom: var(--space-6);
+}
+
+.assessmentLabel {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-2);
+}
+
+.assessmentValue {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-6);
+}
+
+.metrics {
+  display: flex;
+  gap: var(--space-10);
+  margin-bottom: var(--space-6);
+}
+
+.metricLabel {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-1);
+}
+
+.metricValue {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.conclusionText {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.genuine {
+  border-left: 4px solid var(--color-success);
+}
+
+.misleading {
+  border-left: 4px solid var(--color-danger);
+}
+
+.suspicious {
+  border-left: 4px solid var(--color-warning);
+}
+
+.insufficient,
+.inconclusive {
+  border-left: 4px solid var(--color-uncertain);
+}
+
+.findings {
+  margin-bottom: var(--space-6);
+}
+
+.findings h3 {
+  margin-bottom: var(--space-3);
+}
+
+.findings ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.findings li {
+  padding-left: var(--space-5);
+  position: relative;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.findings li::before {
+  content: "•";
+  position: absolute;
+  left: var(--space-2);
+  color: var(--color-accent);
+}
+
+.limitations {
+  background: var(--color-bg-subtle);
+  margin-top: var(--space-6);
+}
+
+.limitations h3 {
+  margin-bottom: var(--space-3);
+}
+
+.limitations ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.limitations li {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  padding-left: var(--space-5);
+  position: relative;
+}
+
+.limitations li::before {
+  content: "?";
+  position: absolute;
+  left: var(--space-2);
+  color: var(--color-uncertain);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .assessmentValue {
+    font-size: 1.5rem;
+  }
+
+  .metrics {
+    gap: var(--space-6);
+  }
+}
