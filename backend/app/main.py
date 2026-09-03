@@ -519,21 +519,24 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
         for f in form.getlist("files"):
             data = await f.read()
             if data and len(data) > 0:
-                from ..libraries.storage import validate_upload
+                from .libraries.storage import validate_upload
                 ok, err = validate_upload(f.content_type or "", len(data))
                 if not ok:
                     return JSONResponse({"error": err}, status_code=400)
-                from ..libraries import storage as storage_mod  # noqa
-                files.append({"data": data, "name": f.filename or "upload.bin", "mime": f.content_type or "application/octet-stream"})
+                files.append({
+                    "data": data,
+                    "name": f.filename or "upload.bin",
+                    "mime": f.content_type or "application/octet-stream",
+                })
     else:
         body = await _json(request)
 
-    from ..libraries.atomic_route import InputValidationError
     try:
         result = await atomic_route.handle_atomic_paid_request(capability_id, user, body, files)
-    except InputValidationError as e:
+    except atomic_route.InputValidationError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception:
+        import traceback; traceback.print_exc()
         return JSONResponse({"error": "Failed to process investigation"}, status_code=500)
 
     headers = {}

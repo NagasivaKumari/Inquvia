@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pymongo
+bcrypt
+httpx
+x402
+cryptography

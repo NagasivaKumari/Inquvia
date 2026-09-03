@@ -15,8 +15,13 @@ def sanitize_text(text: str) -> str:
 
 def sanitize_url(url: str) -> str:
     url = (url or "").strip()
+    if not url:
+        return ""
     if url.startswith(("http://", "https://")):
         return url
+    # Accept bare domains users commonly paste into the form.
+    if "." in url and " " not in url and not url.startswith("/"):
+        return f"https://{url}"
     return ""
 
 
