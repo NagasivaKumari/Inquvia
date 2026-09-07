@@ -17,27 +17,35 @@ export const ALGORAND_CONFIG = {
   network:
     process.env.NEXT_PUBLIC_ALGORAND_NETWORK ??
     process.env.ALGORAND_NETWORK ??
-    "mainnet",
-  usdcAsa: process.env.ALGORAND_USDC_ASA ?? "31566704",
+    "testnet",
+  usdcAsa:
+    process.env.NEXT_PUBLIC_ALGORAND_USDC_ASA ??
+    process.env.ALGORAND_USDC_ASA ??
+    ((process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? process.env.ALGORAND_NETWORK) === "mainnet" ? "31566704" : "10458941"),
   facilitatorUrl:
-    process.env.X402_FACILITATOR_URL ?? "https://facilitator.goplausible.xyz",
-  challengeTag: process.env.X402_CHALLENGE_TAG ?? "x402-global-challenge",
+    process.env.NEXT_PUBLIC_X402_FACILITATOR_URL ??
+    process.env.X402_FACILITATOR_URL ??
+    "https://facilitator.goplausible.xyz",
+  challengeTag:
+    process.env.NEXT_PUBLIC_X402_CHALLENGE_TAG ??
+    process.env.X402_CHALLENGE_TAG ??
+    "x402-global-challenge",
   // Algorand node (algod) used to submit signed transactions on-chain.
   // Defaults to the free public Algonode API — set your own for production.
   algodToken: process.env.ALGOD_TOKEN ?? "",
   algodServer:
     (process.env.ALGOD_SERVER && process.env.ALGOD_SERVER.trim()) ||
-    (process.env.ALGORAND_NETWORK === "testnet" || process.env.NEXT_PUBLIC_ALGORAND_NETWORK === "testnet"
-      ? "https://testnet-api.algonode.cloud"
-      : "https://mainnet-api.algonode.cloud"),
+    ((process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? process.env.ALGORAND_NETWORK) === "mainnet"
+      ? "https://mainnet-api.algonode.cloud"
+      : "https://testnet-api.algonode.cloud"),
   algodPort: process.env.ALGOD_PORT ? Number(process.env.ALGOD_PORT) : 443,
 } as const;
 
 /** CAIP-2 network id matching ALGORAND_CONFIG.network. */
 export const ALGORAND_NETWORK_CAIP2 =
-  ALGORAND_CONFIG.network === "testnet"
-    ? "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="
-    : "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+  ALGORAND_CONFIG.network === "mainnet"
+    ? "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
+    : "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=";
 
 /**
  * Evidence Acquisition Gateway configuration.

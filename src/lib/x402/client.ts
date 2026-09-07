@@ -7,7 +7,9 @@ import { apiFetch } from "../api";
 function buildPaidFetch(address: string) {
   const signer = createX402Signer(address);
   const scheme = new ExactAvmScheme(signer);
-  const client = new x402Client().register(ALGORAND_NETWORK_CAIP2, scheme);
+  const client = new x402Client()
+    .register("algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=", scheme)
+    .register("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", scheme);
   return wrapFetchWithPayment(apiFetch as typeof fetch, client);
 }
 

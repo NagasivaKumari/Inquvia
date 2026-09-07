@@ -4,6 +4,7 @@ Communicates with Evidence Services exclusively through the HTTP base URL
 configured via the EVIDENCE_SERVICE_URL environment variable.
 Never hardcodes the URL or accesses local Evidence Services files.
 """
+import json
 import logging
 from typing import Any
 import httpx
