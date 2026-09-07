@@ -29,23 +29,27 @@ function base64(u8: Uint8Array): string {
  */
 export function WalletBadge({ address, onConnected, onDisconnected, compact }: WalletBadgeProps) {
   const [connected, setConnected] = useState<string>(address ?? "");
-  const [showInfo, setShowInfo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (address) setConnected(address);
-    // Eagerly reconnect Pera session if a previous session exists in localStorage
-    getPera()
-      .reconnectSession()
-      .then((accounts) => {
-        if (accounts && accounts.length > 0) {
-          setConnected(accounts[0]);
-          onConnected?.(accounts[0]);
-        }
-      })
-      .catch(() => {});
+    setConnected(address ?? "");
   }, [address]);
+
+  useEffect(() => {
+    if (!address) {
+      getPera()
+        .reconnectSession()
+        .then((accounts) => {
+          if (accounts && accounts.length > 0) {
+            setConnected(accounts[0]);
+            onConnected?.(accounts[0]);
+          }
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!connected) {
     const doConnect = async () => {
@@ -96,35 +100,36 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
   }
 
   const doDisconnect = async () => {
-    await apiFetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE" }).catch(() => {});
-    await disconnectPera().catch(() => {});
-    invalidateAuthCache();
-    setConnected("");
-    setShowInfo(false);
-    onDisconnected?.();
+    setLoading(true);
+    try {
+      await apiFetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE" }).catch(() => {});
+      await disconnectPera().catch(() => {});
+      invalidateAuthCache();
+      setConnected("");
+      onDisconnected?.();
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className={`${styles.connected} ${compact ? styles.compact : ""}`}>
-      <button
-        type="button"
-        className={styles.logoButton}
-        onClick={() => setShowInfo((s) => !s)}
-        title="Connected wallet — click for address"
-        aria-expanded={showInfo}
-      >
-        <WalletLogo id="pera" size={compact ? 26 : 34} />
-      </button>
-
-      {showInfo && (
-        <div className={styles.info}>
-          <span className={styles.network}>Pera · {ALGORAND_CONFIG.network}</span>
-          <span className={styles.address}>{shortenAddress(connected)}</span>
-          <button type="button" className="btn btn-ghost btn-xs" onClick={doDisconnect}>
-            Disconnect
-          </button>
-        </div>
-      )}
+      <div className={styles.info}>
+        <WalletLogo id="pera" size={compact ? 20 : 26} />
+        <span className={styles.network}>{ALGORAND_CONFIG.network}</span>
+        <span className={styles.address} title={connected}>
+          {shortenAddress(connected)}
+        </span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs"
+          onClick={doDisconnect}
+          disabled={loading}
+          title="Disconnect wallet"
+        >
+          {loading ? "…" : "Disconnect"}
+        </button>
+      </div>
     </div>
   );
 }

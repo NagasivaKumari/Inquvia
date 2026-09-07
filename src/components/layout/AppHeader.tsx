@@ -79,6 +79,22 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
     }
   };
 
+  const disconnectWallet = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await apiFetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE" }).catch(() => {});
+      const { disconnectPera } = await import("@/lib/wallet/pera");
+      await disconnectPera().catch(() => {});
+      invalidateAuthCache();
+      setUser((u) => (u ? { ...u, walletAddress: undefined } : u));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Disconnect failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <header className={styles.bar}>
       <div className={styles.left}>
@@ -100,10 +116,21 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
       <div className={styles.right}>
         {error && <span className={styles.err}>{error}</span>}
         {user?.walletAddress ? (
-          <span className={styles.wallet} title={user.walletAddress}>
-            <span className={styles.walletDot} aria-hidden="true" />
-            {shortenAddress(user.walletAddress)}
-          </span>
+          <div className={styles.walletGroup}>
+            <span className={styles.wallet} title={user.walletAddress}>
+              <span className={styles.walletDot} aria-hidden="true" />
+              {shortenAddress(user.walletAddress)}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={disconnectWallet}
+              disabled={busy}
+              title="Disconnect wallet"
+            >
+              Disconnect
+            </button>
+          </div>
         ) : (
           <button
             type="button"

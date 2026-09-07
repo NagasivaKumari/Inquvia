@@ -51,9 +51,21 @@ export async function connectPera(): Promise<{ address: string; providerId: stri
 
 export async function disconnectPera(): Promise<void> {
   try {
-    await getPera().disconnect();
+    if (peraWallet) {
+      await peraWallet.disconnect();
+    }
   } catch {
     // already disconnected
+  } finally {
+    peraWallet = null;
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("PeraWallet.Wallet");
+        localStorage.removeItem("walletconnect");
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 

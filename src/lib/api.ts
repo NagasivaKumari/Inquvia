@@ -31,7 +31,16 @@ export function apiFetch(url: string | URL | Request, init: RequestInit = {}): P
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
-  const headers = new Headers(init.headers);
+  const headers = new Headers(
+    typeof url === "object" && url !== null && "headers" in url && (url as Request).headers
+      ? (url as Request).headers
+      : init.headers
+  );
+  if (init.headers && typeof url === "object" && url !== null && "headers" in url) {
+    new Headers(init.headers).forEach((value, key) => {
+      headers.set(key, value);
+    });
+  }
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }

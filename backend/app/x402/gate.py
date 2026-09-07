@@ -69,7 +69,7 @@ def build_x402_middleware():
                 network=_network(),
                 extra={"tag": config.X402_CHALLENGE_TAG},
             ),
-            description=cap["description"],
+            description=f"Inquvia: {cap['title']} - {cap['description']}",
             mime_type="application/json",
         )
 
@@ -79,8 +79,9 @@ def build_x402_middleware():
 def extract_settlement_tx_id_from_response_headers(headers: dict) -> str:
     """Parse the PAYMENT-RESPONSE / X-PAYMENT-RESPONSE header for the settle
     tx id, mirroring atomicRoute.extractSettlementTxId."""
-    for name in ("payment-response", "x-payment-response", "x-x402-payment"):
-        header = headers.get(name)
+    lower_headers = {str(k).lower(): v for k, v in headers.items()}
+    for name in ("payment-response", "x-payment-response", "x-x402-payment", "payment-signature"):
+        header = lower_headers.get(name)
         if not header:
             continue
         try:
@@ -121,13 +122,26 @@ async def _record_paid_request(request, response) -> None:
     amount_usdc = amount_micro / 1_000_000 if amount_micro else 0.0
 
     user = None
-    session_id = request.cookies.get(config.SESSION_COOKIE)
-    if session_id:
+    headers = getattr(request, "headers", {}) or {}
+    auth_header = headers.get("Authorization") if hasattr(headers, "get") else None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
         try:
-            from ..auth import get_current_user_from_cookie
-            user = get_current_user_from_cookie(session_id)
+            from ..auth import verify_jwt
+            user_id = verify_jwt(token)
+            if user_id:
+                user = db.get_user_by_id(user_id)
         except Exception:
             user = None
+    if not user:
+        cookies = getattr(request, "cookies", {}) or {}
+        session_id = cookies.get(config.SESSION_COOKIE) if hasattr(cookies, "get") else None
+        if session_id:
+            try:
+                from ..auth import get_current_user_from_cookie
+                user = get_current_user_from_cookie(session_id)
+            except Exception:
+                user = None
     if not user:
         return
 
@@ -138,9 +152,12 @@ async def _record_paid_request(request, response) -> None:
     investigation_id = None
     capability = None
     try:
-        body = await response.body()
+        raw_body = getattr(response, "body", b"")
+        if callable(raw_body):
+            import inspect
+            raw_body = await raw_body() if inspect.iscoroutinefunction(raw_body) else raw_body()
         import json as _json
-        data = _json.loads(body)
+        data = _json.loads(raw_body)
         investigation_id = data.get("id")
         capability = data.get("capability")
     except Exception:

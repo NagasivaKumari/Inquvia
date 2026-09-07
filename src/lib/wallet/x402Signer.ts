@@ -18,13 +18,29 @@ export function createX402Signer(address: string): ClientAvmSigner {
     async signTransactions(txns, indexesToSign) {
       const pera = await ensurePeraSession();
       const decoded = txns.map((t) => algosdk.decodeUnsignedTransaction(t));
-      const signed = await pera.signTransaction([
-        decoded.map((txn) => ({ txn, signers: [address] })),
-      ]);
-      const toSign = indexesToSign ?? decoded.map((_, i) => i);
-      return txns.map((_, i) =>
-        toSign.includes(i) ? (signed[i] ?? null) : null
-      );
+      // Determine which transactions this wallet should sign:
+      // Default to transactions where txn.sender matches address, or explicitly indexesToSign.
+      const toSign = indexesToSign ?? decoded
+        .map((txn, i) => (txn.sender.toString() === address ? i : -1))
+        .filter((i) => i !== -1);
+
+      // In ARC-0001 / Pera, unsigned transactions in an atomic group must have signers: []
+      const signerTxns = decoded.map((txn, i) => ({
+        txn,
+        signers: toSign.includes(i) ? [address] : [],
+      }));
+
+      const signed = await pera.signTransaction([signerTxns]);
+
+      // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.
+      const signedMap = new Map<number, Uint8Array>();
+      toSign.forEach((txnIndex, k) => {
+        if (signed && signed[k]) {
+          signedMap.set(txnIndex, signed[k]);
+        }
+      });
+
+      return txns.map((_, i) => signedMap.get(i) ?? null);
     },
   };
 }
