@@ -77,11 +77,15 @@ WALLET_PROVIDERS = [
 ]
 
 def _cookie(request: Request) -> dict:
-    # Force none/False for local dev to allow cross-port cookies on all request types
+    # Detect if the connection is HTTPS
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    
+    # SameSite=none and Secure=False is only allowed on localhost for local dev.
+    # Production (HTTPS) requires SameSite=lax and Secure=True.
     return {
         "httponly": True,
-        "samesite": "none",
-        "secure": False,
+        "samesite": "none" if not is_https else "lax",
+        "secure": is_https,
         "path": "/",
     }
 
