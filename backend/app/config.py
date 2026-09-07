@@ -25,7 +25,7 @@ MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
 
 ALGORAND_NETWORK = os.getenv("NEXT_PUBLIC_ALGORAND_NETWORK", None) or os.getenv("ALGORAND_NETWORK", "mainnet")
 ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "31566704")
-X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.goplausible.com")
+X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.goplausible.xyz")
 X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "inquvia")
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
 SERVER_WALLET_MNEMONIC = os.getenv("SERVER_WALLET_MNEMONIC", "")

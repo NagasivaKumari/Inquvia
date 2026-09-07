@@ -42,7 +42,7 @@ Algorand Mainnet / x402 settings:
 ```env
 ALGORAND_NETWORK=mainnet
 ALGORAND_USDC_ASA=31566704
-X402_FACILITATOR_URL=https://facilitator.goplausible.com
+X402_FACILITATOR_URL=https://facilitator.goplausible.xyz
 X402_WALLET_MNEMONIC=your_mnemonic_here
 X402_CHALLENGE_TAG=x402-global-challenge
 ```

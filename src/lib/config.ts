@@ -20,7 +20,7 @@ export const ALGORAND_CONFIG = {
     "mainnet",
   usdcAsa: process.env.ALGORAND_USDC_ASA ?? "31566704",
   facilitatorUrl:
-    process.env.X402_FACILITATOR_URL ?? "https://facilitator.goplausible.com",
+    process.env.X402_FACILITATOR_URL ?? "https://facilitator.goplausible.xyz",
   challengeTag: process.env.X402_CHALLENGE_TAG ?? "x402-global-challenge",
   // Algorand node (algod) used to submit signed transactions on-chain.
   // Defaults to the free public Algonode API — set your own for production.
