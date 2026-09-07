@@ -77,14 +77,11 @@ WALLET_PROVIDERS = [
 ]
 
 def _cookie(request: Request) -> dict:
-    # Secure cookies are dropped on http://localhost, so only set Secure when
-    # the connection is actually HTTPS (e.g. deployed behind a TLS proxy).
-    is_localhost = request.url.hostname in ("localhost", "127.0.0.1")
-    secure = request.url.scheme == "https" and not is_localhost
+    # Force none/False for local dev to allow cross-port cookies on all request types
     return {
         "httponly": True,
-        "samesite": "lax" if is_localhost else "none",
-        "secure": secure,
+        "samesite": "none",
+        "secure": False,
         "path": "/",
     }
 
@@ -100,7 +97,9 @@ def _session_max_age(iso: str) -> int:
 
 
 def _resolve_user(request: Request) -> dict | None:
-    return get_current_user_from_cookie(request.cookies.get(SESSION_COOKIE))
+    cookie_value = request.cookies.get(SESSION_COOKIE)
+    print(f"DEBUG: Resolving user. Cookie={cookie_value is not None}")
+    return get_current_user_from_cookie(cookie_value)
 
 
 def _unauthorized():

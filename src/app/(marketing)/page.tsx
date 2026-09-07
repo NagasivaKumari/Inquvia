@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
   APP_NAME,
@@ -15,7 +16,7 @@ import {
 } from "@/lib/config";
 import styles from "./page.module.css";
 
-export default function HomePage() {
+function HomePageContent() {
   const router = useRouter();
   const [query, setQuery] = useState("");
 
@@ -364,3 +365,9 @@ export default function HomePage() {
     </div>
   );
 }
+
+const HomePage = dynamic(() => Promise.resolve(HomePageContent), {
+  ssr: false,
+});
+
+export default HomePage;

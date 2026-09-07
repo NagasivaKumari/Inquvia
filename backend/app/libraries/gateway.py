@@ -400,11 +400,12 @@ async def verify_settlement_on_chain(tx_id: str, transport=None) -> dict:
     url = f"{config.ALGOD_SERVER}/v2/transactions/pending/{tx_id}"
     headers = {"X-Algo-API-Token": config.ALGOD_TOKEN} if config.ALGOD_TOKEN else {}
     try:
-        client = httpx.Client(timeout=8.0, transport=transport) if transport else httpx.Client(timeout=8.0)
-        try:
-            res = await client.get(url, headers=headers)
-        finally:
-            client.close()
+        if transport:
+            async with httpx.AsyncClient(timeout=8.0, transport=transport) as client:
+                res = await client.get(url, headers=headers)
+        else:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(url, headers=headers)
         if res.status_code == 200:
             data = res.json()
             confirmed_round = data.get("confirmed-round")
