@@ -47,6 +47,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "payment-required",
+        "Payment-Required",
+        "payment-response",
+        "Payment-Response",
+        "x-payment-response",
+        "x-x402-payment",
+        "x-402-payment",
+        "payment-signature",
+        "Payment-Signature",
+    ],
 )
 
 _X402_XFAIL = {"traceback": None}
@@ -119,6 +130,7 @@ async def x402_middleware(request: Request, call_next):
         return await call_next(request)
     print(f"DEBUG: Path={request.url.path}, Middleware={_X402_MIDDLEWARE is not None}")
     middleware = _X402_MIDDLEWARE
+    origin = request.headers.get("origin")
     # Only apply x402 gating to paid capability endpoints
     if middleware is not None and request.url.path.startswith("/api/x402/"):
         try:
@@ -126,13 +138,22 @@ async def x402_middleware(request: Request, call_next):
         except Exception as e:
             import traceback; traceback.print_exc()
             # Fail closed: a payment-gate error can never mean "run for free".
-            return JSONResponse(
+            res = JSONResponse(
                 {"error": "Payment verification failed. No payment was accepted and the capability was not run."},
                 status_code=402,
             )
         if res.status_code < 400 and getattr(request.state, "payment_requirements", None):
             from .x402.gate import _record_paid_request
             await _record_paid_request(request, res)
+        # Ensure CORS headers are attached even when the x402 middleware short-circuits with 402
+        if origin and (origin in _ALLOWED_ORIGINS or "*" in _ALLOWED_ORIGINS):
+            res.headers["Access-Control-Allow-Origin"] = origin
+            res.headers["Access-Control-Allow-Credentials"] = "true"
+            res.headers["Access-Control-Expose-Headers"] = (
+                "payment-required, Payment-Required, payment-response, "
+                "Payment-Response, x-payment-response, x-x402-payment, x-402-payment, "
+                "payment-signature, Payment-Signature"
+            )
         return res
     return await call_next(request)
 

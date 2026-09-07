@@ -14,9 +14,10 @@ export function invalidateAuthCache(): void {
   _authMeInFlight = null;
 }
 
-export function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const method = (init.method || "GET").toUpperCase();
-  const isAuthMe = method === "GET" && url.includes("/api/auth/me");
+export function apiFetch(url: string | URL | Request, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method || (typeof url === "object" && "method" in url ? (url as Request).method : "GET")).toUpperCase();
+  const urlString = typeof url === "string" ? url : typeof url === "object" && "url" in url ? (url as Request).url : String(url);
+  const isAuthMe = method === "GET" && urlString.includes("/api/auth/me");
 
   if (isAuthMe && !init.body) {
     const now = Date.now();

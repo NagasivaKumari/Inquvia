@@ -2,7 +2,7 @@
 
 import algosdk from "algosdk";
 import type { ClientAvmSigner } from "@x402/avm";
-import { getPera } from "./pera";
+import { ensurePeraSession } from "./pera";
 
 /**
  * Bridges the Pera wallet to the x402 ClientAvmSigner interface.
@@ -16,8 +16,9 @@ export function createX402Signer(address: string): ClientAvmSigner {
   return {
     address,
     async signTransactions(txns, indexesToSign) {
+      const pera = await ensurePeraSession();
       const decoded = txns.map((t) => algosdk.decodeUnsignedTransaction(t));
-      const signed = await getPera().signTransaction([
+      const signed = await pera.signTransaction([
         decoded.map((txn) => ({ txn, signers: [address] })),
       ]);
       const toSign = indexesToSign ?? decoded.map((_, i) => i);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { shortenAddress } from "@/lib/wallet";
-import { connectPera, disconnectPera } from "@/lib/wallet/pera";
+import { connectPera, disconnectPera, getPera } from "@/lib/wallet/pera";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
 import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { WalletLogo } from "./WalletLogo";
@@ -35,6 +35,16 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
 
   useEffect(() => {
     if (address) setConnected(address);
+    // Eagerly reconnect Pera session if a previous session exists in localStorage
+    getPera()
+      .reconnectSession()
+      .then((accounts) => {
+        if (accounts && accounts.length > 0) {
+          setConnected(accounts[0]);
+          onConnected?.(accounts[0]);
+        }
+      })
+      .catch(() => {});
   }, [address]);
 
   if (!connected) {

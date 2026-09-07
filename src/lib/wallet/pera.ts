@@ -16,6 +16,24 @@ export function getPera(): PeraWalletConnect {
   return peraWallet;
 }
 
+/** Ensure the Pera WalletConnect session is initialized and connected before signing. */
+export async function ensurePeraSession(): Promise<PeraWalletConnect> {
+  const pera = getPera();
+  if (pera.isConnected) {
+    return pera;
+  }
+  try {
+    const accounts = await pera.reconnectSession();
+    if (accounts && accounts.length > 0) {
+      return pera;
+    }
+  } catch {
+    // Reconnect failed or no active session
+  }
+  await pera.connect();
+  return pera;
+}
+
 function getAlgod(): algosdk.Algodv2 {
   return new algosdk.Algodv2(
     ALGORAND_CONFIG.algodToken,
