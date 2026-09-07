@@ -347,6 +347,13 @@ export interface EvidenceAcquisition {
   amountMicro: number;
   assetId: string;
   network: string;
+  /** Provider's x402 resource endpoint the user pays + fetches evidence from. */
+  resourceUrl?: string;
+  /** Provider's recipient address the user's payment must go to (from the
+   * provider's probed 402), verified on-chain by the server. */
+  payTo?: string;
+  /** Sender of the verified settlement, read off-chain by the server. */
+  payer?: string;
   paymentState: PaymentState;
   /** Server-verified Algorand transaction id of the settled payment. */
   txId?: string;

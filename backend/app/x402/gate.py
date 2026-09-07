@@ -104,8 +104,9 @@ def extract_settlement_tx_id_from_response_headers(headers: dict) -> str:
 
 async def _record_paid_request(request, response) -> None:
     """Record a settled x402 payment from the middleware's verified request
-    state, matching the Node settle handler. Runs only after a successful
-    (<400) capability response, because the middleware settles on success."""
+    state, attributed to the investigation + capability returned in the
+    response body. Runs only after a successful (<400) capability response,
+    because the middleware settles on success."""
     from fastapi import Request  # noqa
     from .. import db, config
 
@@ -132,10 +133,23 @@ async def _record_paid_request(request, response) -> None:
 
     tx_id = extract_settlement_tx_id_from_response_headers(dict(response.headers)) or ""
 
+    # Attribute the capability payment to the investigation returned by the
+    # atomic endpoint (the middlewares settles after the route produced it).
+    investigation_id = None
+    capability = None
+    try:
+        body = await response.body()
+        import json as _json
+        data = _json.loads(body)
+        investigation_id = data.get("id")
+        capability = data.get("capability")
+    except Exception:
+        pass
+
     db.save_payment({
         "userId": user["id"],
-        "investigationId": None,
-        "capability": None,
+        "investigationId": investigation_id,
+        "capability": capability,
         "amount": amount_usdc,
         "currency": "USDC",
         "network": getattr(requirements, "network", None) or config.ALGORAND_NETWORK_CAIP2,

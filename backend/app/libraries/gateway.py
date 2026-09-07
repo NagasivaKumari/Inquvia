@@ -33,20 +33,93 @@ def emit_activity(inv, kind, label, detail=None):
     })
 
 
+def _settled_amount_usdc(payment: dict) -> float:
+    return round(float(payment.get("amount") or 0) * USDC_DECIMALS)
+
+
 async def _spent_micro_for_investigation(investigation_id: str) -> float:
     return sum(
-        round(float(p.get("amount") or 0) * USDC_DECIMALS)
+        _settled_amount_usdc(p)
         for p in db.get_payments_for_investigation(investigation_id)
         if p.get("status") == "settled"
     )
 
 
 async def _total_spent_micro(user_id: str) -> float:
+    """All-time settled spend for THIS user (never global across users)."""
     return sum(
-        round(float(p.get("amount") or 0) * USDC_DECIMALS)
-        for p in db.list_payments(10000)
+        _settled_amount_usdc(p)
+        for p in db.get_user_payments(user_id)
         if p.get("status") == "settled"
     )
+
+
+def _session_start_iso() -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=config.SESSION_BUDGET_WINDOW_HOURS)).isoformat()
+
+
+async def _session_spent_micro(user_id: str) -> float:
+    """Settled spend within the sliding session window (distinct from total)."""
+    window_start = _session_start_iso()
+    from datetime import datetime, timezone
+    return sum(
+        _settled_amount_usdc(p)
+        for p in db.get_user_payments(user_id)
+        if p.get("status") == "settled" and p.get("timestamp", "") >= window_start
+    )
+
+
+def _probe_x402_requirements(service: dict, transport=None) -> dict | None:
+    """Probe a provider's resourceUrl for its authoritative PAYMENT-REQUIRED
+    402 header: payTo, amount, network, asset. Returns None when the provider
+    does not expose a parseable 402 (fail closed → provider_unavailable)."""
+    import base64
+    import json
+    import httpx
+
+    url = service.get("resourceUrl") or service.get("url")
+    if not url or not str(url).lower().startswith("https://"):
+        return None
+    client = httpx.Client(timeout=6.0, transport=transport) if transport else httpx.Client(timeout=6.0)
+    try:
+        res = client.get(url)
+        if res.status_code != 402:
+            return None
+        header = res.headers.get("payment-required") or res.headers.get("PAYMENT-REQUIRED")
+        if not header:
+            return None
+        try:
+            data = json.loads(base64.b64decode(header).decode("utf-8"))
+        except Exception:
+            data = json.loads(header)
+        accepts = data.get("accepts") or []
+        if not accepts:
+            return None
+        acc = accepts[0] if isinstance(accepts, list) else accepts
+        pay_to = acc.get("payTo") or acc.get("pay_to")
+        amount = acc.get("amount")
+        asset = acc.get("asset") or acc.get("assetId") or service.get("assetId")
+        network = acc.get("network") or data.get("network")
+        if not pay_to or not amount:
+            return None
+        try:
+            amount_micro = int(round(float(amount))) if float(amount) < 1e6 else int(amount)
+        except (TypeError, ValueError):
+            return None
+        resource_url = data.get("resourceUrl") or service.get("resourceUrl")
+        return {
+            "payTo": pay_to,
+            "amountMicro": amount_micro,
+            "assetId": str(asset) if asset else None,
+            "network": network,
+            "scheme": acc.get("scheme", "exact"),
+            "resourceUrl": resource_url,
+        }
+    except Exception:
+        return None
+    finally:
+        client.close()
 
 
 async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
@@ -74,7 +147,7 @@ async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
         "sessionBudget": 5, "totalBudget": 50,
     }
     total_spent = await _total_spent_micro(user_id)
-    session_spent = await _total_spent_micro(user_id)
+    session_spent = await _session_spent_micro(user_id)
     inv_spent = await _spent_micro_for_investigation(investigation_id)
 
     acquisitions = []
@@ -94,16 +167,38 @@ async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
                           requirement["capability"])
             continue
 
+        # Probe the provider's x402 endpoint for its authoritative payTo /
+        # asset / amount before any payment is requested. No probe → no
+        # payment (fail closed; a provider we cannot verify against is never
+        # paid). Core never holds funds: the USER pays the provider directly.
+        reqs = _probe_x402_requirements(service)
+        if not reqs:
+            acquisitions.append({
+                "id": _nanoid("acq"), "requirementId": requirement["id"],
+                "investigationId": investigation_id, "serviceId": service["id"],
+                "serviceName": service["name"], "capability": requirement["capability"],
+                "amountMicro": service["priceMicro"], "assetId": service["assetId"],
+                "resourceUrl": service["resourceUrl"], "network": service["network"],
+                "paymentState": "provider_unavailable",
+                "blockReason": "Provider did not expose x402 payment requirements",
+                "updatedAt": _now_iso(),
+            })
+            emit_activity(inv, "blocked",
+                          f"{service['name']}: could not verify x402 payment requirements",
+                          requirement["capability"])
+            continue
+
         ctx = {
             **prefs,
             "investigationSpent": inv_spent, "sessionSpent": session_spent, "totalSpent": total_spent,
         }
-        b = budget.enforce_budget(service["priceMicro"], ctx)
+        b = budget.enforce_budget(reqs["amountMicro"], ctx)
         acquisition = {
             "id": _nanoid("acq"), "requirementId": requirement["id"], "investigationId": investigation_id,
             "serviceId": service["id"], "serviceName": service["name"],
-            "capability": requirement["capability"], "amountMicro": service["priceMicro"],
-            "assetId": service["assetId"], "network": config.ALGORAND_NETWORK,
+            "capability": requirement["capability"], "amountMicro": reqs["amountMicro"],
+            "assetId": reqs["assetId"] or service["assetId"], "resourceUrl": reqs["resourceUrl"] or service["resourceUrl"],
+            "payTo": reqs["payTo"], "network": reqs["network"] or service["network"],
             "paymentState": "payment_required" if b["allowed"] else "payment_failed",
             "blockReason": None if b["allowed"] else budget.budget_block_reason(b["reason"]),
             "updatedAt": _now_iso(),
@@ -111,7 +206,7 @@ async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
         acquisitions.append(acquisition)
         if b["allowed"]:
             emit_activity(inv, "payment_required",
-                          f"{service['name']}: {(service['priceMicro'] / USDC_DECIMALS):.4f} USDC required",
+                          f"{service['name']}: {(reqs['amountMicro'] / USDC_DECIMALS):.4f} USDC required",
                           requirement["capability"])
         else:
             emit_activity(inv, "blocked", "Evidence check blocked by budget limit", b["reason"])
@@ -188,33 +283,28 @@ def create_investigation_record(input_: dict) -> dict:
 
 
 async def acquire_downstream(investigation_id: str, user_id: str) -> dict:
-    """Server-wallet downstream acquisition (mirrors gateway/index.ts). Only
-    active when SERVER_WALLET_MNEMONIC is configured; otherwise reports the
-    server wallet as unconfigured rather than fabricating evidence."""
+    """(Server wallet path — intentionally not implemented.) Core never holds
+    or spends funds. Downstream providers are paid directly by the user's
+    wallet; discovery returns an acquisition at payment_required with the
+    provider's payTo, and the user settles it client-side."""
     inv = db.get_investigation(investigation_id)
     if not inv:
         return {"ok": False, "error": "Investigation not found"}
     if inv.get("userId") and inv["userId"] != user_id:
         return {"ok": False, "error": "Forbidden"}
-    if not config.SERVER_WALLET_MNEMONIC:
-        return {"ok": False, "error": "Server wallet not configured"}
-
-    pending = [a for a in (inv.get("acquisitions") or []) if a.get("paymentState") == "payment_required"]
-    if not pending:
-        return {"ok": True, "investigation": inv}
-
-    # ponytail: server-wallet x402 client (sign + facilitator settle) is not
-    # implemented in the Python port; user pays client-side. Downstream only
-    # resolves via acquireEvidenceServerSide in Node. Mark unavailable.
-    for acq in pending:
-        acq["paymentState"] = "provider_unavailable"
-        acq["blockReason"] = "No payable server-side endpoint available in Python port"
-    db.save_investigation(inv)
-    return {"ok": True, "investigation": inv}
+    return {"ok": True, "investigation": inv, "clientSettled": True}
 
 
-def record_acquisition(investigation_id: str, user_id: str, payload: dict) -> dict:
-    """Record a client-settled acquisition (mirrors gateway/index.ts)."""
+async def record_acquisition(investigation_id: str, user_id: str, payload: dict, transport=None) -> dict:
+    """Record a client-settled acquisition.
+
+    The user pays the provider's payTo directly from their own wallet. Before
+    any evidence is stored the settlement is verified independently on-chain
+    against the provider's probed 402 requirements: confirmed round, axfer
+    type, USDC ASA, exact recipient (payTo) and amount >= price. If any check
+    fails the acquisition is marked settlement_failed and NO evidence is
+    recorded. Evidence is accepted only from the payload forwarded from the
+    provider's response after that verification passes."""
     inv = db.get_investigation(investigation_id)
     if not inv:
         return {"ok": False, "error": "Investigation not found"}
@@ -226,24 +316,42 @@ def record_acquisition(investigation_id: str, user_id: str, payload: dict) -> di
 
     if acq.get("paymentState") in ("evidence_received", "settled"):
         return {"ok": True, "investigation": inv}
-    if acq.get("paymentState") in ("provider_unavailable", "payment_failed", "settlement_failed"):
+    if acq.get("paymentState") in ("provider_unavailable", "payment_failed", "settlement_failed", "wallet_rejected"):
         return {"ok": False, "error": f"Acquisition not in a payable state ({acq.get('paymentState')})"}
 
     tx_id = payload.get("txId")
     if not tx_id:
         return {"ok": False, "error": "Missing payment transaction"}
 
-    # Verify settlement on-chain against Algod before recording evidence.
-    proof = verify_settlement_on_chain(tx_id)
-    if not proof.get("confirmed"):
+    # Idempotent replay: an already-recorded settlement for this tx succeeds
+    # without re-adding evidence or double-counting spend.
+    existing = db.get_payment_by_settlement_ref(tx_id, user_id)
+    if existing and existing.get("status") == "settled":
+        return {"ok": True, "investigation": inv, "idempotent": True}
+
+    # Verify settlement on-chain against the provider's requirements before
+    # recording evidence.
+    proof = await verify_settlement_on_chain(tx_id, transport=transport)
+    checks = _settlement_checks(proof, acq)
+    for key, ok in checks.items():
+        if not ok:
+            acq["paymentState"] = "settlement_failed"
+            acq["blockReason"] = f"Settlement check failed: {key}"
+            emit_activity(inv, "failed", f"Settlement not accepted ({key})", tx_id)
+            db.save_investigation(inv)
+            return {"ok": False, "error": f"Settlement rejected on-chain ({key})"}
+
+    evidence_raw = payload.get("evidence") or {}
+    if not evidence_raw:
         acq["paymentState"] = "settlement_failed"
-        acq["blockReason"] = "Settlement could not be verified on-chain"
-        emit_activity(inv, "failed", "Settlement could not be verified on-chain", acq.get("txId"))
+        acq["blockReason"] = "No provider evidence returned"
+        emit_activity(inv, "failed", "Provider did not return evidence", tx_id)
         db.save_investigation(inv)
-        return {"ok": False, "error": "Settlement not confirmed on Algorand"}
+        return {"ok": False, "error": "No evidence returned by provider"}
 
     acq["paymentState"] = "settled"
     acq["txId"] = proof.get("txId") or tx_id
+    acq["payer"] = proof.get("sender")
     acq["updatedAt"] = _now_iso()
 
     db.save_payment({
@@ -255,9 +363,10 @@ def record_acquisition(investigation_id: str, user_id: str, payload: dict) -> di
     })
     emit_activity(inv, "settlement_confirmed", f"Settlement confirmed on Algorand ({acq['txId'][:12]}...)", acq["txId"])
 
-    evidence = normalize_evidence(acq, payload.get("evidence") or {})
+    evidence = normalize_evidence(acq, evidence_raw)
     evidence["paymentId"] = acq["txId"]
     evidence["acquisitionId"] = acq["id"]
+    evidence["verificationStatus"] = "verified"
     acq["evidence"] = evidence
     inv.setdefault("evidence", [])
     if not any(e["id"] == evidence["id"] for e in inv["evidence"]):
@@ -271,19 +380,42 @@ def record_acquisition(investigation_id: str, user_id: str, payload: dict) -> di
     return {"ok": True, "investigation": inv}
 
 
-async def verify_settlement_on_chain(tx_id: str) -> dict:
-    """Verify a transaction is confirmed on-chain via Algod."""
+def _settlement_checks(proof: dict, acq: dict) -> dict:
+    """Fail-closed checks: confirmed, axfer, USDC ASA, exact recipient, amount."""
+    checks = {"confirmed": bool(proof.get("confirmed"))}
+    if not checks["confirmed"]:
+        return checks
+    checks["asset_type"] = str(proof.get("type") or "") == "axfer"
+    checks["asset_id"] = str(proof.get("assetId") or "") == str(acq.get("assetId") or "")
+    checks["recipient"] = str(proof.get("receiver") or "") == str(acq.get("payTo") or "")
+    checks["amount"] = int(proof.get("amount") or 0) >= int(acq.get("amountMicro") or 0)
+    return checks
+
+
+async def verify_settlement_on_chain(tx_id: str, transport=None) -> dict:
+    """Verify a transaction is confirmed on-chain via Algod and return the
+    full transfer facts (type, asset, receiver, sender, amount) so the caller
+    can check receiver/asset/amount, not just confirmation."""
     import httpx
     url = f"{config.ALGOD_SERVER}/v2/transactions/pending/{tx_id}"
     headers = {"X-Algo-API-Token": config.ALGOD_TOKEN} if config.ALGOD_TOKEN else {}
     try:
-        async with httpx.Client(timeout=8.0) as client:
+        client = httpx.Client(timeout=8.0, transport=transport) if transport else httpx.Client(timeout=8.0)
+        try:
             res = await client.get(url, headers=headers)
+        finally:
+            client.close()
         if res.status_code == 200:
             data = res.json()
             confirmed_round = data.get("confirmed-round")
             if isinstance(confirmed_round, int) and confirmed_round > 0:
-                return {"confirmed": True, "txId": tx_id, "confirmedRound": confirmed_round}
+                txn = data.get("txn") or {}
+                return {
+                    "confirmed": True, "txId": tx_id, "confirmedRound": confirmed_round,
+                    "type": txn.get("type"), "assetId": txn.get("xaid"),
+                    "receiver": txn.get("arcv"), "sender": txn.get("asnd") or txn.get("snd"),
+                    "amount": txn.get("aamt"),
+                }
         return {"confirmed": False, "txId": tx_id}
     except Exception:
         return {"confirmed": False, "txId": tx_id}

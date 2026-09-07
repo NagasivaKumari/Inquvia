@@ -60,14 +60,13 @@ def _build_stored_inputs(parsed: dict, case_id: str) -> list[dict]:
     return inputs
 
 
-async def handle_atomic_paid_request(capability_id: str, user, body, files) -> dict:
+async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None) -> dict:
     """Returns { status, content, headers }. Status 200 on success with the
     Investigation as content."""
     capability = config.get_paid_capability(capability_id)
     if not capability:
         return {"status": 400, "content": {"error": f"Unknown capability: {capability_id}"}}
 
-    idempotency_key = None  # frontend may set; ignored for now (see below)
     if idempotency_key:
         existing = db.get_investigation_by_idempotency_key(idempotency_key, user["id"])
         if existing:

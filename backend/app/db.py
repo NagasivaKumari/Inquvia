@@ -120,8 +120,10 @@ def to_payment_record(p: dict) -> dict:
 
 def save_payment(rec: dict) -> None:
     col = get_collection("payments")
+    ref = rec.get("settlementRef")
+    _id = rec.get("id") or ref or str(id(rec))
     doc = {
-        "_id": rec.get("id") or rec.get("settlementRef") or str(id(rec)),
+        "_id": _id,
         "userId": rec.get("userId"),
         "investigationId": rec.get("investigationId"),
         "capability": rec.get("capability"),
@@ -131,10 +133,27 @@ def save_payment(rec: dict) -> None:
         "paymentMethod": rec.get("protocol"),
         "status": rec.get("status"),
         "createdAt": rec.get("timestamp") or utcnow_iso(),
-        "transactionId": rec.get("settlementRef"),
-        "settlementRef": rec.get("settlementRef"),
+        "transactionId": ref,
+        "settlementRef": ref,
     }
-    col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    col.replace_one({"_id": _id}, doc, upsert=True)
+    # A settled payment is unique per settlement ref: replaying the same tx
+    # (idempotent acquire retry) must never double-count spend.
+    if ref:
+        col.update_many(
+            {"settlementRef": ref, "userId": rec.get("userId"), "_id": {"$ne": _id}},
+            {"$set": {"_id": _id}},
+        )
+
+
+def get_payment_by_settlement_ref(ref: str, user_id: str) -> dict | None:
+    if not ref:
+        return None
+    return to_payment_record(
+        get_collection("payments").find_one(
+            {"$or": [{"settlementRef": ref}, {"transactionId": ref}], "userId": user_id}
+        )
+    )
 
 
 def list_payments(limit: int = 10000) -> list[dict]:

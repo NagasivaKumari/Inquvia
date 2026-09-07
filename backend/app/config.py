@@ -30,6 +30,16 @@ X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "inquvia")
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
 SERVER_WALLET_MNEMONIC = os.getenv("SERVER_WALLET_MNEMONIC", "")
 
+# x402 payment gating is FAIL-CLOSED: when the middleware is unavailable the
+# atomic endpoints return 402, never run free. The only exception is an
+# explicit INQUVIA_X402_OFFLINE=1 (local dev) flag; even then no payment is
+# recorded. There is no server wallet: Inquvia never holds or spends funds and
+# downstream evidence providers are paid directly by the user's wallet.
+INQUVIA_X402_OFFLINE = os.getenv("INQUVIA_X402_OFFLINE", "") == "1"
+
+# "Session" window for the per-session spending budget (sliding hours).
+SESSION_BUDGET_WINDOW_HOURS = int(os.getenv("SESSION_BUDGET_WINDOW_HOURS", "24"))
+
 # Algorand node (algod) for on-chain settlement verification.
 ALGOD_TOKEN = os.getenv("ALGOD_TOKEN", "")
 ALGOD_SERVER = os.getenv("ALGOD_SERVER", "").strip() or (

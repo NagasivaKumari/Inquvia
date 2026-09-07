@@ -6,3 +6,8 @@ bcrypt
 httpx
 x402-avm[fastapi,avm]
 cryptography
+
+# Test dependencies
+pytest
+pytest-asyncio
+mongomock

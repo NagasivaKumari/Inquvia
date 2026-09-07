@@ -99,7 +99,10 @@ async def await_finalize_investigation(id, analyze=None) -> dict:
     evidence = [e for e in (inv.get("evidence") or []) if e.get("status") == "collected"]
     analyzer = analyze or analyzers.get_analyzer(inv.get("capability")) or heuristic_analysis
 
-    if not evidence and not analyzers.get_analyzer(inv.get("capability")):
+    if not evidence:
+        # Zero acquired external evidence → NO verdict, regardless of analyzer.
+        # Capability analyzers exist for every capability; they must never run
+        # on an empty evidence set (that produced fabricated assessments).
         inv["status"] = "evidence_unavailable"
         inv["conclusion"] = "insufficient_evidence"
         inv["conclusionText"] = (
@@ -149,11 +152,19 @@ async def await_finalize_investigation(id, analyze=None) -> dict:
     if result.get("uncertainty"):
         inv["uncertainty"] = result["uncertainty"]
     inv["evidenceGraph"] = build_evidence_graph(inv, evidence)
+    inv_payments = db.get_payments_for_investigation(inv["id"])
+    capability_fee = sum(
+        float(p.get("amount") or 0)
+        for p in inv_payments if p.get("status") == "settled" and p.get("capability") == inv.get("capability")
+    )
+    downstream_spend = sum(
+        float(p.get("amount") or 0)
+        for p in inv_payments if p.get("status") == "settled" and p.get("capability") != inv.get("capability")
+    )
     inv["economicSummary"] = {
-        "totalSpend": sum(
-            a.get("amountMicro", 0) / USDC_DECIMALS
-            for a in acqs if a.get("paymentState") in ("evidence_received", "settled")
-        ),
+        "totalSpend": round(capability_fee + downstream_spend, 6),
+        "capabilityFeeUsdc": round(capability_fee, 6),
+        "downstreamSpendUsdc": round(downstream_spend, 6),
         "checksPurchased": len([a for a in acqs if a.get("evidence")]),
         "providerCategories": list(dict.fromkeys(a.get("capability") for a in acqs if a.get("evidence"))),
         "settlementStatus": "Settled",
@@ -185,9 +196,9 @@ async def discover_and_acquire(investigation_id: str, user_id: str) -> dict:
     pending = [a for a in plan["acquisitions"] if a.get("paymentState") == "payment_required"]
 
     if pending:
-        if config.SERVER_WALLET_MNEMONIC:
-            await gateway_mod.acquire_downstream(investigation_id, user_id)
-            return await await_finalize_investigation(investigation_id)
+        # Downstream providers are paid by the USER's wallet (client-settled);
+        # Core never holds funds. The investigation waits at awaiting_payment
+        # until the client posts a verified settlement via /api/gateway/acquire.
         inv2["status"] = "awaiting_payment"
         _set_stage(inv2, "awaiting_payment", "active")
         inv2["updatedAt"] = _now_iso()

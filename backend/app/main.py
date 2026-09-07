@@ -113,12 +113,16 @@ async def x402_middleware(request: Request, call_next):
     if middleware is not None:
         try:
             res = await middleware(request, call_next)
-            if res.status_code < 400 and getattr(request.state, "payment_requirements", None):
-                from .x402.gate import _record_paid_request
-                await _record_paid_request(request, res)
-            return res
         except Exception:
-            pass
+            # Fail closed: a payment-gate error can never mean "run for free".
+            return JSONResponse(
+                {"error": "Payment verification failed. No payment was accepted and the capability was not run."},
+                status_code=402,
+            )
+        if res.status_code < 400 and getattr(request.state, "payment_requirements", None):
+            from .x402.gate import _record_paid_request
+            await _record_paid_request(request, res)
+        return res
     return await call_next(request)
 
 
@@ -384,11 +388,52 @@ async def api_gateway_acquire(request: Request):
     if not inv_id or not acq_id or not tx_id:
         return JSONResponse({"error": "investigationId, acquisitionId and txId are required"}, status_code=400)
     try:
-        result = record_acquisition(inv_id, user["id"], {"acquisitionId": acq_id, "txId": tx_id, "evidence": (body or {}).get("evidence")})
+        result = await record_acquisition(
+            inv_id, user["id"],
+            {"acquisitionId": acq_id, "txId": tx_id, "evidence": (body or {}).get("evidence")},
+        )
     except Exception:
         return JSONResponse({"error": "Failed to record acquisition"}, status_code=500)
     if not result["ok"]:
         return JSONResponse({"error": result["error"]}, status_code=400)
+    investigation = None
+    try:
+        investigation = await engine.await_finalize_investigation(inv_id)
+    except Exception:
+        pass
+    return JSONResponse({"ok": True, "idempotent": bool(result.get("idempotent")), "investigation": investigation})
+
+
+@app.post("/api/gateway/acquire/decline")
+async def api_gateway_decline(request: Request):
+    """User declined to pay: mark pending acquisitions wallet_rejected and
+    finalize honestly (evidence_unavailable when nothing was acquired)."""
+    user = _resolve_user(request)
+    if not user:
+        return _unauthorized()
+    body = await _json(request)
+    inv_id = (body or {}).get("investigationId")
+    acq_id = (body or {}).get("acquisitionId")
+    if not inv_id:
+        return JSONResponse({"error": "investigationId is required"}, status_code=400)
+    inv = db.get_investigation(inv_id)
+    if not inv:
+        return JSONResponse({"error": "Investigation not found"}, status_code=404)
+    if inv.get("userId") != user["id"]:
+        return JSONResponse({"error": "Investigation not found"}, status_code=404)
+
+    targets = [a for a in (inv.get("acquisitions") or [])
+               if a.get("paymentState") == "payment_required"
+               and (acq_id is None or a.get("id") == acq_id)]
+    if not targets:
+        return JSONResponse({"error": "No payable acquisitions to decline"}, status_code=400)
+    from .libraries.gateway import emit_activity
+    for acq in targets:
+        acq["paymentState"] = "wallet_rejected"
+        acq["blockReason"] = "Payment declined by user"
+        emit_activity(inv, "blocked", f"User declined payment for {acq.get('serviceName') or acq.get('capability')}", acq.get("id"))
+    inv["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    db.save_investigation(inv)
     investigation = None
     try:
         investigation = await engine.await_finalize_investigation(inv_id)
@@ -498,9 +543,16 @@ async def api_x402_activity(request: Request, investigation_id: str = ""):
 
 # ── Atomic paid capabilities ──
 async def _handle_atomic_capability(request: Request, capability_id: str):
-    # If x402 middleware failed to init (e.g. facilitator unreachable at startup),
-    # run in dev/offline mode: skip payment gating but still execute the capability.
     x402_available = _X402_MIDDLEWARE is not None
+
+    # FAIL CLOSED: when x402 gating is unavailable the endpoint 402s; it never
+    # runs a paid capability free. Only an explicit INQUVIA_X402_OFFLINE=1
+    # (local dev) bypasses gating, and even then no payment is recorded.
+    if not x402_available and not config.INQUVIA_X402_OFFLINE:
+        return JSONResponse({
+            "error": "Payment verification unavailable (x402 middleware not active). "
+                     "No payment was accepted and the capability was not run.",
+        }, status_code=402)
 
     user = _resolve_user(request)
     if not user:
@@ -509,6 +561,7 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
     content_type = request.headers.get("content-type") or ""
     files = []
     body = None
+    idempotency_key = request.headers.get("Idempotency-Key") or None
     if "multipart/form-data" in content_type:
         form = await request.form()
         body = {
@@ -532,7 +585,7 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
         body = await _json(request)
 
     try:
-        result = await atomic_route.handle_atomic_paid_request(capability_id, user, body, files)
+        result = await atomic_route.handle_atomic_paid_request(capability_id, user, body, files, idempotency_key)
     except atomic_route.InputValidationError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception:
@@ -541,11 +594,9 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
 
     headers = {}
     if not x402_available:
-        headers["X-X402-Mode"] = "dev-no-payment"
+        headers["X-X402-Mode"] = "dev-offline"
     resp_obj = result.get("content") or {}
     return JSONResponse(resp_obj, status_code=result.get("status", 200), headers=headers)
-
-
 @app.post("/api/x402/claim-investigation")
 async def claim_investigation(request: Request):
     return await _handle_atomic_capability(request, "claim-investigation")

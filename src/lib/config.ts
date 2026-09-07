@@ -6,9 +6,6 @@ export const APP_NAME = process.env.APP_NAME ?? "Inquvia";
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
 
-export const MONGODB_URI = process.env.MONGODB_URI ?? "";
-export const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME ?? "inquvia";
-
 export const TAGLINE = "Investigate before you decide.";
 
 export const SUBHEADLINE =
