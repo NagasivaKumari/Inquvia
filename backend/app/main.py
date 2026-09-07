@@ -109,11 +109,16 @@ def _unauthorized():
 
 @app.middleware("http")
 async def x402_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/auth/"):
+        return await call_next(request)
+    print(f"DEBUG: Path={request.url.path}, Middleware={_X402_MIDDLEWARE is not None}")
     middleware = _X402_MIDDLEWARE
-    if middleware is not None:
+    # Only apply x402 gating to paid capability endpoints
+    if middleware is not None and request.url.path.startswith("/api/x402/"):
         try:
             res = await middleware(request, call_next)
-        except Exception:
+        except Exception as e:
+            import traceback; traceback.print_exc()
             # Fail closed: a payment-gate error can never mean "run for free".
             return JSONResponse(
                 {"error": "Payment verification failed. No payment was accepted and the capability was not run."},

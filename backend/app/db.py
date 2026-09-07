@@ -149,11 +149,12 @@ def save_payment(rec: dict) -> None:
 def get_payment_by_settlement_ref(ref: str, user_id: str) -> dict | None:
     if not ref:
         return None
-    return to_payment_record(
-        get_collection("payments").find_one(
-            {"$or": [{"settlementRef": ref}, {"transactionId": ref}], "userId": user_id}
-        )
+    doc = get_collection("payments").find_one(
+        {"$or": [{"settlementRef": ref}, {"transactionId": ref}], "userId": user_id}
     )
+    if not doc:
+        return None
+    return to_payment_record(doc)
 
 
 def list_payments(limit: int = 10000) -> list[dict]:

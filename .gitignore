@@ -48,3 +48,10 @@ __pycache__/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# tests
+test_api.py
+backend/tests/__init__.py
+backend/tests/test_budget.py
+backend/tests/test_engine.py
+backend/tests/test_gateway.py
