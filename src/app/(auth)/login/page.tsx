@@ -60,13 +60,16 @@ function LoginForm() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        // credentials: "include", // REMOVED for JWT
         cache: "no-store",
         body: JSON.stringify({ email, password, remember }),
       });
       const data = await res.json();
       console.log("handleSubmit: fetch complete", { ok: res.ok, data });
       if (!res.ok) throw new Error(data.error ?? "Login failed");
+      
+      // Store JWT
+      localStorage.setItem("token", data.token);
       
       console.log("handleSubmit: redirecting to", next);
       router.push(next);

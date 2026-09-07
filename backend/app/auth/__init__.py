@@ -1,6 +1,7 @@
 """Auth helpers (mirrors src/lib/auth/index.ts)."""
 import re
 import secrets
+import jwt
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -8,10 +9,27 @@ import bcrypt
 from .. import config
 from .. import db
 
+JWT_SECRET = config.JWT_SECRET
+JWT_ALGORITHM = "HS256"
+
 SESSION_COOKIE = config.SESSION_COOKIE
 SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30  # 30 days
 
 _SAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+def create_jwt(user_id: str) -> str:
+    payload = {
+        "sub": user_id,
+        "exp": datetime.now(timezone.utc) + timedelta(days=30)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_jwt(token: str) -> str | None:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
 
 
 def _nanoid(length: int) -> str:

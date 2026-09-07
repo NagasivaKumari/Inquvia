@@ -14,12 +14,11 @@ from fastapi.responses import JSONResponse
 
 from . import config, db
 from .auth import (
-    SESSION_COOKIE,
     signup,
     login,
-    create_user_session,
+    create_jwt,
+    verify_jwt,
     to_public_user,
-    get_current_user_from_cookie,
     logout_session,
     request_password_reset,
     is_valid_reset_token,
@@ -76,34 +75,15 @@ WALLET_PROVIDERS = [
     {"id": "defly", "name": "Defly Wallet", "icon": "D", "url": "https://defly.app"},
 ]
 
-def _cookie(request: Request) -> dict:
-    # Detect if the connection is HTTPS
-    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    
-    # SameSite=none and Secure=False is only allowed on localhost for local dev.
-    # Production (HTTPS) requires SameSite=lax and Secure=True.
-    return {
-        "httponly": True,
-        "samesite": "none" if not is_https else "lax",
-        "secure": is_https,
-        "path": "/",
-    }
-
-
-def _session_max_age(iso: str) -> int:
-    try:
-        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return max(60, int(dt.timestamp() - datetime.now(timezone.utc).timestamp()))
-    except Exception:
-        return 30 * 86400
-
-
 def _resolve_user(request: Request) -> dict | None:
-    cookie_value = request.cookies.get(SESSION_COOKIE)
-    print(f"DEBUG: Resolving user. Cookie={cookie_value is not None}")
-    return get_current_user_from_cookie(cookie_value)
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ")[1]
+    user_id = verify_jwt(token)
+    if not user_id:
+        return None
+    return db.get_user_by_id(user_id)
 
 
 def _unauthorized():
@@ -167,15 +147,10 @@ async def api_signup(request: Request):
 
     login_result = login(body)
     if login_result["ok"]:
-        session = create_user_session(login_result["data"]["id"], bool(body.get("remember")))
-        resp = JSONResponse({"user": user}, status_code=201)
-        resp.set_cookie(
-            SESSION_COOKIE,
-            session["id"],
-            max_age=_session_max_age(session["expiresAt"]),
-            **_cookie(request),
-        )
-        return resp
+        # Create JWT
+        token = create_jwt(login_result["data"]["id"])
+        return JSONResponse({"user": user, "token": token}, status_code=201)
+        
     return JSONResponse({"user": user}, status_code=201)
 
 
@@ -187,16 +162,12 @@ async def api_login(request: Request):
     result = login(body)
     if not result["ok"]:
         return JSONResponse({"error": result["error"]}, status_code=401)
-    session = create_user_session(result["data"]["id"], bool(body.get("remember")))
+    
+    # Create JWT
+    token = create_jwt(result["data"]["id"])
     pub = to_public_user(result["data"])
-    resp = JSONResponse({"user": pub})
-    resp.set_cookie(
-        SESSION_COOKIE,
-        session["id"],
-        max_age=_session_max_age(session["expiresAt"]),
-        **_cookie(request),
-    )
-    return resp
+    
+    return JSONResponse({"user": pub, "token": token})
 
 
 @app.get("/api/auth/me")

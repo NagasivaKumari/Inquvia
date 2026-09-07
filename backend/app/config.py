@@ -127,6 +127,9 @@ DEFAULT_PAYMENT_PREFS = {
 
 SESSIONS_EXPIRE_AFTER_DAYS = 30
 SESSION_COOKIE = "inquvia_session"
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise ValueError("JWT_SECRET environment variable must be set")
 
 
 def get_paid_capability(capability_id: str) -> dict | None:

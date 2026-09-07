@@ -26,12 +26,16 @@ export default function SignupPage() {
       const res = await fetch(`${API_BASE}/api/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        // credentials: "include", // REMOVED for JWT
         cache: "no-store",
         body: JSON.stringify({ name, email, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Signup failed");
+      
+      // Store JWT
+      localStorage.setItem("token", data.token);
+      
       window.location.assign("/dashboard/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
