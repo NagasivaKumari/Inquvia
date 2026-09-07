@@ -34,16 +34,16 @@ async def call_ai_with_parts(
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
                 "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"},
             }
-            res = await httpx.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={config.GEMINI_API_KEY}",
-                json=payload,
-                timeout=60,
-            )
-            if res.status_code == 200:
-                data = res.json()
-                text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-                if text:
-                    return text
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                res = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={config.GEMINI_API_KEY}",
+                    json=payload,
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+                    if text:
+                        return text
         except Exception:
             pass
 
@@ -56,60 +56,84 @@ async def call_ai_with_parts(
 
 
 async def call_text_provider_chain(system_prompt: str, text_context: str, temperature: float) -> str | None:
-    # 2. Groq
-    if config.GROQ_API_KEY:
-        try:
-            res = await httpx.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text_context},
-                    ],
-                    "temperature": temperature,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=60,
-            )
-            if res.status_code == 200:
-                data = res.json()
-                text = data.get("choices", [{}])[0].get("message", {}).get("content")
-                if text:
-                    return text
-        except Exception:
-            pass
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # 2. Groq
+        if config.GROQ_API_KEY:
+            try:
+                res = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.GROQ_API_KEY}"},
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": text_context},
+                        ],
+                        "temperature": temperature,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    if text:
+                        return text
+            except Exception:
+                pass
 
-    # 3. OpenRouter
-    if config.OPENROUTER_API_KEY:
-        try:
-            res = await httpx.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                    "HTTP-Referer": "https://inquvia.ai",
-                    "X-Title": "Inquvia Forensics Engine",
-                },
-                json={
-                    "model": "google/gemini-2.0-flash-001",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text_context},
-                    ],
-                    "temperature": temperature,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=60,
-            )
-            if res.status_code == 200:
-                data = res.json()
-                text = data.get("choices", [{}])[0].get("message", {}).get("content")
-                if text:
-                    return text
-        except Exception:
-            pass
+        # 3. OpenRouter
+        if config.OPENROUTER_API_KEY:
+            try:
+                res = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+                        "HTTP-Referer": "https://inquvia.ai",
+                        "X-Title": "Inquvia Forensics Engine",
+                    },
+                    json={
+                        "model": "google/gemini-2.0-flash-001",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": text_context},
+                        ],
+                        "temperature": temperature,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    if text:
+                        return text
+            except Exception:
+                pass
+
+        # 4. OpenAI
+        if config.OPENAI_API_KEY:
+            try:
+                res = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                    json={
+                        "model": "gpt-4o-mini",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": text_context},
+                        ],
+                        "temperature": temperature,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    if text:
+                        return text
+            except Exception:
+                pass
+
     return None
 
 

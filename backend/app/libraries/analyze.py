@@ -13,12 +13,17 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     supporting = [e for e in evidence if e.get("signal") == "supporting" or e.get("supportsClaim")]
     contradicting = [e for e in evidence if e.get("signal") == "contradictory" or e.get("contradictsClaim")]
 
-    if len(supporting) >= 2 and len(contradicting) == 0:
-        conclusion = "likely_genuine"
-    elif len(contradicting) >= 2:
-        conclusion = "likely_misleading"
-    elif len(contradicting) > 0 and len(supporting) > 0:
+    # Check for direct verdicts from evidence services
+    verdicts = [e.get("metadata", {}).get("verdict") for e in evidence if e.get("metadata", {}).get("verdict")]
+
+    if len(contradicting) > 0 and len(supporting) > 0:
         conclusion = "suspicious"
+    elif len(contradicting) >= 1:
+        conclusion = "likely_misleading"
+    elif len(supporting) >= 1:
+        conclusion = "likely_genuine"
+    elif "insufficient_evidence" in verdicts:
+        conclusion = "insufficient_evidence"
     else:
         conclusion = "inconclusive"
 
@@ -30,14 +35,50 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     else:
         conclusion_text = "Insufficient evidence acquired to render a supported assessment."
 
-    confidence = round(max(0, min(100, (len(supporting) / len(evidence)) * 100))) if evidence else 0
+    # Use actual evidence service confidence if available
+    item_confidences = [float(e.get("confidence", 0)) for e in evidence if e.get("confidence") is not None and float(e.get("confidence", 0)) > 0]
+    if item_confidences:
+        confidence = round(sum(item_confidences) / len(item_confidences))
+    elif supporting:
+        confidence = round(max(0, min(100, (len(supporting) / len(evidence)) * 100)))
+    else:
+        confidence = 0
+
+    # Collect findings across all observations and facts
+    findings = []
+    for e in evidence:
+        src = e.get("source", "Evidence Service")
+        meta = e.get("metadata") or {}
+        obs = meta.get("observations") or []
+        facts = meta.get("facts") or []
+        if obs:
+            for o in obs:
+                t = o.get("text") if isinstance(o, dict) else str(o)
+                if t and f"{src}: {t}" not in findings:
+                    findings.append(f"{src}: {t}")
+        elif facts:
+            for f in facts:
+                t = f.get("text") if isinstance(f, dict) else str(f)
+                if t and f"{src}: {t}" not in findings:
+                    findings.append(f"{src}: {t}")
+        else:
+            findings.append(f"{src}: {e.get('finding', '')}")
+
+    # Collect limitations from evidence items
+    limitations = []
+    for e in evidence:
+        meta = e.get("metadata") or {}
+        for lim in meta.get("limitations") or []:
+            if lim and lim not in limitations:
+                limitations.append(lim)
+
     acquisitions_len = len(inv.get("acquisitions") or [])
     if len(evidence) < acquisitions_len:
-        limitations = ["Some evidence checks did not complete"]
+        limitations.append("Some evidence checks did not complete")
     elif len(evidence) == 0:
-        limitations = ["No external evidence was acquired", "AI analysis service was not available"]
-    else:
-        limitations = ["Assessment is limited to the external evidence services that were configured and settled"]
+        limitations.append("No external evidence was acquired")
+    elif not limitations:
+        limitations.append("Assessment is limited to the external evidence services that were configured and settled")
 
     def contradictory_weight(items):
         c = len([e for e in items if e.get("signal") == "contradictory" or e.get("contradictsClaim")])
@@ -52,7 +93,7 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
         "conclusionText": conclusion_text,
         "confidence": confidence,
         "risk": contradictory_weight(evidence),
-        "findings": [f"{e.get('source','')}: {e.get('finding','')}" for e in evidence],
+        "findings": findings if findings else [f"{e.get('source','')}: {e.get('finding','')}" for e in evidence],
         "limitations": limitations,
         "contradictions": [e["finding"] for e in contradicting],
     }

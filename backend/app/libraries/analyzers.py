@@ -117,7 +117,8 @@ async def _image_analyzer(inv, evidence):
         f = read_stored_file_base64(input_["filePath"])
         if f:
             parts.append({"file": f})
-    parts.append({"text": f"IMAGE_CONTEXT: {input_.get('content') or _first_text_input(inv) or ''}"})
+    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
+    parts.append({"text": f"IMAGE_CONTEXT: {context_text}"})
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
@@ -133,7 +134,8 @@ async def _video_analyzer(inv, evidence):
         f = read_stored_file_base64(input_["filePath"])
         if f:
             parts.append({"file": f})
-    parts.append({"text": f"VIDEO_CONTEXT: {input_.get('content') or _first_text_input(inv) or ''}"})
+    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
+    parts.append({"text": f"VIDEO_CONTEXT: {context_text}"})
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 

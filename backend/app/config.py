@@ -71,6 +71,7 @@ ALLOWED_MIME = [
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or ""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 
 ALGORAND_USDC_DECIMALS = 1_000_000  # 6 decimals
 

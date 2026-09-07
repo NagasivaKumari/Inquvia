@@ -149,9 +149,8 @@ async def await_finalize_investigation(id, analyze=None) -> dict:
     inv["sourcesUsed"] = (
         result.get("sourcesUsed") if result.get("sourcesUsed") else [e.get("source") for e in evidence]
     )
-    if result.get("uncertainty"):
-        inv["uncertainty"] = result["uncertainty"]
-    inv["evidenceGraph"] = build_evidence_graph(inv, evidence)
+    if not inv.get("evidenceGraph") or not (inv["evidenceGraph"].get("nodes") or inv["evidenceGraph"].get("edges")):
+        inv["evidenceGraph"] = build_evidence_graph(inv, evidence)
     inv_payments = db.get_payments_for_investigation(inv["id"])
     capability_fee = sum(
         float(p.get("amount") or 0)

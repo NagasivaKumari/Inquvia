@@ -138,8 +138,17 @@ async def acquire_structured_evidence(
     data = {}
     if claim:
         data["claim"] = claim
+    
+    if not payload_json and not file_bytes:
+        payload_json = json.dumps({"claim": claim or "Evidence query"})
+
     if payload_json:
-        data["payload_json"] = payload_json
+        raw_p = payload_json.strip()
+        if not raw_p.startswith("{"):
+            raw_p = json.dumps({"query": raw_p})
+        data["payload"] = raw_p
+        data["payload_json"] = raw_p
+
     headers = {"x-402-proof": proof} if proof else None
 
     try:
