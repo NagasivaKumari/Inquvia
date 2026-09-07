@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import type { Investigation } from "@/lib/types";
 import { ASSESSMENT_LABELS, RISK_LABELS } from "@/lib/types";
 import styles from "./page.module.css";
@@ -13,7 +14,7 @@ export default function HistoryPage() {
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/investigations`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/investigations`)
       .then((r) => r.json())
       .then((data) => {
         setInvestigations(data.investigations ?? []);

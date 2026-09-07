@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { shortenAddress } from "@/lib/wallet";
 import { connectPera } from "@/lib/wallet/pera";
 import styles from "./AppHeader.module.css";
@@ -30,7 +31,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setUser(d.user ?? null))
       .catch(() => {});
@@ -54,7 +55,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
       const { signature } = await signChallenge(address, message);
       let bin = "";
       signature.forEach((b) => (bin += String.fromCharCode(b)));
-      const res = await fetch(`${API_BASE}/api/wallet/connect`, {
+      const res = await apiFetch(`${API_BASE}/api/wallet/connect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -130,7 +131,8 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
             type="button"
             className={styles.logout}
             onClick={async () => {
-              await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" });
+              await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
+              localStorage.removeItem("token");
               router.push("/");
               router.refresh();
             }}

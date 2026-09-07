@@ -107,9 +107,15 @@ def probe_no_402():
 
 @pytest.fixture
 def test_user():
-    return {"id": "user_test_1", "email": "test@example.com", "walletAddress": "TESTWALLETADDRESS"}
+    user = {"id": "user_test_1", "email": "test@example.com", "walletAddress": "TESTWALLETADDRESS"}
+    import backend.app.db as db_module
+    db_module.create_user(user)
+    return user
 
 
 @pytest.fixture
 def test_user2():
-    return {"id": "user_test_2", "email": "test2@example.com", "walletAddress": "TESTWALLETADDRESS2"}
+    user = {"id": "user_test_2", "email": "test2@example.com", "walletAddress": "TESTWALLETADDRESS2"}
+    import backend.app.db as db_module
+    db_module.create_user(user)
+    return user

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, APP_NAME } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { WalletConnector } from "@/components/wallet/WalletConnector";
 import type { PaymentPrefs, User } from "@/lib/types";
 import styles from "./page.module.css";
@@ -27,7 +28,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/user`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/user`)
       .then((r) => r.json())
       .then((d) => {
         if (d.error) {
@@ -43,7 +44,8 @@ export default function SettingsPage() {
   }, []);
 
   const handleLogout = async () => {
-    await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" });
+    localStorage.removeItem("token");
+    await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
     router.push("/");
     router.refresh();
   };
@@ -53,14 +55,14 @@ export default function SettingsPage() {
     setSaving(true);
     setSaved(false);
     try {
-      const res = await fetch(`${API_BASE}/api/user`, {
+      const res = await apiFetch(`${API_BASE}/api/user`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(prefs),
       });
       if (res.ok) {
         setSaved(true);
-        const fresh = await fetch(`${API_BASE}/api/user`, { credentials: "include", cache: "no-store" }).then((r) => r.json());
+        const fresh = await apiFetch(`${API_BASE}/api/user`).then((r) => r.json());
         if (!fresh.error) {
           setBudget(fresh.budget);
           setUser(fresh.user);

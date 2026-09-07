@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { Investigation, EvidenceAcquisition } from "@/lib/types";
 import { ASSESSMENT_LABELS, RISK_LABELS, SIGNAL_LABELS } from "@/lib/types";
 import { API_BASE, APP_NAME } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import styles from "./page.module.css";
 
 export default function ReportDetailPage() {
@@ -14,7 +15,7 @@ export default function ReportDetailPage() {
   const [investigation, setInvestigation] = useState<Investigation | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/investigations/${id}`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/investigations/${id}`)
       .then((r) => r.json())
       .then(setInvestigation);
   }, [id]);

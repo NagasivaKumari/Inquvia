@@ -18,7 +18,7 @@ function ResetForm() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/reset?token=${encodeURIComponent(token)}`, { credentials: "include", cache: "no-store" })
+    fetch(`${API_BASE}/api/auth/reset?token=${encodeURIComponent(token)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setState(d.valid ? "valid" : "invalid"))
       .catch(() => setState("invalid"));

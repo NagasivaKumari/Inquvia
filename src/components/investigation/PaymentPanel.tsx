@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { PaymentRecord } from "@/lib/types";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import styles from "./PaymentPanel.module.css";
 
 interface Props {
@@ -17,7 +18,7 @@ export function PaymentPanel({ payments }: Props) {
   } | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/user`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/user`)
       .then((r) => r.json())
       .then((d) => {
         if (d.budget) setBudget(d.budget);

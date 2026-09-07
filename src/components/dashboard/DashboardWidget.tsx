@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import type { Investigation } from "@/lib/types";
 import styles from "./Dashboard.module.css";
 
@@ -19,7 +20,7 @@ export function DashboardWidget() {
   const [data, setData] = useState<DashboardData | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/dashboard`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/dashboard`)
       .then((r) => r.json())
       .then(setData)
       .catch(() => {});

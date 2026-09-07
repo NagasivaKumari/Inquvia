@@ -26,7 +26,7 @@ export default function SignupPage() {
       const res = await fetch(`${API_BASE}/api/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // credentials: "include", // REMOVED for JWT
+        credentials: "include",
         cache: "no-store",
         body: JSON.stringify({ name, email, password }),
       });

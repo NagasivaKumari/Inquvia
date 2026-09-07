@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { shortenAddress } from "@/lib/wallet";
 import { connectPera, disconnectPera } from "@/lib/wallet/pera";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { WalletLogo } from "./WalletLogo";
 import styles from "./WalletBadge.module.css";
 
@@ -46,7 +47,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
         const { signChallenge } = await import("@/lib/wallet/pera");
         const { signature } = await signChallenge(w.address, message);
 
-        const res = await fetch(`${API_BASE}/api/wallet/connect`, {
+        const res = await apiFetch(`${API_BASE}/api/wallet/connect`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -84,7 +85,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
   }
 
   const doDisconnect = async () => {
-    await fetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE", credentials: "include" }).catch(() => {});
+    await apiFetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE" }).catch(() => {});
     await disconnectPera().catch(() => {});
     setConnected("");
     setShowInfo(false);

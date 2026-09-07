@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE, EXAMPLE_PROMPTS, capabilityTitle } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { payForCapability, detectCapabilityEndpoint } from "@/lib/x402/client";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
 import styles from "./page.module.css";
@@ -38,7 +39,7 @@ function InvestigateForm() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
       .catch(() => {});
@@ -49,7 +50,7 @@ function InvestigateForm() {
     const fileObjects = files.map((f) => f.file);
     const cap = capabilityHint || detectCapabilityEndpoint(fileObjects, url);
     setDetectedCap(cap); // already normalized to /api/x402/... form
-    fetch(`${API_BASE}/api/investigate`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/investigate`)
       .then((r) => r.json())
       .then((d) => {
         const capability = (d.capabilities ?? []).find(

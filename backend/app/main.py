@@ -23,6 +23,10 @@ from .auth import (
     request_password_reset,
     is_valid_reset_token,
     reset_password,
+    create_user_session,
+    get_current_user_from_cookie,
+    SESSION_COOKIE,
+    SESSION_DURATION_MS,
 )
 from .libraries import engine, capabilities, atomic_route
 from .libraries import discovery as discovery_lib
@@ -76,14 +80,29 @@ WALLET_PROVIDERS = [
 ]
 
 def _resolve_user(request: Request) -> dict | None:
+    # 1. Try Bearer JWT from Authorization header
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return None
-    token = auth_header.split(" ")[1]
-    user_id = verify_jwt(token)
-    if not user_id:
-        return None
-    return db.get_user_by_id(user_id)
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        user_id = verify_jwt(token)
+        if user_id:
+            user = db.get_user_by_id(user_id)
+            if user:
+                return user
+        print(f"DEBUG: verify_jwt failed for token: {token[:10]}... user_id={user_id}")
+
+    # 2. Fallback to session cookie
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if cookie:
+        user = get_current_user_from_cookie(cookie)
+        if user:
+            return user
+        print(f"DEBUG: session cookie validation failed for {cookie[:10]}...")
+
+    if not auth_header and not cookie:
+        print(f"DEBUG: No Authorization header or session cookie found for {request.url.path}")
+
+    return None
 
 
 def _unauthorized():
@@ -147,9 +166,19 @@ async def api_signup(request: Request):
 
     login_result = login(body)
     if login_result["ok"]:
-        # Create JWT
         token = create_jwt(login_result["data"]["id"])
-        return JSONResponse({"user": user, "token": token}, status_code=201)
+        session = create_user_session(login_result["data"]["id"], True)
+        resp = JSONResponse({"user": user, "token": token}, status_code=201)
+        resp.set_cookie(
+            SESSION_COOKIE,
+            session["id"],
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            max_age=int(SESSION_DURATION_MS / 1000),
+            path="/",
+        )
+        return resp
         
     return JSONResponse({"user": user}, status_code=201)
 
@@ -163,11 +192,23 @@ async def api_login(request: Request):
     if not result["ok"]:
         return JSONResponse({"error": result["error"]}, status_code=401)
     
-    # Create JWT
+    remember = bool((body or {}).get("remember", True))
     token = create_jwt(result["data"]["id"])
     pub = to_public_user(result["data"])
+    session = create_user_session(result["data"]["id"], remember)
     
-    return JSONResponse({"user": pub, "token": token})
+    resp = JSONResponse({"user": pub, "token": token})
+    max_age = int(SESSION_DURATION_MS / 1000) if remember else None
+    resp.set_cookie(
+        SESSION_COOKIE,
+        session["id"],
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=max_age,
+        path="/",
+    )
+    return resp
 
 
 @app.get("/api/auth/me")

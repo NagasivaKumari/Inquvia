@@ -40,7 +40,12 @@ function LoginForm() {
 
   // If the user already has an active session, redirect to the dashboard immediately
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) return;
+    fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
       .then((r) => r.json())
       .then((data) => {
         if (data?.user) {
@@ -60,7 +65,7 @@ function LoginForm() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // credentials: "include", // REMOVED for JWT
+        credentials: "include",
         cache: "no-store",
         body: JSON.stringify({ email, password, remember }),
       });

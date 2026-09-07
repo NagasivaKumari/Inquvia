@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_BASE, NAV_ITEMS } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { Logo } from "@/components/brand/Logo";
 import { NavIcon } from "@/components/layout/NavIcons";
 import styles from "./Sidebar.module.css";
@@ -39,7 +40,7 @@ export function Sidebar({
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => {
         setUser(d.user);
@@ -52,7 +53,8 @@ export function Sidebar({
     pathname === href || (href !== "/dashboard" && pathname.startsWith(href + "/"));
 
   const handleLogout = async () => {
-    await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" });
+    localStorage.removeItem("token");
+    await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
     onNavigate?.();
     router.push("/");
     router.refresh();

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { payForCapability } from "@/lib/x402/client";
 import { connectPera } from "@/lib/wallet/pera";
 import { API_BASE, capabilityTitle } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import styles from "./page.module.css";
 
 export default function LaunchPage() {
@@ -41,7 +42,7 @@ function LaunchContent() {
       const endpointDetected = hasUrl ? "/api/x402/source-investigation" : "/api/x402/claim-investigation";
       setEndpoint(endpointDetected);
     }
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
       .catch(() => {});
@@ -50,7 +51,7 @@ function LaunchContent() {
 
   useEffect(() => {
     if (!endpoint) return;
-    fetch(`${API_BASE}/api/investigate`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/investigate`)
       .then((r) => r.json())
       .then((d) => {
         const c = (d.capabilities ?? []).find(

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import type {
   EvidenceAcquisition,
   Investigation,
@@ -52,7 +53,7 @@ export default function ActivityPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/investigations`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/investigations`)
       .then((r) => r.json())
       .then((data: { investigations?: Investigation[] }) => {
         const investigations = data.investigations ?? [];

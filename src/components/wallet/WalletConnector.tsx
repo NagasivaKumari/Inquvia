@@ -7,6 +7,7 @@ import {
   signAndSendUsdcOptIn,
 } from "@/lib/wallet/pera";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { WalletBadge } from "./WalletBadge";
 import styles from "./WalletConnector.module.css";
 
@@ -29,7 +30,7 @@ export function WalletConnector() {
   const configured = !!ALGORAND_CONFIG.algodServer;
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((auth) => {
         if (auth.user?.walletAddress) {

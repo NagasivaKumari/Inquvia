@@ -11,7 +11,6 @@ from .. import db
 
 JWT_SECRET = config.JWT_SECRET
 JWT_ALGORITHM = "HS256"
-
 SESSION_COOKIE = config.SESSION_COOKIE
 SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30  # 30 days
 

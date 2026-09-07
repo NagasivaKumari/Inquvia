@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { acquirePaidEvidence } from "@/lib/x402/client";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
 import type {
@@ -92,7 +93,7 @@ export default function InvestigationPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/investigations/${id}`, { credentials: "include", cache: "no-store" });
+      const res = await apiFetch(`${API_BASE}/api/investigations/${id}`);
       if (!res.ok) throw new Error("Investigation not found");
       const data = await res.json();
       setInv(data);
@@ -122,7 +123,7 @@ export default function InvestigationPage() {
   }, [fetchData, inv?.status]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
       .catch(() => {});
@@ -601,10 +602,9 @@ function PaymentPanel({
         capability: acq.capability,
       });
       setStatus("Payment submitted — verifying settlement on-chain…");
-      const res = await fetch(`${API_BASE}/api/gateway/acquire`, {
+      const res = await apiFetch(`${API_BASE}/api/gateway/acquire`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           investigationId: inv.id,
           acquisitionId: acq.id,
@@ -628,10 +628,9 @@ function PaymentPanel({
     setBusyId(acq.id);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/api/gateway/acquire/decline`, {
+      const res = await apiFetch(`${API_BASE}/api/gateway/acquire/decline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           investigationId: inv.id,
           acquisitionId: acq.id,

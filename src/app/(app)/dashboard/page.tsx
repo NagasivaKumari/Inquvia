@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Investigation } from "@/lib/types";
 import { API_BASE, APP_NAME, EXAMPLE_PROMPTS } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import styles from "./page.module.css";
 
 interface DashboardData {
@@ -27,9 +28,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${API_BASE}/api/dashboard`, { credentials: "include", cache: "no-store" }).then((r) => r.json()),
-      fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" }).then((r) => r.json()),
-      fetch(`${API_BASE}/api/user`, { credentials: "include", cache: "no-store" }).then((r) => r.json()),
+      apiFetch(`${API_BASE}/api/dashboard`).then((r) => r.json()),
+      apiFetch(`${API_BASE}/api/auth/me`).then((r) => r.json()),
+      apiFetch(`${API_BASE}/api/user`).then((r) => r.json()),
     ])
       .then(([d, me, b]) => {
         setData(d);

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { API_BASE, PUBLIC_NAV } from "@/lib/config";
+import { apiFetch } from "@/lib/api";
 import { Logo } from "@/components/brand/Logo";
 import styles from "./PublicNav.module.css";
 
@@ -11,7 +12,7 @@ export function PublicNav() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/me`, { credentials: "include", cache: "no-store" })
+    apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setUser(d.user ?? null))
       .catch(() => {});
