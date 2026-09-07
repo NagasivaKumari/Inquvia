@@ -21,7 +21,7 @@ def _num(name: str, fallback: float) -> float:
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "")
-MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "inquvia")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
 
 ALGORAND_NETWORK = os.getenv("NEXT_PUBLIC_ALGORAND_NETWORK", None) or os.getenv("ALGORAND_NETWORK", "mainnet")
 ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "31566704")
