@@ -168,6 +168,29 @@ async def api_root():
     }
 
 
+@app.get("/.well-known/x402", include_in_schema=False)
+async def x402_discovery(request: Request):
+    base_url = config.PUBLIC_APP_URL or str(request.base_url).rstrip("/")
+    network = config.ALGORAND_NETWORK_CAIP2
+    resources = []
+    for capability in config.PAID_CAPABILITIES:
+        resources.append({
+            "url": f"{base_url}{capability['endpoint']}",
+            "method": "POST",
+            "description": capability["description"],
+            "network": network,
+            "asset": config.ALGORAND_USDC_ASA,
+            "amount": str(round(capability["priceUsdc"] * config.ALGORAND_USDC_DECIMALS)),
+            "payTo": config.INQUVIA_PAYTO_ADDRESS,
+        })
+    return {
+        "x402Version": 2,
+        "name": config.APP_NAME,
+        "description": "Evidence-backed investigations paid per request with x402 on Algorand.",
+        "resources": resources,
+    }
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "inquvia-backend"}

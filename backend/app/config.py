@@ -19,6 +19,7 @@ def _num(name: str, fallback: float) -> float:
 
 
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
+PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "").rstrip("/")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
