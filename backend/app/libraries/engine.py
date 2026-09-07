@@ -5,7 +5,7 @@ import secrets
 from .. import db, config
 from ..libraries import gateway as gateway_mod
 from ..libraries.analyze import heuristic_analysis, build_evidence_graph
-from ..libraries import analyzers
+from ..libraries import analyzers, evidence_client, storage
 
 USDC_DECIMALS = config.ALGORAND_USDC_DECIMALS
 
@@ -180,6 +180,121 @@ async def await_finalize_investigation(id, analyze=None) -> dict:
     return inv
 
 
+async def acquire_from_evidence_services(inv: dict) -> list[dict]:
+    """Call deployed Evidence Services endpoints via HTTP for each input in the investigation."""
+    if not evidence_client.is_configured():
+        return []
+
+    question = inv.get("question") or ""
+    inputs = inv.get("inputs") or []
+    capability = inv.get("capability") or ""
+    collected = []
+
+    for inp in inputs:
+        itype = inp.get("type")
+        content = inp.get("content") or ""
+        file_path = inp.get("filePath")
+        file_bytes = None
+        if file_path:
+            p = storage.resolve_stored_path(file_path)
+            if p and p.is_file():
+                try:
+                    file_bytes = p.read_bytes()
+                except Exception:
+                    file_bytes = None
+
+        raw_resp = None
+        if itype == "url" or (not itype and content.startswith(("http://", "https://"))):
+            raw_resp = await evidence_client.acquire_url_evidence(content, claim=question)
+        elif itype == "image" and file_bytes:
+            raw_resp = await evidence_client.acquire_image_evidence(
+                file_bytes, inp.get("fileName") or "image.jpg", inp.get("mimeType") or "image/jpeg", claim=question
+            )
+        elif itype == "video" and file_bytes:
+            raw_resp = await evidence_client.acquire_video_evidence(
+                file_bytes, inp.get("fileName") or "video.mp4", inp.get("mimeType") or "video/mp4", claim=question
+            )
+        elif itype == "document" and file_bytes:
+            raw_resp = await evidence_client.acquire_document_evidence(
+                file_bytes, inp.get("fileName") or "document.pdf", inp.get("mimeType") or "application/pdf", claim=question
+            )
+        elif itype == "data":
+            raw_resp = await evidence_client.acquire_structured_evidence(
+                file_bytes=file_bytes,
+                filename=inp.get("fileName"),
+                mime=inp.get("mimeType"),
+                payload_json=content if not file_bytes else None,
+                claim=question,
+            )
+        elif itype == "text":
+            raw_resp = await evidence_client.acquire_structured_evidence(
+                payload_json=None,
+                claim=content or question,
+            )
+
+        if raw_resp:
+            verdict = raw_resp.get("verdict") or "insufficient_evidence"
+            signal = "supporting" if verdict == "supports" else ("contradictory" if verdict == "contradicts" else "uncertain")
+            conf_val = raw_resp.get("confidence", 0)
+            conf = round(conf_val * 100) if isinstance(conf_val, (int, float)) and conf_val <= 1.0 else round(float(conf_val or 0))
+
+            obs = raw_resp.get("observations") or []
+            facts = raw_resp.get("facts") or []
+            if obs:
+                finding = "; ".join(o.get("text", "") for o in obs[:3] if o.get("text"))
+            elif facts:
+                finding = "; ".join(f.get("text", "") for f in facts[:3] if f.get("text"))
+            else:
+                finding = f"Evidence processed for {raw_resp.get('type') or itype} ({verdict})"
+
+            ev_item = {
+                "id": raw_resp.get("evidence_id") or _nanoid("ev"),
+                "type": raw_resp.get("type") or itype or "text",
+                "source": f"Evidence Services ({raw_resp.get('type') or itype})",
+                "timestamp": _now_iso(),
+                "finding": finding,
+                "confidence": min(100, max(0, conf)),
+                "status": "collected",
+                "cost": 0.0,
+                "signal": signal,
+                "capability": raw_resp.get("type") or capability or itype,
+                "verificationStatus": "verified",
+                "metadata": raw_resp,
+            }
+            collected.append(ev_item)
+
+    # Multi-modal synthesis when multiple evidence pieces are present
+    if len(collected) >= 2:
+        try:
+            cm_resp = await evidence_client.call_cross_modal(collected, claim=question)
+            if cm_resp:
+                inv["crossModalAnalysis"] = cm_resp
+                if cm_resp.get("contradictions"):
+                    inv.setdefault("contradictions", []).extend(cm_resp["contradictions"])
+        except Exception:
+            pass
+
+        try:
+            prov_resp = await evidence_client.call_provenance(collected)
+            if prov_resp and prov_resp.get("graph"):
+                inv["evidenceGraph"] = prov_resp.get("graph")
+                inv["provenance"] = prov_resp
+        except Exception:
+            pass
+
+    # Timeline synthesis if timestamp entries exist
+    has_timestamps = any(e.get("metadata", {}).get("timestamps") for e in collected)
+    if has_timestamps or len(collected) >= 2:
+        try:
+            tl_resp = await evidence_client.call_timeline(collected, claim=question)
+            if tl_resp and tl_resp.get("events"):
+                inv["timeline"] = tl_resp.get("events")
+        except Exception:
+            pass
+
+    return collected
+
+
 async def discover_and_acquire(investigation_id: str, user_id: str) -> dict:
     inv2 = db.get_investigation(investigation_id)
     if not inv2:
@@ -188,6 +303,32 @@ async def discover_and_acquire(investigation_id: str, user_id: str) -> dict:
     _set_stage(inv2, "discovering", "active")
     db.save_investigation(inv2)
 
+    # 1. Primary: Use deployed Evidence Services if configured
+    if evidence_client.is_configured():
+        _emit(inv2, "evidence_requested", "Requesting evidence from deployed Evidence Services")
+        _set_stage(inv2, "evidence_requested", "active")
+        ev_items = await acquire_from_evidence_services(inv2)
+        if ev_items:
+            inv2.setdefault("evidence", [])
+            for ev in ev_items:
+                if not any(e.get("id") == ev["id"] for e in inv2["evidence"]):
+                    inv2["evidence"].append(ev)
+                inv2.setdefault("acquisitions", []).append({
+                    "id": _nanoid("acq"),
+                    "serviceId": "evidence-services",
+                    "serviceName": "Deployed Evidence Services",
+                    "capability": ev.get("capability"),
+                    "paymentState": "evidence_received",
+                    "evidence": ev,
+                })
+            _set_stage(inv2, "discovering", "completed")
+            _set_stage(inv2, "evidence_requested", "completed")
+            _set_stage(inv2, "evidence_received", "completed")
+            _emit(inv2, "evidence_received", f"Received {len(ev_items)} evidence package(s) from Evidence Services")
+            db.save_investigation(inv2)
+            return await await_finalize_investigation(investigation_id)
+
+    # 2. Fallback: Query gateway discovery plan if Evidence Services returned nothing or is not configured
     plan = await gateway_mod.plan_acquisitions(investigation_id, user_id)
     inv2 = db.get_investigation(investigation_id)
     inv2["acquisitions"] = plan["acquisitions"]
@@ -196,9 +337,6 @@ async def discover_and_acquire(investigation_id: str, user_id: str) -> dict:
     pending = [a for a in plan["acquisitions"] if a.get("paymentState") == "payment_required"]
 
     if pending:
-        # Downstream providers are paid by the USER's wallet (client-settled);
-        # Core never holds funds. The investigation waits at awaiting_payment
-        # until the client posts a verified settlement via /api/gateway/acquire.
         inv2["status"] = "awaiting_payment"
         _set_stage(inv2, "awaiting_payment", "active")
         inv2["updatedAt"] = _now_iso()

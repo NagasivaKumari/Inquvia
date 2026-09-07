@@ -26,8 +26,8 @@ export const ALGORAND_CONFIG = {
   // Defaults to the free public Algonode API — set your own for production.
   algodToken: process.env.ALGOD_TOKEN ?? "",
   algodServer:
-    process.env.ALGOD_SERVER ??
-    (process.env.ALGORAND_NETWORK === "testnet"
+    (process.env.ALGOD_SERVER && process.env.ALGOD_SERVER.trim()) ||
+    (process.env.ALGORAND_NETWORK === "testnet" || process.env.NEXT_PUBLIC_ALGORAND_NETWORK === "testnet"
       ? "https://testnet-api.algonode.cloud"
       : "https://mainnet-api.algonode.cloud"),
   algodPort: process.env.ALGOD_PORT ? Number(process.env.ALGOD_PORT) : 443,

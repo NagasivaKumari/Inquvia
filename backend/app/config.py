@@ -57,6 +57,7 @@ ALGORAND_NETWORK_CAIP2 = (
 # Evidence discovery configuration (never fabricates providers).
 EXTERNAL_EVIDENCE_SERVICES_URL = os.getenv("EXTERNAL_EVIDENCE_SERVICES_URL", "")
 EXTERNAL_EVIDENCE_SERVICES_JSON = os.getenv("EXTERNAL_EVIDENCE_SERVICES_JSON", "")
+EVIDENCE_SERVICE_URL = (os.getenv("EVIDENCE_SERVICE_URL") or "").rstrip("/")
 
 STORAGE_PATH = Path(os.getenv("STORAGE_PATH", str(ROOT / "backend" / "data" / "uploads")))
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB

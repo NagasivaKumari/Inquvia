@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { shortenAddress } from "@/lib/wallet";
 import { connectPera, disconnectPera } from "@/lib/wallet/pera";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { WalletLogo } from "./WalletLogo";
 import styles from "./WalletBadge.module.css";
 
@@ -60,6 +60,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Connection failed");
 
+        invalidateAuthCache();
         setConnected(data.wallet.address);
         onConnected?.(data.wallet.address);
       } catch (err) {
@@ -74,7 +75,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
         <button
           type="button"
           className="btn btn-secondary btn-sm"
-          disabled={!ALGORAND_CONFIG.algodServer || loading}
+          disabled={loading}
           onClick={doConnect}
         >
           {loading ? "Connecting…" : "Connect wallet"}
@@ -87,6 +88,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
   const doDisconnect = async () => {
     await apiFetch(`${API_BASE}/api/wallet/connect`, { method: "DELETE" }).catch(() => {});
     await disconnectPera().catch(() => {});
+    invalidateAuthCache();
     setConnected("");
     setShowInfo(false);
     onDisconnected?.();

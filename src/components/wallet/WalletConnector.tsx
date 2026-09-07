@@ -7,7 +7,7 @@ import {
   signAndSendUsdcOptIn,
 } from "@/lib/wallet/pera";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { WalletBadge } from "./WalletBadge";
 import styles from "./WalletConnector.module.css";
 
@@ -26,8 +26,9 @@ export function WalletConnector() {
   const [paymentStatus, setPaymentStatus] = useState("");
   const [optedIn, setOptedIn] = useState(false);
 
-  // Only the algod node is required - Pera connect needs no project id.
-  const configured = !!ALGORAND_CONFIG.algodServer;
+  // Always considered configured: config.ts provides public Algonode fallback
+  // nodes when ALGOD_SERVER is not explicitly set in .env.
+  const configured = true;
 
   useEffect(() => {
     apiFetch(`${API_BASE}/api/auth/me`)
@@ -46,12 +47,14 @@ export function WalletConnector() {
   }, []);
 
   const onConnected = async (address: string) => {
+    invalidateAuthCache();
     setWallet({ address, network: NETWORK, connected: true });
     const opt = await checkAssetOptIn(address).catch(() => false);
     setOptedIn(opt);
   };
 
   const onDisconnected = () => {
+    invalidateAuthCache();
     setWallet(null);
     setOptedIn(false);
   };

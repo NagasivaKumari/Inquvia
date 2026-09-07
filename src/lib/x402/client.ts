@@ -1,13 +1,14 @@
 import { x402Client, wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
-import { ALGORAND_NETWORK_CAIP2 } from "../config";
+import { API_BASE, ALGORAND_NETWORK_CAIP2 } from "../config";
 import { createX402Signer } from "../wallet/x402Signer";
+import { apiFetch } from "../api";
 
 function buildPaidFetch(address: string) {
   const signer = createX402Signer(address);
   const scheme = new ExactAvmScheme(signer);
   const client = new x402Client().register(ALGORAND_NETWORK_CAIP2, scheme);
-  return wrapFetchWithPayment(fetch, client);
+  return wrapFetchWithPayment(apiFetch as typeof fetch, client);
 }
 
 export interface PaidEvidenceResult {
@@ -126,7 +127,11 @@ export async function payForCapability(input: {
     requestHeaders.set("Idempotency-Key", input.idempotencyKey);
   }
 
-  const res = await fetchWithPay(input.endpoint, {
+  const endpointUrl = input.endpoint.startsWith("http")
+    ? input.endpoint
+    : `${API_BASE}${input.endpoint.startsWith("/") ? "" : "/"}${input.endpoint}`;
+
+  const res = await fetchWithPay(endpointUrl, {
     method: "POST",
     headers: requestHeaders,
     body,

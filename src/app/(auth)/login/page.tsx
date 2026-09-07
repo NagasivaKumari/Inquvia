@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/config";
+import { invalidateAuthCache } from "@/lib/api";
 import styles from "../auth.module.css";
 
 /** Same-origin path after login. Hard-navigate so the session cookie is sent. */
@@ -75,6 +76,7 @@ function LoginForm() {
       
       // Store JWT
       localStorage.setItem("token", data.token);
+      invalidateAuthCache();
       
       console.log("handleSubmit: redirecting to", next);
       router.push(next);

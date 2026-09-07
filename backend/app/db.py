@@ -40,15 +40,53 @@ def create_user(user: dict) -> None:
     get_collection("users").insert_one(doc)
 
 
+# In-memory user cache with short TTL to avoid redundant MongoDB round-trips
+import time
+_USER_CACHE: dict[str, tuple[dict, float]] = {}
+_USER_CACHE_TTL = 5.0  # 5 seconds
+
+
+def invalidate_user_cache(user_id: str | None = None):
+    global _USER_CACHE
+    if user_id:
+        _USER_CACHE.pop(str(user_id), None)
+    else:
+        _USER_CACHE.clear()
+
+
+def init_db_indexes():
+    """Create optimal indexes for fast queries."""
+    try:
+        get_collection("users").create_index("id")
+        get_collection("users").create_index("email")
+        get_collection("sessions").create_index("expiresAt", expireAfterSeconds=0)
+        get_collection("investigations").create_index("userId")
+        get_collection("investigations").create_index("createdAt")
+        get_collection("payments").create_index("userId")
+        get_collection("payments").create_index("investigationId")
+    except Exception:
+        pass
+
+
 def get_user_by_id(user_id: str) -> dict | None:
     if not user_id:
         return None
+    user_key = str(user_id)
+    cached = _USER_CACHE.get(user_key)
+    now = time.time()
+    if cached and (now - cached[1]) < _USER_CACHE_TTL:
+        return dict(cached[0])
+
     col = get_collection("users")
     doc = col.find_one({"$or": [{"id": user_id}, {"_id": user_id}]})
+    if not doc and ObjectId.is_valid(user_id):
+        doc = col.find_one({"_id": ObjectId(user_id)})
+
     if doc:
+        _USER_CACHE[user_key] = (dict(doc), now)
+        if "id" in doc and str(doc["id"]) != user_key:
+            _USER_CACHE[str(doc["id"])] = (dict(doc), now)
         return doc
-    if ObjectId.is_valid(user_id):
-        return col.find_one({"_id": ObjectId(user_id)})
     return None
 
 
@@ -59,13 +97,24 @@ def get_user_by_email(email: str) -> dict | None:
 def update_user(user_id: str, updates: dict) -> dict | None:
     if not user_id:
         return None
+    invalidate_user_cache(user_id)
     col = get_collection("users")
     criteria = [{"id": user_id}, {"_id": user_id}]
     if ObjectId.is_valid(user_id):
         criteria.append({"_id": ObjectId(user_id)})
-    col.update_one(
-        {"$or": criteria}, {"$set": {k: v for k, v in updates.items() if v is not None}}
-    )
+
+    set_fields = {k: v for k, v in updates.items() if v is not None}
+    unset_fields = {k: "" for k, v in updates.items() if v is None}
+    op = {}
+    if set_fields:
+        op["$set"] = set_fields
+    if unset_fields:
+        op["$unset"] = unset_fields
+
+    if op:
+        col.update_one({"$or": criteria}, op)
+
+    invalidate_user_cache(user_id)
     return get_user_by_id(user_id)
 
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, APP_NAME } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { WalletConnector } from "@/components/wallet/WalletConnector";
 import type { PaymentPrefs, User } from "@/lib/types";
 import styles from "./page.module.css";
@@ -45,6 +45,7 @@ export default function SettingsPage() {
 
   const handleLogout = async () => {
     localStorage.removeItem("token");
+    invalidateAuthCache();
     await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
     router.push("/");
     router.refresh();
@@ -58,9 +59,10 @@ export default function SettingsPage() {
       const res = await apiFetch(`${API_BASE}/api/user`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prefs),
+        body: JSON.stringify({ paymentPrefs: prefs }),
       });
       if (res.ok) {
+        invalidateAuthCache();
         setSaved(true);
         const fresh = await apiFetch(`${API_BASE}/api/user`).then((r) => r.json());
         if (!fresh.error) {

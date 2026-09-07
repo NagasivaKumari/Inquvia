@@ -4,20 +4,59 @@
  *
  * Drop-in replacement for fetch() throughout the app.
  */
+// In-flight promise and short TTL cache for GET /api/auth/me to prevent multi-component request flooding
+let _authMeInFlight: Promise<Response> | null = null;
+let _authMeCache: { response: Response; timestamp: number } | null = null;
+const AUTH_ME_TTL_MS = 3000;
+
+export function invalidateAuthCache(): void {
+  _authMeCache = null;
+  _authMeInFlight = null;
+}
+
 export function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method || "GET").toUpperCase();
+  const isAuthMe = method === "GET" && url.includes("/api/auth/me");
+
+  if (isAuthMe && !init.body) {
+    const now = Date.now();
+    if (_authMeCache && (now - _authMeCache.timestamp) < AUTH_ME_TTL_MS) {
+      return Promise.resolve(_authMeCache.response.clone());
+    }
+    if (_authMeInFlight) {
+      return _authMeInFlight.then((res) => res.clone());
+    }
+  }
+
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
   const headers = new Headers(init.headers);
-  if (token) {
+  if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  return fetch(url, {
+  const fetchPromise = fetch(url, {
     ...init,
     headers,
     credentials: "include",
     cache: (init.cache as RequestCache) ?? "no-store",
   });
+
+  if (isAuthMe && !init.body) {
+    _authMeInFlight = fetchPromise
+      .then((res) => {
+        if (res.ok) {
+          _authMeCache = { response: res.clone(), timestamp: Date.now() };
+        }
+        return res;
+      })
+      .finally(() => {
+        _authMeInFlight = null;
+      });
+    return _authMeInFlight.then((res) => res.clone());
+  }
+
+  return fetchPromise;
 }
 
 /** Convenience: POST with a JSON body */

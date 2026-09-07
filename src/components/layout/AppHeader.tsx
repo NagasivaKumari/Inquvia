@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_BASE, ALGORAND_CONFIG } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { shortenAddress } from "@/lib/wallet";
 import { connectPera } from "@/lib/wallet/pera";
 import styles from "./AppHeader.module.css";
@@ -131,8 +131,9 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
             type="button"
             className={styles.logout}
             onClick={async () => {
-              await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
               localStorage.removeItem("token");
+              invalidateAuthCache();
+              await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
               router.push("/");
               router.refresh();
             }}

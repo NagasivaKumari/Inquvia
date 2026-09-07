@@ -67,9 +67,13 @@ _X402_MIDDLEWARE = None
 
 
 @app.on_event("startup")
-async def _init_x402():
+async def _init_startup():
     global _X402_MIDDLEWARE
     _X402_MIDDLEWARE = _build_x402()
+    try:
+        db.init_db_indexes()
+    except Exception:
+        pass
 
 
 STATE_X402_HEADER = "payment-response"
@@ -223,6 +227,9 @@ async def api_me(request: Request):
 @app.post("/api/auth/logout")
 async def api_logout(request: Request):
     sid = request.cookies.get(SESSION_COOKIE)
+    user = _resolve_user(request)
+    if user:
+        db.invalidate_user_cache(user["id"])
     logout_session(sid)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(SESSION_COOKIE, path="/")

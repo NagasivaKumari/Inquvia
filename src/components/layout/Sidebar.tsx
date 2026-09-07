@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_BASE, NAV_ITEMS } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { Logo } from "@/components/brand/Logo";
 import { NavIcon } from "@/components/layout/NavIcons";
 import styles from "./Sidebar.module.css";
@@ -54,6 +54,7 @@ export function Sidebar({
 
   const handleLogout = async () => {
     localStorage.removeItem("token");
+    invalidateAuthCache();
     await apiFetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
     onNavigate?.();
     router.push("/");

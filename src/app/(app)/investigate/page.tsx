@@ -36,12 +36,20 @@ function InvestigateForm() {
   const [walletAddress, setWalletAddress] = useState("");
   const [price, setPrice] = useState<string | null>(null);
   const [detectedCap, setDetectedCap] = useState<string>("");
+  const [capabilities, setCapabilities] = useState<
+    { path: string; priceUsdc: number }[] | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
       .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
+      .catch(() => {});
+    // Fetch capabilities once and cache for the session
+    apiFetch(`${API_BASE}/api/investigate`)
+      .then((r) => r.json())
+      .then((d) => setCapabilities(d.capabilities ?? []))
       .catch(() => {});
   }, []);
 
@@ -50,18 +58,15 @@ function InvestigateForm() {
     const fileObjects = files.map((f) => f.file);
     const cap = capabilityHint || detectCapabilityEndpoint(fileObjects, url);
     setDetectedCap(cap); // already normalized to /api/x402/... form
-    apiFetch(`${API_BASE}/api/investigate`)
-      .then((r) => r.json())
-      .then((d) => {
-        const capability = (d.capabilities ?? []).find(
-          (c: { path: string }) => c.path === cap
-        );
-        if (capability) {
-          setPrice(`$${capability.priceUsdc} USDC`);
-        }
-      })
-      .catch(() => {});
-  }, [files, url, capabilityHint]);
+    if (capabilities) {
+      const capability = capabilities.find((c) => c.path === cap);
+      if (capability) {
+        setPrice(`$${capability.priceUsdc} USDC`);
+      } else {
+        setPrice(null);
+      }
+    }
+  }, [files, url, capabilityHint, capabilities]);
 
   const handleFiles = useCallback((fileList: FileList | null) => {
     if (!fileList) return;
