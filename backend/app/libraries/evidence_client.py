@@ -4,6 +4,7 @@ Communicates with Evidence Services exclusively through the HTTP base URL
 configured via the EVIDENCE_SERVICE_URL environment variable.
 Never hardcodes the URL or accesses local Evidence Services files.
 """
+import asyncio
 import json
 import logging
 from typing import Any
@@ -12,6 +13,33 @@ import httpx
 from .. import config
 
 logger = logging.getLogger(__name__)
+
+EVIDENCE_TIMEOUT = 120.0  # generous: hosting cold starts can exceed 60s
+
+
+async def _post(url: str, *, json=None, files=None, data=None, headers=None) -> dict | None:
+    """POST to an Evidence Services endpoint with one retry.
+
+    ponytail: single retry to ride out Render-style cold starts; the first
+    attempt usually fails on a booting box, the second succeeds.
+    """
+    last = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=EVIDENCE_TIMEOUT) as client:
+                res = await client.post(url, json=json, files=files, data=data, headers=headers)
+            if res.status_code == 200:
+                return res.json()
+            last = res
+        except Exception as e:  # noqa
+            last = e
+        if attempt == 0:
+            await asyncio.sleep(2)
+    if isinstance(last, Exception):
+        logger.error("Evidence call failed for %s: %s", url, last)
+    elif last is not None:
+        logger.warning("Evidence endpoint %s returned status %d: %s", url, last.status_code, last.text)
+    return None
 
 
 def get_base_url() -> str:
@@ -45,15 +73,7 @@ async def acquire_url_evidence(url: str, claim: str | None = None, proof: str | 
     endpoint = f"{base_url}/api/evidence/url"
     payload = {"url": url, "claim": claim or ""}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(endpoint, json=payload, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence URL endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to acquire URL evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, json=payload, headers=headers)
 
 
 async def acquire_image_evidence(file_bytes: bytes, filename: str, mime: str, claim: str | None = None, proof: str | None = None) -> dict | None:
@@ -66,15 +86,7 @@ async def acquire_image_evidence(file_bytes: bytes, filename: str, mime: str, cl
     files = {"file": (filename or "image.jpg", file_bytes, mime or "image/jpeg")}
     data = {"claim": claim or ""}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            res = await client.post(endpoint, files=files, data=data, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Image endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to acquire Image evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, files=files, data=data, headers=headers)
 
 
 async def acquire_video_evidence(file_bytes: bytes, filename: str, mime: str, claim: str | None = None, max_frames: int = 10, proof: str | None = None) -> dict | None:
@@ -87,15 +99,7 @@ async def acquire_video_evidence(file_bytes: bytes, filename: str, mime: str, cl
     files = {"file": (filename or "video.mp4", file_bytes, mime or "video/mp4")}
     data = {"claim": claim or "", "max_frames": str(max_frames)}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            res = await client.post(endpoint, files=files, data=data, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Video endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to acquire Video evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, files=files, data=data, headers=headers)
 
 
 async def acquire_document_evidence(file_bytes: bytes, filename: str, mime: str, claim: str | None = None, proof: str | None = None) -> dict | None:
@@ -108,15 +112,7 @@ async def acquire_document_evidence(file_bytes: bytes, filename: str, mime: str,
     files = {"file": (filename or "document.pdf", file_bytes, mime or "application/pdf")}
     data = {"claim": claim or ""}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            res = await client.post(endpoint, files=files, data=data, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Document endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to acquire Document evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, files=files, data=data, headers=headers)
 
 
 async def acquire_structured_evidence(
@@ -151,16 +147,7 @@ async def acquire_structured_evidence(
         data["payload_json"] = raw_p
 
     headers = {"x-402-proof": proof} if proof else None
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(endpoint, files=files or None, data=data or None, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Structured endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to acquire Structured evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, files=files or None, data=data or None, headers=headers)
 
 
 async def call_cross_modal(evidence_list: list[dict], claim: str | None = None, proof: str | None = None) -> dict | None:
@@ -173,15 +160,7 @@ async def call_cross_modal(evidence_list: list[dict], claim: str | None = None, 
     formatted = [_format_evidence_ref(e) for e in evidence_list]
     payload = {"claim": claim or "", "evidence": formatted}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(endpoint, json=payload, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Cross-Modal endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to call cross-modal evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, json=payload, headers=headers)
 
 
 async def call_timeline(evidence_list: list[dict], claim: str | None = None, proof: str | None = None) -> dict | None:
@@ -194,15 +173,7 @@ async def call_timeline(evidence_list: list[dict], claim: str | None = None, pro
     formatted = [_format_evidence_ref(e) for e in evidence_list]
     payload = {"claim": claim or "", "evidence": formatted}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(endpoint, json=payload, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Timeline endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to call timeline evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, json=payload, headers=headers)
 
 
 async def call_provenance(evidence_list: list[dict], proof: str | None = None) -> dict | None:
@@ -215,13 +186,5 @@ async def call_provenance(evidence_list: list[dict], proof: str | None = None) -
     formatted = [_format_evidence_ref(e) for e in evidence_list]
     payload = {"evidence": formatted}
     headers = {"x-402-proof": proof} if proof else None
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.post(endpoint, json=payload, headers=headers)
-            if res.status_code == 200:
-                return res.json()
-            logger.warning("Evidence Provenance endpoint %s returned status %d: %s", endpoint, res.status_code, res.text)
-    except Exception as e:
-        logger.error("Failed to call provenance evidence from %s: %s", endpoint, e)
-    return None
+    return await _post(endpoint, json=payload, headers=headers)
 

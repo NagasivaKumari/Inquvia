@@ -26,6 +26,56 @@ from x402.server import x402ResourceServer
 
 from .. import config
 
+# Bazaar discovery extension (optional metadata for facilitator cataloging).
+# Imported defensively: discovery must never take down payment gating, so if
+# the extension isn't importable the routes simply ship without it.
+try:
+    from x402.extensions.bazaar import declare_discovery_extension
+    from x402.extensions.bazaar.resource_service import OutputConfig
+    _BAZAAR_DISCOVERY = True
+except Exception:  # noqa
+    _BAZAAR_DISCOVERY = False
+
+
+def _discovery_extensions(cap: dict) -> dict | None:
+    """Declare how each capability endpoint is called so the facilitator's
+    Bazaar can catalog the resource (method/input/output examples)."""
+    if not _BAZAAR_DISCOVERY:
+        return None
+    cap_id = cap["id"]
+    base_input = {"question": "Is this seller legitimate?"}
+    props = {"question": {"type": "string"}}
+    required = ["question"]
+    if cap_id in ("image-investigation", "video-investigation", "document-investigation"):
+        body_type = "form-data"
+        props["files"] = {"type": "array", "items": {"type": "string"}}
+    else:
+        body_type = "json"
+        if cap_id == "source-investigation":
+            base_input = {"question": "Is this seller legitimate?", "url": "https://example.com/store"}
+            props["url"] = {"type": "string"}
+        elif cap_id == "data-investigation":
+            base_input = {"question": "Is this data anomalous?", "data": '{"sales": 42}'}
+            props["data"] = {"type": "string"}
+        elif cap_id == "claim-investigation":
+            base_input = {"question": "Is this claim true?", "text": "The seller promises overnight delivery."}
+            props["text"] = {"type": "string"}
+    return {
+        **declare_discovery_extension(
+            input=base_input,
+            input_schema={"type": "object", "properties": props, "required": required},
+            body_type=body_type,
+            output=OutputConfig(example={
+                "id": "case_abc123",
+                "status": "completed",
+                "capability": cap_id,
+                "confidence": 0.8,
+                "conclusion": "supported",
+                "conclusionText": "Evidence-backed assessment.",
+            }),
+        )
+    }
+
 
 def _network() -> str:
     return ALGORAND_TESTNET_CAIP2 if config.ALGORAND_NETWORK == "testnet" else ALGORAND_MAINNET_CAIP2
@@ -71,6 +121,7 @@ def build_x402_middleware():
             ),
             description=f"Inquvia: {cap['title']} - {cap['description']}",
             mime_type="application/json",
+            extensions=_discovery_extensions(cap),
         )
 
     return payment_middleware(routes, server)

@@ -5,6 +5,7 @@ pymongo
 bcrypt
 httpx
 x402-avm[fastapi,avm]
+x402-avm[extensions]
 cryptography
 
 # Test dependencies
