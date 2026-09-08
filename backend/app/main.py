@@ -583,7 +583,7 @@ async def api_wallet_connect(request: Request):
     if not message or not signature:
         return JSONResponse({"error": "Missing signed challenge. Real wallet signing required."}, status_code=400)
 
-    if not _verify_algorand_signature(address, message, signature):
+    if not await _verify_algorand_signature(address, message, signature):
         return JSONResponse({"error": "Signature verification failed"}, status_code=400)
 
     db.update_user(user["id"], {"walletAddress": address, "walletNetwork": config.ALGORAND_NETWORK})

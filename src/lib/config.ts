@@ -78,7 +78,10 @@ export const EVIDENCE_GATEWAY_CONFIG = {
  */
 export const ORCHESTRATOR_CONFIG = {
   /** Inquvia's single USDC receiving address for ALL paid capabilities. */
-  payTo: process.env.INQUVIA_PAYTO_ADDRESS ?? "",
+  payTo:
+    process.env.NEXT_PUBLIC_INQUVIA_PAYTO_ADDRESS ??
+    process.env.INQUVIA_PAYTO_ADDRESS ??
+    "",
   /** Optional server wallet mnemonic used to pay downstream evidence services. */
   serverWalletMnemonic: process.env.SERVER_WALLET_MNEMONIC ?? "",
 } as const;
