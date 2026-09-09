@@ -107,7 +107,7 @@ def _find_input(inv, input_type):
 async def _claim_analyzer(inv, evidence):
     system_prompt = (
         "You are Inquvia's claim verification analyst. Assess whether the submitted claim is supported, contradicted, or unresolved, "
-        "using only the acquired evidence and your internal knowledge. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
+        "using only the acquired evidence. Do not use internal knowledge to fill evidence gaps. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
     claim = _first_text_input(inv) or inv.get("question")

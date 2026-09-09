@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 import httpx
 
 from .. import config
@@ -266,54 +267,70 @@ async def discover_remote_services() -> list[dict]:
     base_url = get_base_url()
     if not base_url:
         return []
-    endpoint = f"{base_url}/api/services"
+    catalog_urls = [base_url]
+    configured_catalog = (config.EXTERNAL_EVIDENCE_SERVICES_URL or "").rstrip("/")
+    if configured_catalog and configured_catalog not in catalog_urls:
+        catalog_urls.append(configured_catalog)
+    normalized = []
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.get(endpoint)
-        if res.status_code != 200:
-            logger.warning("Evidence /api/services returned %d", res.status_code)
-            return []
-        data = res.json()
-        services = data.get("services") if isinstance(data, dict) else None
-        if services is None and isinstance(data, list):
-            services = data
-        if not isinstance(services, list):
-            services = []
-        # Normalize each service descriptor
-        normalized = []
-        for s in services:
-            if not isinstance(s, dict):
+          for catalog_url in catalog_urls:
+            endpoint = catalog_url if catalog_url.endswith("/api/services") else f"{catalog_url}/api/services"
+            try:
+                res = await client.get(endpoint)
+            except httpx.HTTPError as exc:
+                logger.warning("Evidence catalogue request failed for %s: %s", endpoint, exc)
                 continue
-            svc_id = s.get("id") or s.get("name") or ""
-            svc_type = s.get("type") or s.get("service") or ""
-            # Fall back to the endpoint path last segment, e.g. /api/evidence/image -> image
-            endpoint = s.get("endpoint") or ""
-            _, _, tail = endpoint.rpartition("/api/evidence/")
-            if not svc_type and tail:
-                svc_type = tail
-            if not svc_id and not svc_type:
+            if res.status_code != 200:
+                logger.warning("Evidence /api/services returned %d", res.status_code)
                 continue
-            normalized.append({
-                "id": svc_id or svc_type,
-                "type": svc_type or svc_id,
-                "name": s.get("name") or svc_type or svc_id,
-                "description": s.get("description") or s.get("summary") or "",
-                "priceMicro": s.get("priceMicro") or _price_to_micro(
-                    s.get("price") if s.get("price") is not None else s.get("price_usdc")),
-                "assetId": s.get("assetId") or s.get("asa_id") or config.ALGORAND_USDC_ASA,
-                "network": (s.get("network")
-                            or (f"algorand:{s['network']}" if s.get("network") and ":" not in str(s.get("network")) else "")
-                            or config.ALGORAND_NETWORK_CAIP2),
-                "resourceUrl": s.get("resourceUrl") or s.get("url") or base_url,
-                "capability": s.get("capability") or "",
-                "capabilities": s.get("capabilities") or [
-                    c_ for c_ in [s.get("capability"), s.get("type"), svc_type, svc_id] if c_],
-                "paid": bool(s.get("paid", s.get("price_usdc") is not None)),
-            })
+            data = res.json()
+            services = data.get("services") if isinstance(data, dict) else None
+            if services is None and isinstance(data, list):
+                services = data
+            if not isinstance(services, list):
+                continue
+            # Normalize each service descriptor and preserve provider identity.
+            for s in services:
+                if not isinstance(s, dict):
+                    continue
+                service_endpoint = s.get("endpoint") or ""
+                provider_url = s.get("providerUrl") or s.get("baseUrl") or catalog_url
+                if service_endpoint.startswith("http"):
+                    provider_url = f"{urlsplit(service_endpoint).scheme}://{urlsplit(service_endpoint).netloc}"
+                provider_url = provider_url.rstrip("/")
+                provider_id = s.get("providerId") or urlsplit(provider_url).netloc or provider_url
+                svc_id = s.get("id") or s.get("name") or ""
+                svc_type = s.get("type") or s.get("service") or ""
+                _, _, tail = service_endpoint.rpartition("/api/evidence/")
+                if not svc_type and tail:
+                    svc_type = tail
+                if not svc_id and not svc_type:
+                    continue
+                normalized.append({
+                    "id": svc_id or svc_type,
+                    "type": svc_type or svc_id,
+                    "name": s.get("name") or svc_type or svc_id,
+                    "description": s.get("description") or s.get("summary") or "",
+                    "priceMicro": s.get("priceMicro") or _price_to_micro(
+                        s.get("price") if s.get("price") is not None else s.get("price_usdc")),
+                    "assetId": s.get("assetId") or s.get("asa_id") or config.ALGORAND_USDC_ASA,
+                    "network": (s.get("network")
+                                or (f"algorand:{s['network']}" if s.get("network") and ":" not in str(s.get("network")) else "")
+                                or config.ALGORAND_NETWORK_CAIP2),
+                    "resourceUrl": s.get("resourceUrl") or s.get("url") or provider_url,
+                    "providerId": provider_id,
+                    "providerName": s.get("providerName") or s.get("provider") or provider_id,
+                    "providerUrl": provider_url,
+                    "capability": s.get("capability") or "",
+                    "capabilities": s.get("capabilities") or [
+                        c_ for c_ in [s.get("capability"), s.get("type"), svc_type, svc_id] if c_],
+                    "paid": bool(s.get("paid", s.get("price_usdc") is not None)),
+                })
         return normalized
     except Exception as e:
         logger.warning("Evidence /api/services discovery failed: %s", e)
-        return []
+        return normalized
 
 
 def _price_to_micro(price) -> int:
@@ -335,9 +352,10 @@ def _price_to_micro(price) -> int:
 
 async def acquire_url_evidence(url: str, claim: str | None = None,
                                proof: str | None = None,
-                               budget_ctx: dict | None = None) -> dict | None:
+                               budget_ctx: dict | None = None,
+                               base_url: str | None = None) -> dict | None:
     """Call POST /api/evidence/url on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/url"
@@ -348,9 +366,10 @@ async def acquire_url_evidence(url: str, claim: str | None = None,
 
 async def acquire_image_evidence(file_bytes: bytes, filename: str, mime: str,
                                  claim: str | None = None, proof: str | None = None,
-                                 budget_ctx: dict | None = None) -> dict | None:
+                                 budget_ctx: dict | None = None,
+                                 base_url: str | None = None) -> dict | None:
     """Call POST /api/evidence/image on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/image"
@@ -363,9 +382,10 @@ async def acquire_image_evidence(file_bytes: bytes, filename: str, mime: str,
 async def acquire_video_evidence(file_bytes: bytes, filename: str, mime: str,
                                  claim: str | None = None, max_frames: int = 10,
                                  proof: str | None = None,
-                                 budget_ctx: dict | None = None) -> dict | None:
+                                 budget_ctx: dict | None = None,
+                                 base_url: str | None = None) -> dict | None:
     """Call POST /api/evidence/video on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/video"
@@ -377,9 +397,10 @@ async def acquire_video_evidence(file_bytes: bytes, filename: str, mime: str,
 
 async def acquire_document_evidence(file_bytes: bytes, filename: str, mime: str,
                                     claim: str | None = None, proof: str | None = None,
-                                    budget_ctx: dict | None = None) -> dict | None:
+                                    budget_ctx: dict | None = None,
+                                    base_url: str | None = None) -> dict | None:
     """Call POST /api/evidence/document on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/document"
@@ -397,9 +418,10 @@ async def acquire_structured_evidence(
     claim: str | None = None,
     proof: str | None = None,
     budget_ctx: dict | None = None,
+    base_url: str | None = None,
 ) -> dict | None:
     """Call POST /api/evidence/structured on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/structured"
@@ -466,9 +488,10 @@ async def call_provenance(evidence_list: list[dict],
 
 async def acquire_audio_evidence(file_bytes: bytes, filename: str, mime: str,
                                  claim: str | None = None, proof: str | None = None,
-                                 budget_ctx: dict | None = None) -> dict | None:
+                                 budget_ctx: dict | None = None,
+                                 base_url: str | None = None) -> dict | None:
     """Call POST /api/evidence/audio on the deployed Evidence Service."""
-    base_url = get_base_url()
+    base_url = (base_url or get_base_url()).rstrip("/")
     if not base_url:
         return None
     endpoint = f"{base_url}/api/evidence/audio"

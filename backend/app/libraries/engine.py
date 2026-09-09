@@ -264,7 +264,7 @@ def _required_input_types(inv: dict) -> set:
             t = "url"
         if t:
             required.add(t)
-    for req in inv.get("plan") or []:
+    for req in (inv.get("plan") or []) + (inv.get("evidenceRequirements") or []):
         req_type = req.get("type") or req.get("capability") or ""
         if req_type:
             required.add(req_type)
@@ -272,7 +272,8 @@ def _required_input_types(inv: dict) -> set:
 
 
 def _call_input_evidence(itype: str, inp: dict, question: str,
-                         budget_ctx: dict | None) -> dict | None:
+                         budget_ctx: dict | None,
+                         provider_url: str | None = None) -> dict | None:
     """Route a single input to the matching deployed evidence endpoint."""
     content = inp.get("content") or ""
     file_path = inp.get("filePath")
@@ -288,31 +289,32 @@ def _call_input_evidence(itype: str, inp: dict, question: str,
     mime = inp.get("mimeType")
 
     if itype == "url":
-        return evidence_client.acquire_url_evidence(content, claim=question, budget_ctx=budget_ctx)
+        return evidence_client.acquire_url_evidence(content, claim=question, budget_ctx=budget_ctx, base_url=provider_url)
     if itype == "image":
         return evidence_client.acquire_image_evidence(
             file_bytes or b"", fname or "image.jpg", mime or "image/jpeg",
-            claim=question, budget_ctx=budget_ctx)
+            claim=question, budget_ctx=budget_ctx, base_url=provider_url)
     if itype == "video":
         return evidence_client.acquire_video_evidence(
             file_bytes or b"", fname or "video.mp4", mime or "video/mp4",
-            claim=question, budget_ctx=budget_ctx)
+            claim=question, budget_ctx=budget_ctx, base_url=provider_url)
     if itype == "document":
         return evidence_client.acquire_document_evidence(
             file_bytes or b"", fname or "document.pdf", mime or "application/pdf",
-            claim=question, budget_ctx=budget_ctx)
+            claim=question, budget_ctx=budget_ctx, base_url=provider_url)
     if itype == "audio":
         return evidence_client.acquire_audio_evidence(
             file_bytes or b"", fname or "audio.mp3", mime or "audio/mpeg",
-            claim=question, budget_ctx=budget_ctx)
+            claim=question, budget_ctx=budget_ctx, base_url=provider_url)
     # data / text / structured
     return evidence_client.acquire_structured_evidence(
         file_bytes=file_bytes, filename=fname, mime=mime,
         payload_json=content if not file_bytes else None,
-        claim=content or question, budget_ctx=budget_ctx)
+        claim=content or question, budget_ctx=budget_ctx, base_url=provider_url)
 
 
-def _make_evidence_item(raw_resp: dict, itype: str, capability: str) -> dict:
+def _make_evidence_item(raw_resp: dict, itype: str, capability: str,
+                        provider: dict | None = None) -> dict:
     """Normalize a provider EvidenceResponse into a Core evidence item."""
     verdict = raw_resp.get("verdict") or "insufficient_evidence"
     signal = ("supporting" if verdict == "supports"
@@ -347,7 +349,11 @@ def _make_evidence_item(raw_resp: dict, itype: str, capability: str) -> dict:
     return {
         "id": raw_resp.get("evidence_id") or _nanoid("ev"),
         "type": raw_resp.get("type") or itype or "text",
-        "source": f"Evidence Services ({raw_resp.get('type') or itype})",
+        "source": f"{(provider or {}).get('providerName') or 'Evidence Services'} ({raw_resp.get('type') or itype})",
+        "providerId": (provider or {}).get("providerId"),
+        "providerName": (provider or {}).get("providerName"),
+        "providerUrl": (provider or {}).get("providerUrl"),
+        "serviceId": (provider or {}).get("id"),
         "timestamp": _now_iso(),
         "finding": finding,
         "confidence": min(100, max(0, conf)),
@@ -447,17 +453,25 @@ def _select_evidence_type(itype: str, est_cost: float, expected_value: float,
     return {**entry, "selected": True, "reason": "value_justifies_cost"}
 
 
-def _stopping_decision(evidence: list[dict]) -> dict:
+def _stopping_decision(evidence: list[dict], inv: dict | None = None) -> dict:
     """Adaptive stopping: stop buying further evidence once the question is
     already answered. Stops on a high-confidence contradiction (a disproving
     finding) or on strong, consistent supporting evidence.
 
     ponytail: 60% / 65% thresholds are heuristics; tune from real flows.
     """
-    if len(evidence) < 2:
+    effective = [e for e in evidence if e.get("independent") is not False]
+    if len(effective) < 2:
         return {"stop": False}
-    contradicting = [e for e in evidence if e.get("signal") == "contradictory"]
-    supporting = [e for e in evidence if e.get("signal") == "supporting"]
+    contradicting = [e for e in effective if e.get("signal") == "contradictory"]
+    supporting = [e for e in effective if e.get("signal") == "supporting"]
+    if (inv or {}).get("capability") == "claim-investigation":
+        provider_ids = {
+            e.get("providerId") for e in effective
+            if e.get("providerId") and e.get("independent") is True
+        }
+        if len(provider_ids) < 2:
+            return {"stop": False, "reason": "independent_provider_coverage_incomplete"}
     if contradicting and max((e.get("confidence") or 0) for e in contradicting) >= 60:
         return {"stop": True, "reason": "high_confidence_contradicting_evidence"}
     if len(supporting) >= 2:
@@ -517,7 +531,8 @@ def _classify_evidence(evidence: list[dict], duplicates, missing_types: list[str
         "missing": sorted(set(missing_types)),
         "duplicatePairsFound": any_duplicate,
         "independenceNote": (
-            "Provider exposes no independence analysis; independence is unknown."
+            "Independence is counted only when explicitly declared by the provider; "
+            "missing declarations remain unknown."
         ),
     }
 
@@ -665,7 +680,14 @@ async def acquire_from_evidence_services(inv: dict, user_id: str | None = None) 
 
     # Discover what the provider offers (id, type, price, resourceUrl).
     catalog = await evidence_client.discover_remote_services()
-    catalog_by_type = {s["type"]: s for s in catalog if s.get("type")}
+    catalog_by_type = {}
+    for service in catalog:
+        service_type = service.get("type")
+        if not service_type:
+            continue
+        current = catalog_by_type.get(service_type)
+        if current is None or _catalog_price(service) < _catalog_price(current):
+            catalog_by_type[service_type] = service
 
     # Build budget context for downstream payment enforcement.
     budget_ctx = None
@@ -703,12 +725,16 @@ async def acquire_from_evidence_services(inv: dict, user_id: str | None = None) 
             if itype not in catalog_by_type:
                 raw_resp = None
             else:
-                raw_resp = await _call_input_evidence(itype, inp, question, budget_ctx)
+                provider = catalog_by_type.get(itype)
+                raw_resp = await _call_input_evidence(
+                    itype, inp, question, budget_ctx,
+                    provider_url=(provider or {}).get("providerUrl"),
+                )
 
             if not raw_resp:
                 continue
 
-            ev_item = _make_evidence_item(raw_resp, itype, capability)
+            ev_item = _make_evidence_item(raw_resp, itype, capability, provider)
             collected.append(ev_item)
 
             payment_info = raw_resp.get("_payment") or {}
@@ -718,7 +744,7 @@ async def acquire_from_evidence_services(inv: dict, user_id: str | None = None) 
 
         # Adaptive stopping: stop buying when evidence already answers the question.
         if collected:
-            decision = _stopping_decision(collected)
+            decision = _stopping_decision(collected, inv)
             if decision.get("stop"):
                 skipped = candidates[idx + 1:]
                 inv["selectionRationale"].append({
