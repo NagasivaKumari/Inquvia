@@ -83,15 +83,8 @@ export const ORCHESTRATOR_CONFIG = {
     process.env.INQUVIA_PAYTO_ADDRESS ??
     "",
   /** Optional server wallet mnemonic used to pay downstream evidence services. */
-  serverWalletMnemonic: process.env.SERVER_WALLET_MNEMONIC ?? "",
+  serverSignerUrl: process.env.SIGNER_URL ?? "",
 } as const;
-
-function priceEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 
 export interface PaidCapability {
   /** Stable capability id (also recorded on investigations/payments). */
@@ -100,8 +93,6 @@ export interface PaidCapability {
   title: string;
   /** Independent x402 resource path — each is independently callable/priced. */
   endpoint: string;
-  /** Price in whole USDC dollars for this atomic capability. */
-  priceUsdc: number;
   /** Bazaar discovery description (must match what the endpoint actually does). */
   description: string;
   /** Input kinds this capability genuinely accepts. */
@@ -111,15 +102,14 @@ export interface PaidCapability {
 /**
  * Inquvia's COMPOSITE x402 capability set. Every entry is a real, atomic,
  * independently callable paid endpoint. They share the same payTo address and
- * each has its own price. Prices are per-endpoint because each capability does
- * genuinely different work (multimodal analysis, live web inspection, etc.).
+ * each has its own price. The API is the single source of truth for those
+ * prices; clients retrieve them from GET /api/investigate before payment.
  */
 export const PAID_CAPABILITIES: readonly PaidCapability[] = [
   {
     id: "claim-investigation",
     title: "Claim Investigation",
     endpoint: "/api/x402/claim-investigation",
-    priceUsdc: priceEnv("CLAIM_INVESTIGATION_PRICE_USDC", 0.005),
     description:
       "Check whether a claim is supported by available evidence.",
     inputTypes: ["text"],
@@ -128,7 +118,6 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     id: "image-investigation",
     title: "Image Investigation",
     endpoint: "/api/x402/image-investigation",
-    priceUsdc: priceEnv("IMAGE_INVESTIGATION_PRICE_USDC", 0.008),
     description:
       "Investigate an image for context, provenance, and evidence.",
     inputTypes: ["image"],
@@ -137,7 +126,6 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     id: "video-investigation",
     title: "Video Investigation",
     endpoint: "/api/x402/video-investigation",
-    priceUsdc: priceEnv("VIDEO_INVESTIGATION_PRICE_USDC", 0.015),
     description:
       "Investigate what a video shows and whether its context holds up.",
     inputTypes: ["video"],
@@ -146,7 +134,6 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     id: "document-investigation",
     title: "Document Investigation",
     endpoint: "/api/x402/document-investigation",
-    priceUsdc: priceEnv("DOCUMENT_INVESTIGATION_PRICE_USDC", 0.007),
     description:
       "Examine a document for findings, inconsistencies, and evidence.",
     inputTypes: ["document"],
@@ -155,7 +142,6 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     id: "source-investigation",
     title: "Source Investigation",
     endpoint: "/api/x402/source-investigation",
-    priceUsdc: priceEnv("SOURCE_INVESTIGATION_PRICE_USDC", 0.006),
     description:
       "Investigate a website or source before you trust it.",
     inputTypes: ["url"],
@@ -164,7 +150,6 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     id: "data-investigation",
     title: "Data Investigation",
     endpoint: "/api/x402/data-investigation",
-    priceUsdc: priceEnv("DATA_INVESTIGATION_PRICE_USDC", 0.012),
     description:
       "Investigate structured data for anomalies and supporting signals.",
     inputTypes: ["data"],

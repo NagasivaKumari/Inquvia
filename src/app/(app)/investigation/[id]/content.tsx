@@ -5,8 +5,6 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
-import { acquirePaidEvidence } from "@/lib/x402/client";
-import { WalletBadge } from "@/components/wallet/WalletBadge";
 import type {
   Investigation,
   EvidenceAcquisition,
@@ -89,7 +87,6 @@ export default function InvestigationPage() {
   const id = params.id as string;
   const [inv, setInv] = useState<Investigation | null>(null);
   const [error, setError] = useState("");
-  const [walletAddress, setWalletAddress] = useState("");
 
   const fetchData = useCallback(async () => {
     try {
@@ -121,13 +118,6 @@ export default function InvestigationPage() {
     const interval = setInterval(fetchData, 1500);
     return () => clearInterval(interval);
   }, [fetchData, inv?.status]);
-
-  useEffect(() => {
-    apiFetch(`${API_BASE}/api/auth/me`)
-      .then((r) => r.json())
-      .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
-      .catch(() => {});
-  }, []);
 
   if (error) {
     return (
@@ -233,13 +223,6 @@ export default function InvestigationPage() {
           </p>
         ) : (
           <>
-            <PaymentPanel
-              inv={inv}
-              acqs={acqs}
-              walletAddress={walletAddress}
-              onConnected={setWalletAddress}
-              onRefresh={fetchData}
-            />
             <div className={styles.acqList}>
               {acqs.map((a) => (
                 <AcquisitionRow key={a.id} acq={a} />
@@ -559,148 +542,5 @@ function ActivityTimeline({ events }: { events: ActivityEvent[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-function PaymentPanel({
-  inv,
-  acqs,
-  walletAddress,
-  onConnected,
-  onRefresh,
-}: {
-  inv: Investigation;
-  acqs: EvidenceAcquisition[];
-  walletAddress: string;
-  onConnected: (addr: string) => void;
-  onRefresh: () => void;
-}) {
-  const pending = acqs.filter((a) => a.paymentState === "payment_required");
-  if (pending.length === 0) return null;
-
-  const [busyId, setBusyId] = useState("");
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
-
-  const approve = async (acq: EvidenceAcquisition) => {
-    if (!walletAddress) {
-      setError("Connect your Pera wallet to pay the evidence provider.");
-      return;
-    }
-    if (!acq.resourceUrl) {
-      setError("Provider payment endpoint not available.");
-      return;
-    }
-    setBusyId(acq.id);
-    setError("");
-    setStatus("Awaiting wallet approval…");
-    try {
-      const result = await acquirePaidEvidence({
-        address: walletAddress,
-        endpoint: acq.resourceUrl,
-        question: inv.question,
-        capability: acq.capability,
-      });
-      setStatus("Payment submitted — verifying settlement on-chain…");
-      const res = await apiFetch(`${API_BASE}/api/gateway/acquire`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          investigationId: inv.id,
-          acquisitionId: acq.id,
-          txId: result.txId,
-          evidence: result.evidence,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to record acquisition");
-      setStatus("Settlement verified — evidence received.");
-      onRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed");
-    } finally {
-      setBusyId("");
-      setStatus("");
-    }
-  };
-
-  const decline = async (acq: EvidenceAcquisition) => {
-    setBusyId(acq.id);
-    setError("");
-    try {
-      const res = await apiFetch(`${API_BASE}/api/gateway/acquire/decline`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          investigationId: inv.id,
-          acquisitionId: acq.id,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to decline");
-      onRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to decline");
-    } finally {
-      setBusyId("");
-    }
-  };
-
-  return (
-    <div className={styles.paymentPanel}>
-      <h3 className="heading-sm">Payment Required</h3>
-      <p className="text-muted">
-        The following evidence providers require payment before they will return
-        evidence. You pay the provider directly from your wallet.
-      </p>
-      {pending.map((acq) => (
-        <div key={acq.id} className={styles.paymentRow}>
-          <div className={styles.paymentInfo}>
-            <div className={styles.providerName}>{acq.serviceName ?? "External provider"}</div>
-            <div className="text-muted">
-              Capability: {acq.capability.replaceAll("_", " ")} · {" "}{(
-                acq.amountMicro / 1e6
-              ).toFixed(4)} USDC · {" "}{acq.network} · {" "}
-              Asset: {acq.assetId}
-            </div>
-            {acq.payTo && (
-              <div className="text-xs text-muted">
-                Recipient: {acq.payTo}
-              </div>
-            )}
-          </div>
-          <div className={styles.paymentActions}>
-            <WalletBadge
-              address={walletAddress || undefined}
-              onConnected={onConnected}
-              onDisconnected={() => onConnected("")}
-              compact
-            />
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={Boolean(busyId)}
-              onClick={() => approve(acq)}
-            >
-              {busyId === acq.id && status ? (
-                <span>{status}</span>
-              ) : (
-                "Approve Payment"
-              )}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={Boolean(busyId)}
-              onClick={() => decline(acq)}
-            >
-              Decline
-            </button>
-          </div>
-          {error && busyId === acq.id && (
-            <div className={styles.error}>{error}</div>
-          )}
-        </div>
-      ))}
-    </div>
   );
 }

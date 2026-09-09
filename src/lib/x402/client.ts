@@ -13,18 +13,6 @@ function buildPaidFetch(address: string) {
   return wrapFetchWithPayment(apiFetch as typeof fetch, client);
 }
 
-export interface PaidEvidenceResult {
-  evidence: unknown;
-  txId: string;
-}
-
-export interface AcquirePaidEvidenceInput {
-  address: string;
-  endpoint: string;
-  question: string;
-  capability: string;
-}
-
 export const SETTLEMENT_HEADER_NAMES = [
   "x-payment-response",
   "x-x402-payment",
@@ -48,33 +36,6 @@ export function extractSettlementTxId(res: Response): string {
     }
   }
   return "";
-}
-
-/**
- * Pay an external evidence service from the browser wallet (x402).
- */
-export async function acquirePaidEvidence(
-  input: AcquirePaidEvidenceInput
-): Promise<PaidEvidenceResult> {
-  const fetchWithPay = buildPaidFetch(input.address);
-
-  const res = await fetchWithPay(input.endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      question: input.question,
-      capability: input.capability,
-      from: input.address,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Evidence service returned ${res.status}`);
-  }
-
-  const txId = extractSettlementTxId(res);
-  const evidence = await res.json().catch(() => null);
-  return { evidence, txId };
 }
 
 export interface PaidInvestigationResult {

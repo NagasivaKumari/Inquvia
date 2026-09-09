@@ -168,9 +168,10 @@ async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
             continue
 
         # Probe the provider's x402 endpoint for its authoritative payTo /
-        # asset / amount before any payment is requested. No probe → no
-        # payment (fail closed; a provider we cannot verify against is never
-        # paid). Core never holds funds: the USER pays the provider directly.
+        # asset / amount before any payment is considered. No probe → no
+        # purchase (fail closed; a provider we cannot verify against is never
+        # paid). Downstream payments are server-side only (M2M, server wallet):
+        # a budgeted acquisition can never become "the user pays the provider".
         reqs = _probe_x402_requirements(service)
         if not reqs:
             acquisitions.append({
@@ -193,20 +194,25 @@ async def plan_acquisitions(investigation_id: str, user_id: str) -> dict:
             "investigationSpent": inv_spent, "sessionSpent": session_spent, "totalSpent": total_spent,
         }
         b = budget.enforce_budget(reqs["amountMicro"], ctx)
+        allowed = bool(b["allowed"])
         acquisition = {
             "id": _nanoid("acq"), "requirementId": requirement["id"], "investigationId": investigation_id,
             "serviceId": service["id"], "serviceName": service["name"],
             "capability": requirement["capability"], "amountMicro": reqs["amountMicro"],
             "assetId": reqs["assetId"] or service["assetId"], "resourceUrl": reqs["resourceUrl"] or service["resourceUrl"],
             "payTo": reqs["payTo"], "network": reqs["network"] or service["network"],
-            "paymentState": "payment_required" if b["allowed"] else "payment_failed",
-            "blockReason": None if b["allowed"] else budget.budget_block_reason(b["reason"]),
+            # Fail closed: the human is never asked to pay a provider. Even a
+            # budgeted acquisition resolves as evidence_unavailable because
+            # downstream evidence is paid by Inquvia's server wallet (M2M) only.
+            "paymentState": "evidence_unavailable",
+            "blockReason": (None if allowed else budget.budget_block_reason(b["reason"])),
             "updatedAt": _now_iso(),
         }
         acquisitions.append(acquisition)
-        if b["allowed"]:
-            emit_activity(inv, "payment_required",
-                          f"{service['name']}: {(reqs['amountMicro'] / USDC_DECIMALS):.4f} USDC required",
+        if allowed:
+            emit_activity(inv, "blocked",
+                          f"{service['name']}: {reqs['amountMicro'] / USDC_DECIMALS:.4f} USDC would be "
+                          "required but downstream providers are server-paid (M2M) only",
                           requirement["capability"])
         else:
             emit_activity(inv, "blocked", "Evidence check blocked by budget limit", b["reason"])
@@ -283,10 +289,12 @@ def create_investigation_record(input_: dict) -> dict:
 
 
 async def acquire_downstream(investigation_id: str, user_id: str) -> dict:
-    """(Server wallet path — intentionally not implemented.) Core never holds
-    or spends funds. Downstream providers are paid directly by the user's
-    wallet; discovery returns an acquisition at payment_required with the
-    provider's payTo, and the user settles it client-side."""
+    """Legacy client-settled path — intentionally never produces purchases.
+
+    Downstream evidence is paid by Inquvia's server wallet (M2M) only; the
+    human is never asked to pay an evidence provider directly. This function
+    is retained for backward compatibility and returns without creating any
+    payable acquisition."""
     inv = db.get_investigation(investigation_id)
     if not inv:
         return {"ok": False, "error": "Investigation not found"}
@@ -296,15 +304,13 @@ async def acquire_downstream(investigation_id: str, user_id: str) -> dict:
 
 
 async def record_acquisition(investigation_id: str, user_id: str, payload: dict, transport=None) -> dict:
-    """Record a client-settled acquisition.
+    """Legacy client-settled acquisition recorder (dead path).
 
-    The user pays the provider's payTo directly from their own wallet. Before
-    any evidence is stored the settlement is verified independently on-chain
-    against the provider's probed 402 requirements: confirmed round, axfer
-    type, USDC ASA, exact recipient (payTo) and amount >= price. If any check
-    fails the acquisition is marked settlement_failed and NO evidence is
-    recorded. Evidence is accepted only from the payload forwarded from the
-    provider's response after that verification passes."""
+    The active flow never creates a payable acquisition, so nothing reachable
+    calls this anymore: downstream evidence is paid by Inquvia server-side
+    (M2M) and the human is never asked to pay a provider. Kept only so an
+    orphaned client request cannot invent one: it still verifies any supplied
+    settlement on-chain and never fabricates evidence or payments."""
     inv = db.get_investigation(investigation_id)
     if not inv:
         return {"ok": False, "error": "Investigation not found"}

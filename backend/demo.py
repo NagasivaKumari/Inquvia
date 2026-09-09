@@ -72,6 +72,35 @@ def test_wallet_decode():
     assert len(addr) == 58
 
 
+async def test_arc60_signature_verify():
+    """ARC-60 AUTH signature verification (Sign-In With Algorand):
+    EdDSA(SHA256(data) || SHA256(authenticatorData)) over the pubkey."""
+    import base64, hashlib
+    from app.main import _verify_algorand_signature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    checksum = hashlib.sha256(hashlib.sha256(pub).digest()).digest()[:4]
+    addr = base64.b32encode(pub + checksum).decode().rstrip("=")
+
+    domain = "inquvia.vercel.app"
+    message = f"Sign to verify control of {addr} in testnet at 0"
+    data_b64 = base64.b64encode(message.encode("utf-8")).decode()
+    auth_data = hashlib.sha256(domain.encode("utf-8")).digest()
+    auth_b64 = base64.b64encode(auth_data).decode()
+    signed_msg = hashlib.sha256(message.encode("utf-8")).digest() + hashlib.sha256(auth_data).digest()
+    sig_b64 = base64.b64encode(priv.sign(signed_msg)).decode()
+
+    ok = await _verify_algorand_signature(addr, data_b64, auth_b64, sig_b64)
+    assert ok is True, "ARC-60 valid signature rejected"
+    bad_sig = base64.b64encode(priv.sign(b"tampered")).decode()
+    ok = await _verify_algorand_signature(addr, data_b64, auth_b64, bad_sig)
+    assert ok is False, "tampered signature accepted"
+    print("ARC-60 signature verification OK (good sig accepted, bad sig rejected)")
+
+
 def test_x402_settlement_header():
     import base64, json
     from app.x402.gate import extract_settlement_tx_id_from_response_headers, build_x402_middleware
@@ -90,6 +119,7 @@ async def main():
     test_budget()
     test_auth()
     test_wallet_decode()
+    await test_arc60_signature_verify()
     test_x402_settlement_header()
     print("All self-checks passed.")
 

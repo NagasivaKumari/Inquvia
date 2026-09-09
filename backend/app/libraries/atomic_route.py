@@ -21,6 +21,8 @@ def _mime_to_input_type(mime: str) -> str:
         return "image"
     if mime.startswith("video/"):
         return "video"
+    if mime.startswith("audio/"):
+        return "audio"
     if mime == "application/pdf":
         return "document"
     if "json" in mime or "csv" in mime:

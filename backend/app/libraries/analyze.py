@@ -9,12 +9,72 @@ VALID_RISKS = ["low", "moderate", "high", "unknown"]
 VALID_SIGNALS = ["supporting", "contradictory", "uncertain"]
 
 
+def redundant_evidence_ids(inv: dict, evidence: list[dict]) -> set:
+    """Ids of evidence that must NOT count as independent confirmation.
+
+    Two kinds are de-weighted (kept in the evidence trail, excluded from the
+    confidence / signal tallies):
+      - duplicate copies: the provider's duplicates analysis is combined into
+        connected sets; the earliest-acquired copy of each set stays primary,
+        the rest are de-weighted.
+      - dependent/derived evidence: a provider-stated independent=False.
+    Unknown independence is kept (counted) because there is no basis to
+    de-weight it; a provider-stated independent=True counts normally.
+    """
+    duplicate_pairs = {}
+    try:
+        raw = inv.get("duplicates") or {}
+        pair_list = raw.get("duplicates") if isinstance(raw, dict) else raw
+        for p in pair_list or []:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                duplicate_pairs.setdefault(p[0], []).append(p[1])
+                duplicate_pairs.setdefault(p[1], []).append(p[0])
+    except Exception:
+        duplicate_pairs = {}
+
+    rank = {e["id"]: i for i, e in enumerate(evidence)}
+    adjacency = {}
+    for a, bs in duplicate_pairs.items():
+        adjacency.setdefault(a, set()).update(bs)
+        for b in bs:
+            adjacency.setdefault(b, set()).update([a])
+
+    redundant = set()
+    seen = set()
+    for eid in rank:
+        if eid in seen or eid not in adjacency:
+            continue
+        comp, stack = [], [eid]
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            comp.append(n)
+            for m in adjacency.get(n, ()):
+                if m not in seen:
+                    stack.append(m)
+        primary = min(comp, key=lambda x: rank.get(x, len(evidence) + 1))
+        for m in comp:
+            if m != primary:
+                redundant.add(m)
+
+    for e in evidence:
+        if e.get("independent") is False:
+            redundant.add(e["id"])
+    return redundant
+
+
 def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
-    supporting = [e for e in evidence if e.get("signal") == "supporting" or e.get("supportsClaim")]
-    contradicting = [e for e in evidence if e.get("signal") == "contradictory" or e.get("contradictsClaim")]
+    # De-weight duplicate/dependent evidence: it stays in the trail but is not
+    # counted as independent confirmation (see redundant_evidence_ids).
+    redundant = redundant_evidence_ids(inv, evidence)
+    effective = [e for e in evidence if e["id"] not in redundant]
+    supporting = [e for e in effective if e.get("signal") == "supporting" or e.get("supportsClaim")]
+    contradicting = [e for e in effective if e.get("signal") == "contradictory" or e.get("contradictsClaim")]
 
     # Check for direct verdicts from evidence services
-    verdicts = [e.get("metadata", {}).get("verdict") for e in evidence if e.get("metadata", {}).get("verdict")]
+    verdicts = [e.get("metadata", {}).get("verdict") for e in effective if e.get("metadata", {}).get("verdict")]
 
     if len(contradicting) > 0 and len(supporting) > 0:
         conclusion = "suspicious"
@@ -35,16 +95,18 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     else:
         conclusion_text = "Insufficient evidence acquired to render a supported assessment."
 
-    # Use actual evidence service confidence if available
-    item_confidences = [float(e.get("confidence", 0)) for e in evidence if e.get("confidence") is not None and float(e.get("confidence", 0)) > 0]
+    # Use actual evidence service confidence if available (over non-redundant
+    # items only, so copied/dependent evidence can't inflate the answer)
+    item_confidences = [float(e.get("confidence", 0)) for e in effective if e.get("confidence") is not None and float(e.get("confidence", 0)) > 0]
     if item_confidences:
         confidence = round(sum(item_confidences) / len(item_confidences))
     elif supporting:
-        confidence = round(max(0, min(100, (len(supporting) / len(evidence)) * 100)))
+        confidence = round(max(0, min(100, (len(supporting) / max(1, len(effective))) * 100)))
     else:
         confidence = 0
 
-    # Collect findings across all observations and facts
+    # Collect findings across all observations and facts (the full trail, including
+    # de-weighted items)
     findings = []
     for e in evidence:
         src = e.get("source", "Evidence Service")
@@ -80,6 +142,11 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     elif not limitations:
         limitations.append("Assessment is limited to the external evidence services that were configured and settled")
 
+    if redundant:
+        limitations.append(
+            f"{len(redundant)} duplicate/dependent evidence item(s) were de-weighted "
+            "(kept in the evidence trail but not counted as independent confirmation).")
+
     def contradictory_weight(items):
         c = len([e for e in items if e.get("signal") == "contradictory" or e.get("contradictsClaim")])
         if c == 0:
@@ -92,7 +159,7 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
         "conclusion": conclusion,
         "conclusionText": conclusion_text,
         "confidence": confidence,
-        "risk": contradictory_weight(evidence),
+        "risk": contradictory_weight(effective),
         "findings": findings if findings else [f"{e.get('source','')}: {e.get('finding','')}" for e in evidence],
         "limitations": limitations,
         "contradictions": [e["finding"] for e in contradicting],

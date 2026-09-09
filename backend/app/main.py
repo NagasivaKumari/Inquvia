@@ -7,7 +7,6 @@ middleware is added by default.
 import json
 import os
 import base64
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -30,7 +29,6 @@ from .auth import (
 )
 from .libraries import engine, capabilities, atomic_route
 from .libraries import discovery as discovery_lib
-from .libraries.gateway import record_acquisition, verify_settlement_on_chain
 from .x402.gate import build_x402_middleware, extract_settlement_tx_id_from_response_headers
 
 app = FastAPI(title="Inquvia Backend API")
@@ -446,81 +444,17 @@ async def api_providers_discover(request: Request):
     return JSONResponse(discovery_result)
 
 
-# ── Gateway: record a client-settled acquisition ──
-@app.post("/api/gateway/acquire")
-async def api_gateway_acquire(request: Request):
-    user = _resolve_user(request)
-    if not user:
-        return _unauthorized()
-    body = await _json(request)
-    inv_id = (body or {}).get("investigationId")
-    acq_id = (body or {}).get("acquisitionId")
-    tx_id = (body or {}).get("txId")
-    if not inv_id or not acq_id or not tx_id:
-        return JSONResponse({"error": "investigationId, acquisitionId and txId are required"}, status_code=400)
-    try:
-        result = await record_acquisition(
-            inv_id, user["id"],
-            {"acquisitionId": acq_id, "txId": tx_id, "evidence": (body or {}).get("evidence")},
-        )
-    except Exception:
-        return JSONResponse({"error": "Failed to record acquisition"}, status_code=500)
-    if not result["ok"]:
-        return JSONResponse({"error": result["error"]}, status_code=400)
-    investigation = None
-    try:
-        investigation = await engine.await_finalize_investigation(inv_id)
-    except Exception:
-        pass
-    return JSONResponse({"ok": True, "idempotent": bool(result.get("idempotent")), "investigation": investigation})
-
-
-@app.post("/api/gateway/acquire/decline")
-async def api_gateway_decline(request: Request):
-    """User declined to pay: mark pending acquisitions wallet_rejected and
-    finalize honestly (evidence_unavailable when nothing was acquired)."""
-    user = _resolve_user(request)
-    if not user:
-        return _unauthorized()
-    body = await _json(request)
-    inv_id = (body or {}).get("investigationId")
-    acq_id = (body or {}).get("acquisitionId")
-    if not inv_id:
-        return JSONResponse({"error": "investigationId is required"}, status_code=400)
-    inv = db.get_investigation(inv_id)
-    if not inv:
-        return JSONResponse({"error": "Investigation not found"}, status_code=404)
-    if inv.get("userId") != user["id"]:
-        return JSONResponse({"error": "Investigation not found"}, status_code=404)
-
-    targets = [a for a in (inv.get("acquisitions") or [])
-               if a.get("paymentState") == "payment_required"
-               and (acq_id is None or a.get("id") == acq_id)]
-    if not targets:
-        return JSONResponse({"error": "No payable acquisitions to decline"}, status_code=400)
-    from .libraries.gateway import emit_activity
-    for acq in targets:
-        acq["paymentState"] = "wallet_rejected"
-        acq["blockReason"] = "Payment declined by user"
-        emit_activity(inv, "blocked", f"User declined payment for {acq.get('serviceName') or acq.get('capability')}", acq.get("id"))
-    inv["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    db.save_investigation(inv)
-    investigation = None
-    try:
-        investigation = await engine.await_finalize_investigation(inv_id)
-    except Exception:
-        pass
-    return JSONResponse({"ok": True, "investigation": investigation})
-
-
 # ── Wallet ──
-async def _verify_algorand_signature(address: str, message: str, signature_base64: str) -> bool:
-    """Verify an Algorand wallet signature: base32-decoded 32-byte public key,
-    ed25519 detached verification over the UTF-8 message bytes (algosdk
-    verifyBytes is standard tweetnacl ed25519)."""
+async def _verify_algorand_signature(address: str, data_base64: str, authenticator_data_b64: str, signature_base64: str) -> bool:
+    """Verify an ARC-60 AUTH signature (Sign-In With Algorand, ARC-0060).
+
+    Pera signs `EdDSA(SHA256(data) || SHA256(authenticatorData))` with the
+    account's ed25519 private key, where `authenticatorData` is FIDO-style
+    bytes whose first 32 bytes must equal SHA256(domain). """
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from cryptography.exceptions import InvalidSignature
+        import hashlib
     except ImportError:
         return False
 
@@ -528,9 +462,15 @@ async def _verify_algorand_signature(address: str, message: str, signature_base6
     if not key or len(key) != 32:
         return False
     try:
-        sig = base64.b64decode(signature_base64, validate=True)
+        import base64 as _b64
+        data = _b64.b64decode(data_base64, validate=True)
+        auth_data = _b64.b64decode(authenticator_data_b64, validate=True)
+        if len(auth_data) < 32:
+            return False
+        sig = _b64.b64decode(signature_base64, validate=True)
+        message = hashlib.sha256(data).digest() + hashlib.sha256(auth_data).digest()
         pub = Ed25519PublicKey.from_public_bytes(key)
-        pub.verify(sig, message.encode("utf-8"))
+        pub.verify(sig, message)
         return True
     except (InvalidSignature, ValueError, Exception):
         return False
@@ -574,16 +514,20 @@ async def api_wallet_connect(request: Request):
     address = (body or {}).get("address") or ""
     message = (body or {}).get("message") or ""
     signature = (body or {}).get("signatureB64") or ""
+    auth_data = (body or {}).get("authenticatorData") or ""
 
     if not any(w["id"] == provider_id for w in WALLET_PROVIDERS):
         return JSONResponse({"error": "Unsupported wallet provider"}, status_code=400)
     import re
     if not re.fullmatch(r"[A-Z2-7]{58}", address):
         return JSONResponse({"error": "Invalid Algorand address"}, status_code=400)
-    if not message or not signature:
+    if not message or not signature or not auth_data:
         return JSONResponse({"error": "Missing signed challenge. Real wallet signing required."}, status_code=400)
 
-    if not await _verify_algorand_signature(address, message, signature):
+    import base64 as _b64
+    data_b64 = _b64.b64encode(message.encode("utf-8")).decode()
+
+    if not await _verify_algorand_signature(address, data_b64, auth_data, signature):
         return JSONResponse({"error": "Signature verification failed"}, status_code=400)
 
     db.update_user(user["id"], {"walletAddress": address, "walletNetwork": config.ALGORAND_NETWORK})

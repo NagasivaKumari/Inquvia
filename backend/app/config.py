@@ -27,15 +27,22 @@ MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
 ALGORAND_NETWORK = os.getenv("NEXT_PUBLIC_ALGORAND_NETWORK", None) or os.getenv("ALGORAND_NETWORK", "mainnet")
 ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "31566704")
 X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.goplausible.xyz")
-X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "inquvia")
+# Required for the Global x402 Challenge Bazaar listing when no deployment
+# override is supplied. Production can still set the same value explicitly.
+X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "x402-global-challenge")
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
-SERVER_WALLET_MNEMONIC = os.getenv("SERVER_WALLET_MNEMONIC", "")
+
+# Downstream payer (Tx #2) is an EXTERNAL signer; Core never holds the key.
+# SIGNER_URL points at a wallet/signer integration exposing GET /address and
+# POST /sign (see libraries/wallet_signer.py + tools/signer_service.py). The
+# private key lives in that signer process/device (KMS, vault, hosted signer),
+# never in Core's .env. When unset the downstream evidence path is unavailable.
+SIGNER_URL = os.getenv("SIGNER_URL", "").strip().rstrip("/")
+SIGNER_TOKEN = os.getenv("SIGNER_TOKEN", "")
 
 # x402 payment gating is FAIL-CLOSED: when the middleware is unavailable the
 # atomic endpoints return 402, never run free. The only exception is an
 # explicit INQUVIA_X402_OFFLINE=1 (local dev) flag; even then no payment is
-# recorded. There is no server wallet: Inquvia never holds or spends funds and
-# downstream evidence providers are paid directly by the user's wallet.
 INQUVIA_X402_OFFLINE = os.getenv("INQUVIA_X402_OFFLINE", "") == "1"
 
 # "Session" window for the per-session spending budget (sliding hours).
@@ -66,6 +73,7 @@ MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_MIME = [
     "image/jpeg", "image/png", "image/webp", "image/gif",
     "video/mp4", "video/webm",
+    "audio/mpeg", "audio/wav", "audio/mp3", "audio/ogg",
     "application/pdf", "text/plain", "text/csv", "application/json",
 ]
 

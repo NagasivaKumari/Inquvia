@@ -17,17 +17,20 @@ Inquvia autonomously gathers and cross-checks the evidence needed to answer your
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Frontend dependencies
 npm install
 
-# Copy environment config
-cp .env.example .env
-
-# Start development server
+# Terminal 1: start the Next.js frontend
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Run the core FastAPI backend separately from `backend/` with its Python
+dependencies installed. The frontend proxies `/api/*` requests to that backend
+in development. MongoDB is required for users, sessions, investigations, and
+payment records.
+
+Open [http://localhost:3000](http://localhost:3000) after both services are
+running.
 
 ## Configuration
 
@@ -37,38 +40,43 @@ Brand name is configurable in `.env`:
 APP_NAME=Inquvia
 ```
 
-Algorand Mainnet / x402 settings:
-
-```env
-ALGORAND_NETWORK=mainnet
-ALGORAND_USDC_ASA=31566704
-X402_FACILITATOR_URL=https://facilitator.goplausible.xyz
-X402_WALLET_MNEMONIC=your_mnemonic_here
-X402_CHALLENGE_TAG=x402-global-challenge
-```
+For production, configure the core backend for Algorand Mainnet, the
+GoPlausible facilitator, one USDC-opted-in merchant `payTo` address, MongoDB,
+and a separate downstream signer service. The core backend deliberately does
+not hold a downstream wallet private key.
 
 ## Architecture
 
 ```
-User Input â†’ Investigation Plan â†’ Provider Discovery â†’ x402 Payment â†’ Evidence â†’ Conclusion
+User Input → x402 Payment → Investigation Plan → Provider Discovery →
+Server-side Evidence Acquisition → Conclusion
 ```
 
 - **Frontend**: Next.js 15 + TypeScript + custom CSS
-- **Backend**: Next.js API routes + JSON file storage (SQLite-compatible abstraction)
-- **Providers**: Abstraction layer for x402/Bazaar discovery
-- **Payments**: x402 client with GoPlausible facilitator support
+- **Core backend**: FastAPI + MongoDB for authentication, investigations,
+  payments, and budgets
+- **Providers**: x402/Bazaar discovery and a separately deployed evidence
+  service client
+- **Payments**: the browser wallet pays Inquvia's atomic capability; Inquvia
+  may pay evidence providers server-side through a separate signer
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/investigate` | Start investigation |
+| GET | `/api/investigate` | List atomic capability metadata and canonical prices |
 | GET | `/api/investigations` | List investigations |
 | GET | `/api/investigations/:id` | Get investigation |
 | GET | `/api/investigations/:id/evidence` | Get evidence |
 | GET | `/api/providers` | List providers |
 | POST | `/api/providers/discover` | Discover providers |
 | GET | `/api/x402/activity` | Payment activity |
+| POST | `/api/x402/{capability}` | Run a paid, atomic investigation capability |
+
+`POST /api/investigate` and client-settled `/api/gateway/acquire*` flows are
+not part of the active API. Each investigation starts through an x402-gated
+atomic capability endpoint; downstream evidence acquisition is orchestrated
+and paid by the backend when configured.
 
 ## License
 

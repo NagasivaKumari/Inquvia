@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { APP_NAME, TAGLINE } from "@/lib/config";
 import "@/styles/globals.css";
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+const logoPath = "/logo.svg";
+
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -9,11 +12,26 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
+  ...(siteUrl ? { metadataBase: new URL(siteUrl) } : {}),
   title: {
     default: `${APP_NAME} — Autonomous Evidence & AI Fact Investigation`,
     template: `%s | ${APP_NAME}`,
   },
   description: TAGLINE,
+  openGraph: {
+    type: "website",
+    siteName: APP_NAME,
+    title: APP_NAME,
+    description: TAGLINE,
+    ...(siteUrl ? { url: siteUrl } : {}),
+    images: [{ url: logoPath, width: 512, height: 512, alt: `${APP_NAME} logo` }],
+  },
+  twitter: {
+    card: "summary",
+    title: APP_NAME,
+    description: TAGLINE,
+    images: [logoPath],
+  },
 };
 
 export default function RootLayout({

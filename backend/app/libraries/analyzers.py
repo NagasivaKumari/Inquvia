@@ -2,6 +2,7 @@
 from ..libraries import storage, ai as ai_lib
 from ..libraries.analyze import (
     heuristic_analysis,
+    redundant_evidence_ids,
     clamp_confidence,
     normalize_conclusion,
     VALID_RISKS,
@@ -68,13 +69,17 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
 
 
 async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
-    if evidence:
+    # Reason only over non-redundant evidence: duplicate/dependent copies
+    # (provider-flagged) stay in the trail but must not be fed as if they were
+    # extra independent confirmations.
+    effective = [e for e in evidence if e["id"] not in redundant_evidence_ids(inv, evidence)]
+    if effective:
         evidence_text = "\n".join(
             f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
-            for i, e in enumerate(evidence)
+            for i, e in enumerate(effective)
         )
     else:
-        evidence_text = "No external evidence was acquired."
+        evidence_text = "No independent evidence was acquired (acquired items were duplicates/dependent)."
     context_parts.append({"text": f"QUESTION: {inv.get('question')}\n\nACQUIRED EVIDENCE:\n{evidence_text}"})
     raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
     raw = ai_lib.parse_ai_json(raw_text)

@@ -53,9 +53,11 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
       const { address } = await connectPera();
       const message = `Sign to verify control of ${address} in ${ALGORAND_CONFIG.network} at ${Date.now()}`;
       const { signChallenge } = await import("@/lib/wallet/pera");
-      const { signature } = await signChallenge(address, message);
+      const { signature, authenticatorData } = await signChallenge(address, message, window.location.origin);
       let bin = "";
       signature.forEach((b) => (bin += String.fromCharCode(b)));
+      let authBin = "";
+      authenticatorData.forEach((b) => (authBin += String.fromCharCode(b)));
       const res = await apiFetch(`${API_BASE}/api/wallet/connect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -63,6 +65,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
           providerId: "pera",
           address,
           message,
+          authenticatorData: btoa(authBin),
           signatureB64: btoa(bin),
         }),
       });

@@ -6,6 +6,7 @@ export type InputType =
   | "image"
   | "video"
   | "document"
+  | "audio"
   | "data"
   | "mixed";
 
@@ -270,6 +271,7 @@ export type EvidenceType =
   | "image"
   | "video"
   | "document"
+  | "audio"
   | "url"
   | "data";
 

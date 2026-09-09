@@ -69,18 +69,41 @@ export async function disconnectPera(): Promise<void> {
   }
 }
 
-/** Sign an arbitrary message with the user's wallet (proves ownership). */
+/**
+ * Sign an ARC-60 (Sign-In With Algorand) auth challenge with the user's wallet.
+ * Pera's `signData` throws EXTENSION_UNSUPPORTED_OPERATION; only
+ * `signArc60Data` works on current Pera, and it returns an ARC-60 framed
+ * signature: EdDSA(SHA256(data) || SHA256(authenticatorData)) where
+ * authenticatorData[0:32] must equal SHA256(domain).
+ */
 export async function signChallenge(
   address: string,
-  message: string
-): Promise<{ signature: Uint8Array }> {
-  const data = new TextEncoder().encode(message);
-  const signed = await getPera().signData(
-    [{ data, message }],
-    address,
+  message: string,
+  domain: string
+): Promise<{ signature: Uint8Array; authenticatorData: Uint8Array; dataB64: string }> {
+  const encoder = new TextEncoder();
+  const authenticatorData = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(domain)));
+  let dataBin = "";
+  const messageBytes = encoder.encode(message);
+  messageBytes.forEach((b) => (dataBin += String.fromCharCode(b)));
+  const dataB64 = btoa(dataBin);
+
+  const payload = {
+    data: dataB64,
+    signer: algosdk.decodeAddress(address).publicKey,
+    domain,
+    authenticatorData,
+  };
+  const signed = await getPera().signArc60Data(
+    payload,
+    { scope: 1, encoding: "base64" }, // 1 = AUTH
     true // verify the signature after signing
   );
-  return { signature: signed[0] };
+  return {
+    signature: signed.signature,
+    authenticatorData: signed.authenticatorData ?? authenticatorData,
+    dataB64,
+  };
 }
 
 /** Sign a USDC asset transfer from the user's wallet to a recipient. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -9,6 +9,7 @@ import {
   SUBHEADLINE,
   EXAMPLE_PROMPTS,
   PAID_CAPABILITIES,
+  API_BASE,
   PROCESS_STEPS,
   CONSUMER_CASES,
   DECISION_MOMENTS,
@@ -19,6 +20,34 @@ import styles from "./page.module.css";
 function HomePageContent() {
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [prices, setPrices] = useState<Record<string, number>>({});
+  const [evidenceServices, setEvidenceServices] = useState<
+    { id: string; name: string; description?: string; capability?: string; priceMicro?: number }[]
+  >([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/investigate`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        const nextPrices: Record<string, number> = {};
+        for (const capability of data?.capabilities ?? []) {
+          if (typeof capability.id === "string" && typeof capability.priceUsdc === "number") {
+            nextPrices[capability.id] = capability.priceUsdc;
+          }
+        }
+        setPrices(nextPrices);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/providers`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.services)) setEvidenceServices(data.services);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,7 +143,11 @@ function HomePageContent() {
                 <h3 className={styles.toolTitle}>{cap.title}</h3>
                 <p className={styles.toolDesc}>{cap.description}</p>
                 <div className={styles.toolMeta}>
-                  <span className={styles.toolPrice}>${cap.priceUsdc} USDC</span>
+                  <span className={styles.toolPrice}>
+                    {prices[cap.id] === undefined
+                      ? "Price at checkout"
+                      : `$${prices[cap.id]} USDC`}
+                  </span>
                   <span className={styles.toolGo}>Investigate →</span>
                 </div>
               </button>
@@ -122,6 +155,38 @@ function HomePageContent() {
           </div>
         </div>
       </section>
+
+      {evidenceServices.length > 0 && (
+        <section id="evidence" className={styles.toolsSection}>
+          <div className="container">
+            <div className="section-header">
+              <span className="section-kicker">Evidence services</span>
+              <h2 className="section-title">What Inquvia can check for you</h2>
+              <p className="section-lede">
+                Inquvia selects only the relevant evidence checks for your request,
+                then shows the sources, limitations, and payment trail in your report.
+              </p>
+            </div>
+            <div className={styles.toolsGrid}>
+              {evidenceServices.map((service) => (
+                <div key={service.id} className={styles.toolCard}>
+                  <span className={styles.toolType}>{service.capability ?? "evidence"}</span>
+                  <h3 className={styles.toolTitle}>{service.name}</h3>
+                  <p className={styles.toolDesc}>{service.description || "Evidence analysis service"}</p>
+                  <div className={styles.toolMeta}>
+                    <span className={styles.toolPrice}>
+                      {typeof service.priceMicro === "number"
+                        ? `$${(service.priceMicro / 1_000_000).toFixed(3)} USDC`
+                        : "Priced per request"}
+                    </span>
+                    <span className={styles.toolGo}>Selected when relevant</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* REAL-LIFE QUESTIONS */}
       <section className={styles.casesSection}>
