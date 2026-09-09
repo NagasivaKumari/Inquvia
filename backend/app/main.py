@@ -7,9 +7,10 @@ middleware is added by default.
 import json
 import os
 import base64
+from html import escape
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import config, db
 from .auth import (
@@ -158,7 +159,31 @@ async def x402_middleware(request: Request, call_next):
 
 # ── Health / root ──
 @app.get("/")
-async def api_root():
+async def api_root(request: Request):
+    accepts = request.headers.get("accept", "").lower()
+    if "text/html" in accepts and "application/json" not in accepts:
+        public_url = config.PUBLIC_APP_URL or str(request.base_url).rstrip("/")
+        title = escape(config.APP_NAME)
+        description = escape("Evidence-backed investigations paid per request with x402 on Algorand.")
+        image_url = escape(f"{public_url}/logo.png", quote=True)
+        canonical_url = escape(public_url, quote=True)
+        return HTMLResponse(
+            f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{title}</title>
+    <meta name="description" content="{description}">
+    <meta property="og:site_name" content="{title}">
+    <meta property="og:title" content="{title}">
+    <meta property="og:description" content="{description}">
+    <meta property="og:image" content="{image_url}">
+    <link rel="canonical" href="{canonical_url}">
+  </head>
+  <body><h1>{title}</h1><p>{description}</p></body>
+</html>""",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
     return {
         "service": "inquvia-backend",
         "docs": "/docs",

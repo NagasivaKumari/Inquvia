@@ -412,8 +412,13 @@ def _catalog_price(svc: dict | None) -> float:
     if not svc:
         return 0.0
     try:
-        p = svc.get("priceUsdc")
-        return float(p) if p is not None else 0.0
+        if svc.get("priceUsdc") is not None:
+            return float(svc["priceUsdc"])
+        if svc.get("priceMicro") is not None:
+            return float(svc["priceMicro"]) / config.ALGORAND_USDC_DECIMALS
+        if svc.get("price_usdc") is not None:
+            return float(svc["price_usdc"])
+        return 0.0
     except (TypeError, ValueError):
         return 0.0
 

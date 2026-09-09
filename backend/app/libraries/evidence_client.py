@@ -213,6 +213,15 @@ async def _post(url: str, *, json_body=None, files=None, data=None,
                         # Retry with the V2 payment signature header
                         retry_headers = dict(headers or {})
                         retry_headers["PAYMENT-SIGNATURE"] = pay_result["proof"]
+                        # The bundled evidence service also verifies the settled
+                        # transaction directly through its legacy proof adapter.
+                        # Keep the standard V2 payload and provide the settlement
+                        # reference it needs for on-chain verification.
+                        settle_tx_id = pay_result.get("settleTxnId", "")
+                        if settle_tx_id:
+                            retry_headers["x-402-proof"] = json.dumps({
+                                "transaction_id": settle_tx_id,
+                            })
                         headers = retry_headers
                         proof_sent = True
                         # Store payment info for later recording on the 200 retry

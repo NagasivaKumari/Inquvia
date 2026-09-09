@@ -38,7 +38,15 @@ Brand name is configurable in `.env`:
 
 ```env
 APP_NAME=Inquvia
+NEXT_PUBLIC_SITE_URL=https://your-domain.example
+PUBLIC_APP_URL=https://your-domain.example
 ```
+
+`NEXT_PUBLIC_SITE_URL` is used by the Next.js metadata generator. `PUBLIC_APP_URL`
+is used by the FastAPI root and x402 discovery catalog. Set both to the public
+HTTPS origin that serves the merchant website; `public/logo.png` is served at
+`https://your-domain.example/logo.png`. The root page serves HTML metadata to
+browsers and crawlers while keeping JSON for API clients.
 
 For production, configure the core backend for Algorand Mainnet, the
 GoPlausible facilitator, one USDC-opted-in merchant `payTo` address, MongoDB,

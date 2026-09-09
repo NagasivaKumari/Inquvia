@@ -3,7 +3,7 @@ import { APP_NAME, TAGLINE } from "@/lib/config";
 import "@/styles/globals.css";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
-const logoPath = "/logo.svg";
+const logoPath = "/logo.png";
 
 export const viewport: Viewport = {
   width: "device-width",

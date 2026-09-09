@@ -101,30 +101,32 @@ INVESTIGATION_BLOCKED_STATES = [
     "payment_failed", "settlement_failed", "evidence_unavailable", "blocked", "failed",
 ]
 
-# Capability prices in whole USDC dollars.
+# All capability endpoints use one shared price in whole USDC dollars.
+INVESTIGATION_PRICE_USDC = _num("INVESTIGATION_PRICE_USDC", 0.5)
+
 PAID_CAPABILITIES = [
     {"id": "claim-investigation", "title": "Claim Investigation",
-     "endpoint": "/api/x402/claim-investigation", "priceUsdc": _num("CLAIM_INVESTIGATION_PRICE_USDC", 0.5),
+    "endpoint": "/api/x402/claim-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Check whether a claim is supported by available evidence.",
      "inputTypes": ["text"]},
     {"id": "image-investigation", "title": "Image Investigation",
-     "endpoint": "/api/x402/image-investigation", "priceUsdc": _num("IMAGE_INVESTIGATION_PRICE_USDC", 0.5),
+        "endpoint": "/api/x402/image-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate an image for context, provenance, and evidence.",
      "inputTypes": ["image"]},
     {"id": "video-investigation", "title": "Video Investigation",
-     "endpoint": "/api/x402/video-investigation", "priceUsdc": _num("VIDEO_INVESTIGATION_PRICE_USDC", 0.5),
+        "endpoint": "/api/x402/video-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate what a video shows and whether its context holds up.",
      "inputTypes": ["video"]},
     {"id": "document-investigation", "title": "Document Investigation",
-     "endpoint": "/api/x402/document-investigation", "priceUsdc": _num("DOCUMENT_INVESTIGATION_PRICE_USDC", 0.5),
+        "endpoint": "/api/x402/document-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Examine a document for findings, inconsistencies, and evidence.",
      "inputTypes": ["document"]},
     {"id": "source-investigation", "title": "Source Investigation",
-     "endpoint": "/api/x402/source-investigation", "priceUsdc": _num("SOURCE_INVESTIGATION_PRICE_USDC", 0.5),
+        "endpoint": "/api/x402/source-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate a website or source before you trust it.",
      "inputTypes": ["url"]},
     {"id": "data-investigation", "title": "Data Investigation",
-     "endpoint": "/api/x402/data-investigation", "priceUsdc": _num("DATA_INVESTIGATION_PRICE_USDC", 0.5),
+        "endpoint": "/api/x402/data-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate structured data for anomalies and supporting signals.",
      "inputTypes": ["data"]},
 ]

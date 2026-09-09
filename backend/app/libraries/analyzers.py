@@ -73,6 +73,10 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
     # (provider-flagged) stay in the trail but must not be fed as if they were
     # extra independent confirmations.
     effective = [e for e in evidence if e["id"] not in redundant_evidence_ids(inv, evidence)]
+    if not effective:
+        # Do not let a model manufacture a conclusion from copied or dependent
+        # evidence. Keep the acquired items in the trail and report insufficiency.
+        return heuristic_analysis(inv, evidence)
     if effective:
         evidence_text = "\n".join(
             f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
