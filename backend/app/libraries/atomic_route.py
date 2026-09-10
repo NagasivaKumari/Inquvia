@@ -23,11 +23,25 @@ def _mime_to_input_type(mime: str) -> str:
         return "video"
     if mime.startswith("audio/"):
         return "audio"
-    if mime == "application/pdf":
+    if mime == "application/pdf" or mime.startswith("text/"):
         return "document"
     if "json" in mime or "csv" in mime:
         return "data"
     return "document"
+
+
+# Each capability owns a distinct set of input types — a video investigation
+# rejects audio/image files, document accepts text-or-PDF, data accepts only
+# CSV/JSON, and so on. Rejects mismatched uploads before any payment can run.
+ALLOWED_INPUT_TYPES = {
+    "claim-investigation": {"text", "url", "document"},
+    "image-investigation": {"image"},
+    "video-investigation": {"video"},
+    "document-investigation": {"document", "text"},
+    "source-investigation": {"url"},
+    "data-investigation": {"data"},
+    "audio-investigation": {"audio"},
+}
 
 
 async def parse_body(body: dict | None, files: list) -> dict:
@@ -100,6 +114,19 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
                 inputs.insert(0, {"type": "url", "content": storage.sanitize_url(parsed["url"])})
         if not any(i["type"] == "url" for i in inputs):
             return {"status": 400, "content": {"error": "source-investigation requires a valid URL"}}
+
+    # Enforce per-capability input types (audio files only for audio, video
+    # only for video, text-or-PDF for documents, ...). Catches mismatched
+    # uploads before anything is paid for or run.
+    allowed = ALLOWED_INPUT_TYPES.get(capability_id)
+    bad = [i for i in inputs if i.get("type") not in allowed]
+    if bad:
+        kinds = ", ".join(sorted(allowed))
+        detail = ", ".join(f"{i.get('fileName') or i.get('content') or i.get('type')}" for i in bad[:3])
+        return {"status": 400, "content": {
+            "error": f"{capability_id} only accepts {kinds} inputs. Incompatible file(s): {detail}",
+            "acceptedInputTypes": sorted(allowed),
+        }}
 
     # Capability execution. Payment gating (402 / verify / settle) is handled
     # by the x402 FastAPI middleware at the ASGI layer, not here.

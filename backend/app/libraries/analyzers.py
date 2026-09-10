@@ -267,13 +267,10 @@ async def _data_analyzer(inv, evidence):
 
 async def _audio_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's audio forensics analyst. Assess the submitted audio recording(s) using the extracted "
-        "FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration) and any audible content, "
-        "together with the acquired evidence. Base conclusions only on defensible, observable signals; do not "
-        "claim splicing, cloning, or manipulation unless the evidence supports it. State evidence and limitations explicitly. "
+        "You are Inquvia's audio forensics analyst. PRIORITIZE extracting a full transcript if possible from the provided content, or at least a detailed summary of spoken content. Assess the submitted audio recording(s) using the extracted FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration) and any audible content, together with the acquired evidence. Base conclusions only on defensible, observable signals; do not claim splicing, cloning, or manipulation unless the evidence supports it. State evidence and limitations explicitly. "
         "When multiple recordings are provided, compare them against each other. "
         "Express confidence honestly; explicit uncertainty is expected. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, transcript: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
     audios = [i for i in (inv.get("inputs") or []) if i.get("type") == "audio"]
     parts = []

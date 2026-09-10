@@ -299,10 +299,17 @@ def _probe_audio(buf: bytes) -> dict:
     else:
         s["container"] = "unknown"
     return s
-
-
 def inspect_bytes(data: bytes, kind: str) -> dict:
     k = kind.lower().lstrip(".")
+
+    # Try deep probe first if ffprobe is available
+    if k in IMAGE_KINDS or k in VIDEO_KINDS or k in AUDIO_KINDS:
+        probe_result = _probe_ffprobe(data, k)
+        if probe_result:
+            probe_result["probe"] = "ffprobe"
+            probe_result["_kind"] = k
+            return probe_result
+
     if k in IMAGE_KINDS:
         sig = _probe_image(data)
     elif k in VIDEO_KINDS:
@@ -311,7 +318,8 @@ def inspect_bytes(data: bytes, kind: str) -> dict:
         sig = _probe_audio(data)
     else:
         sig = {"kind": "unknown"}
-    sig["_kind"] = k if k in IMAGE_KINDS | VIDEO_KINDS | AUDIO_KINDS else "unknown"
+
+    sig["_kind"] = k
     return sig
 
 

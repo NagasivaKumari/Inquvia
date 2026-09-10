@@ -214,7 +214,7 @@ async def run_evidence_checks(inv: dict) -> dict:
                 "investigationId": inv["id"],
                 "capability": cap,
                 "serviceName": CHECK_LABELS[cap],
-                "amountMicro": 0,
+                "amountMicro": round(config.INVESTIGATION_PRICE_USDC * 1_000_000),
                 "paymentState": "evidence_received",
                 "network": "internal",
                 "evidence": {"signal": "uncertain", "finding": finding[0:300], "source": ev["source"]},
