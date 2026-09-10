@@ -294,20 +294,6 @@ function InvestigateForm() {
           </div>
         )}
 
-        <div className={styles.walletRow}>
-          <span className={walletAddress ? styles.walletOk : styles.walletWarn}>
-            {walletAddress
-              ? "Wallet connected"
-              : "No wallet connected — a micro USDC fee is required to run an investigation."}
-          </span>
-          <WalletBadge
-            address={walletAddress || undefined}
-            onConnected={(addr) => setWalletAddress(addr)}
-            onDisconnected={() => setWalletAddress("")}
-            compact
-          />
-        </div>
-
         {detectedCap && price && (
           <div className={styles.priceDisplay}>
             <span className="text-sm text-muted">

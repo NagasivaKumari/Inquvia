@@ -272,8 +272,15 @@ export async function payForInvestigation(input: {
 /** Determine the correct atomic endpoint for a set of inputs. */
 export function detectCapabilityEndpoint(files: File[], url: string): string {
   const mimes = files.map((f) => f.type);
+  const names = files.map((f) => f.name.toLowerCase());
+  
   if (mimes.some((m) => m.startsWith("image/"))) return "/api/x402/image-investigation";
-  if (mimes.some((m) => m.startsWith("video/"))) return "/api/x402/video-investigation";
+  
+  if (mimes.some((m) => m.startsWith("video/")) || 
+      names.some((n) => n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".avi") || n.endsWith(".wmv"))) {
+    return "/api/x402/video-investigation";
+  }
+  
   if (mimes.some((m) => m === "application/pdf")) return "/api/x402/document-investigation";
   if (mimes.some((m) => m.includes("json") || m.includes("csv"))) return "/api/x402/data-investigation";
   if (mimes.some((m) => m.startsWith("audio/"))) return "/api/x402/audio-investigation";
