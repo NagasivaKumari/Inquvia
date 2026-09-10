@@ -120,6 +120,7 @@ def build_x402_middleware():
     routes: dict[str, RouteConfig] = {}
     for cap in [*config.PAID_CAPABILITIES, *config.EVIDENCE_CAPABILITIES]:
         amount_micro = round(cap.get("priceUsdc", config.INVESTIGATION_PRICE_USDC) * 1_000_000)
+        canonical_url = f"{config.X402_PUBLIC_BASE_URL}{cap['endpoint']}"
         routes[f"POST {cap['endpoint']}"] = RouteConfig(
             accepts=PaymentOption(
                 scheme="exact",
@@ -137,6 +138,7 @@ def build_x402_middleware():
             description=f"Inquvia: {cap['title']} - {cap['description']}",
             mime_type="application/json",
             extensions=_discovery_extensions(cap),
+            resource=canonical_url,
         )
 
     return payment_middleware(routes, server)

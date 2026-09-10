@@ -50,9 +50,24 @@ def resolve_stored_path(file_path: str) -> Path | None:
     return p
 
 
+def _is_binary_mime(mime: str | None) -> bool:
+    if not mime:
+        return False
+    mime = mime.lower()
+    if mime.startswith(("image/", "video/", "audio/")):
+        return True
+    return mime in (
+        "application/pdf",
+        "application/octet-stream",
+        "application/zip",
+        "application/x-zip-compressed",
+    )
+
+
 def read_stored_text(file_path: str, max_chars: int = 60000) -> str | None:
     stored = db.read_upload_file(file_path)
     buf = stored[0] if stored else None
+    mime = stored[1] if stored else None
     if buf is None:
         p = resolve_stored_path(file_path)
         if p:
@@ -65,9 +80,15 @@ def read_stored_text(file_path: str, max_chars: int = 60000) -> str | None:
     try:
         if len(buf) > 2 * 1024 * 1024:
             return None
+        if _is_binary_mime(mime):
+            return None
         import re
         text = buf.decode("utf-8", errors="ignore")
-        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
+        # Binary data that slipped past the mime check still decodes to garbage
+        # (control chars / NUL bytes); treat it as non-text so it is never fed
+        # to the AI as if it were readable evidence.
+        if re.search(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", text):
+            return None
         return text[:max_chars]
     except Exception:
         return None

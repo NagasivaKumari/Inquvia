@@ -33,6 +33,13 @@ X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.go
 # Required for the Global x402 Challenge Bazaar listing when no deployment
 # override is supplied. Production can still set the same value explicitly.
 X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "x402-global-challenge")
+# Canonical public origin served in every 402 PAYMENT-REQUIRED so settles
+# attribute to the deployed resource host (bazaar/challenge dashboard), even
+# when requests arrive via localhost. Synced with PUBLIC_APP_URL by default.
+X402_PUBLIC_BASE_URL = (
+    os.getenv("X402_PUBLIC_BASE_URL", "").strip()
+    or PUBLIC_APP_URL
+).rstrip("/")
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
 
 # x402 payment gating is FAIL-CLOSED: when the middleware is unavailable the

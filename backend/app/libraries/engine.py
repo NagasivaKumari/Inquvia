@@ -237,7 +237,7 @@ async def analyze_investigation(investigation_id: str) -> dict:
         for inp in inv.get("inputs") or []:
             content_preview = inp.get("content") or inp.get("fileName") or "submitted input"
             text_content = None
-            if inp.get("filePath"):
+            if inp.get("filePath") and inp.get("type") in ("document", "data", "text", "url"):
                 text_content = _storage.read_stored_text(inp["filePath"], 500)
             finding_text = (text_content[:200].strip() if text_content else f"User-submitted {content_preview}")
             ev_item = {

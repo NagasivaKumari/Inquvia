@@ -8,6 +8,7 @@ import json
 import os
 import base64
 from html import escape
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -217,6 +218,23 @@ async def api_root(request: Request):
         "docs": "/docs",
         "health": "/api/health",
     }
+
+
+@app.get("/logo.png", include_in_schema=False)
+async def logo():
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here / "assets" / "logo.png",
+        here.parent.parent / "public" / "logo.png",
+        here.parent / "static" / "logo.png",
+    ):
+        if candidate.is_file():
+            return Response(
+                content=candidate.read_bytes(),
+                media_type="image/png",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+    return Response(status_code=404)
 
 
 @app.get("/.well-known/x402", include_in_schema=False)

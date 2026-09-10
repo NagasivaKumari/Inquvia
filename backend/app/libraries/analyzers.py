@@ -142,35 +142,52 @@ async def _claim_analyzer(inv, evidence):
 
 async def _image_analyzer(inv, evidence):
     system_prompt = (
-        "You are Inquvia's image forensics analyst. Inspect the provided image for signs of manipulation, generative-AI artifacts, or provenance inconsistencies, "
-        "together with the acquired evidence. Do not claim verified authenticity — express confidence honestly and state limitations. "
+        "You are Inquvia's image forensics analyst. Inspect the provided image(s) for signs of manipulation, "
+        "generative-AI artifacts, or provenance inconsistencies, together with the acquired evidence. "
+        "When multiple images are provided, compare them against each other for provenance and editing differences. "
+        "Do not claim verified authenticity — express confidence honestly and state limitations. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
-    input_ = _find_input(inv, "image")
+    images = [i for i in (inv.get("inputs") or []) if i.get("type") == "image"]
     parts = []
-    if input_ and input_.get("filePath"):
-        f = read_stored_file_base64(input_["filePath"])
-        if f:
-            parts.append({"file": f})
-    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
-    parts.append({"text": f"IMAGE_CONTEXT: {context_text}"})
+    for input_ in images:
+        if input_.get("filePath"):
+            f = read_stored_file_base64(input_["filePath"])
+            if f:
+                parts.append({"file": f})
+                label = input_.get("content") or input_.get("fileName") or "image"
+                parts.append({"text": f"IMAGE_CONTEXT: {label}"})
+    if not any(p.get("file") for p in parts):
+        context = _first_text_input(inv) or ""
+        if context:
+            parts.append({"text": f"IMAGE_CONTEXT: {context}"})
+    if len(images) > 1:
+        parts.append({"text": f"NOTE: {len(images)} images were submitted — compare them against each other."})
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
 async def _video_analyzer(inv, evidence):
     system_prompt = (
-        "You are Inquvia's video forensics analyst. Assess the submitted video for temporal consistency, manipulation, or context issues using the video content "
-        "(when provided) and the acquired evidence. Express confidence honestly; explicit uncertainty is expected. "
+        "You are Inquvia's video forensics analyst. Assess the submitted video(s) for temporal consistency, manipulation, or context issues using the video content "
+        "(when provided) and the acquired evidence. When multiple videos are provided, compare them against each other. "
+        "Express confidence honestly; explicit uncertainty is expected. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
-    input_ = _find_input(inv, "video")
+    videos = [i for i in (inv.get("inputs") or []) if i.get("type") == "video"]
     parts = []
-    if input_ and input_.get("filePath"):
-        f = read_stored_file_base64(input_["filePath"])
-        if f:
-            parts.append({"file": f})
-    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
-    parts.append({"text": f"VIDEO_CONTEXT: {context_text}"})
+    for input_ in videos:
+        if input_.get("filePath"):
+            f = read_stored_file_base64(input_["filePath"])
+            if f:
+                parts.append({"file": f})
+                label = input_.get("content") or input_.get("fileName") or "video"
+                parts.append({"text": f"VIDEO_CONTEXT: {label}"})
+    if not any(p.get("file") for p in parts):
+        context = _first_text_input(inv) or ""
+        if context:
+            parts.append({"text": f"VIDEO_CONTEXT: {context}"})
+    if len(videos) > 1:
+        parts.append({"text": f"NOTE: {len(videos)} videos were submitted — compare them against each other."})
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
@@ -227,19 +244,27 @@ async def _data_analyzer(inv, evidence):
 
 async def _audio_analyzer(inv, evidence):
     system_prompt = (
-        "You are Inquvia's audio forensics analyst. Assess the submitted audio for authenticity, "
+        "You are Inquvia's audio forensics analyst. Assess the submitted audio recording(s) for authenticity, "
         "manipulation, or context issues using the audio content (when provided) and the acquired evidence. "
+        "When multiple recordings are provided, compare them against each other. "
         "Express confidence honestly; explicit uncertainty is expected. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
-    input_ = _find_input(inv, "audio")
+    audios = [i for i in (inv.get("inputs") or []) if i.get("type") == "audio"]
     parts = []
-    if input_ and input_.get("filePath"):
-        f = read_stored_file_base64(input_["filePath"])
-        if f:
-            parts.append({"file": f})
-    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
-    parts.append({"text": f"AUDIO_CONTEXT: {context_text}"})
+    for input_ in audios:
+        if input_.get("filePath"):
+            f = read_stored_file_base64(input_["filePath"])
+            if f:
+                parts.append({"file": f})
+                label = input_.get("content") or input_.get("fileName") or "audio"
+                parts.append({"text": f"AUDIO_CONTEXT: {label}"})
+    if not any(p.get("file") for p in parts):
+        context = _first_text_input(inv) or ""
+        if context:
+            parts.append({"text": f"AUDIO_CONTEXT: {context}"})
+    if len(audios) > 1:
+        parts.append({"text": f"NOTE: {len(audios)} audio recordings were submitted — compare them against each other."})
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
