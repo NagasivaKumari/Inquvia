@@ -13,10 +13,19 @@ import { ensurePeraSession } from "./pera";
  * the signed bytes. Pera never shares private keys outside the wallet.
  */
 export function createX402Signer(address: string): ClientAvmSigner {
+  const emit = (step: string, extra?: Record<string, unknown>) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("inquvia:pay-diagnostic", { detail: { step, ...extra } })
+      );
+    }
+  };
   return {
     address,
     async signTransactions(txns, indexesToSign) {
+      emit("preparing-session", { address });
       const pera = await ensurePeraSession();
+      emit("session-ready", { connected: pera.isConnected });
       const decoded = txns.map((t) => algosdk.decodeUnsignedTransaction(t));
       // Determine which transactions this wallet should sign:
       // Default to transactions where txn.sender matches address, or explicitly indexesToSign.
@@ -33,7 +42,9 @@ export function createX402Signer(address: string): ClientAvmSigner {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("inquvia:wallet-signing"));
       }
+      emit("requesting-approval", { txCount: signerTxns.length });
       const signed = await pera.signTransaction([signerTxns]);
+      emit("request-approved");
 
       // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.
       const signedMap = new Map<number, Uint8Array>();

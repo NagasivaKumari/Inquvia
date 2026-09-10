@@ -1,5 +1,5 @@
 """Capability analyzer registry (mirrors investigation/analyzers.ts)."""
-from ..libraries import storage, ai as ai_lib
+from ..libraries import storage, ai as ai_lib, signals as signals_lib
 from ..libraries.analyze import (
     heuristic_analysis,
     redundant_evidence_ids,
@@ -143,9 +143,11 @@ async def _claim_analyzer(inv, evidence):
 async def _image_analyzer(inv, evidence):
     system_prompt = (
         "You are Inquvia's image forensics analyst. Inspect the provided image(s) for signs of manipulation, "
-        "generative-AI artifacts, or provenance inconsistencies, together with the acquired evidence. "
+        "generative-AI artifacts, or provenance inconsistencies, together with the acquired evidence and the "
+        "extracted FILE_LEVEL_SIGNALS (metadata, format, dimensions, editor tags). "
         "When multiple images are provided, compare them against each other for provenance and editing differences. "
-        "Do not claim verified authenticity — express confidence honestly and state limitations. "
+        "Do not claim verified authenticity. Base every conclusion on observable, defensible signals; do not "
+        "claim metadata or file-level facts beyond what FILE_LEVEL_SIGNALS states. State evidence and limitations explicitly. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
     images = [i for i in (inv.get("inputs") or []) if i.get("type") == "image"]
@@ -157,6 +159,9 @@ async def _image_analyzer(inv, evidence):
                 parts.append({"file": f})
                 label = input_.get("content") or input_.get("fileName") or "image"
                 parts.append({"text": f"IMAGE_CONTEXT: {label}"})
+                sig_text = signals_lib.inspect_text(input_["filePath"], "image")
+                if sig_text:
+                    parts.append({"text": sig_text})
     if not any(p.get("file") for p in parts):
         context = _first_text_input(inv) or ""
         if context:
@@ -168,8 +173,12 @@ async def _image_analyzer(inv, evidence):
 
 async def _video_analyzer(inv, evidence):
     system_prompt = (
-        "You are Inquvia's video forensics analyst. Assess the submitted video(s) for temporal consistency, manipulation, or context issues using the video content "
-        "(when provided) and the acquired evidence. When multiple videos are provided, compare them against each other. "
+        "You are Inquvia's video forensics analyst. Assess the submitted video(s) using the extracted "
+        "FILE_LEVEL_SIGNALS (container, brands, track dimensions, duration) and the visible frame content, "
+        "together with the acquired evidence. Identify only defensible forensic or file-level signals such as "
+        "metadata, recompression, frame inconsistencies, encoding anomalies, or other observable irregularities. "
+        "Do not claim that the video is AI-generated, manipulated, or authentic unless the evidence supports that "
+        "conclusion; clearly state the evidence and limitations. When multiple videos are provided, compare them against each other. "
         "Express confidence honestly; explicit uncertainty is expected. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
@@ -182,6 +191,9 @@ async def _video_analyzer(inv, evidence):
                 parts.append({"file": f})
                 label = input_.get("content") or input_.get("fileName") or "video"
                 parts.append({"text": f"VIDEO_CONTEXT: {label}"})
+                sig_text = signals_lib.inspect_text(input_["filePath"], "video")
+                if sig_text:
+                    parts.append({"text": sig_text})
     if not any(p.get("file") for p in parts):
         context = _first_text_input(inv) or ""
         if context:
@@ -244,8 +256,10 @@ async def _data_analyzer(inv, evidence):
 
 async def _audio_analyzer(inv, evidence):
     system_prompt = (
-        "You are Inquvia's audio forensics analyst. Assess the submitted audio recording(s) for authenticity, "
-        "manipulation, or context issues using the audio content (when provided) and the acquired evidence. "
+        "You are Inquvia's audio forensics analyst. Assess the submitted audio recording(s) using the extracted "
+        "FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration) and any audible content, "
+        "together with the acquired evidence. Base conclusions only on defensible, observable signals; do not "
+        "claim splicing, cloning, or manipulation unless the evidence supports it. State evidence and limitations explicitly. "
         "When multiple recordings are provided, compare them against each other. "
         "Express confidence honestly; explicit uncertainty is expected. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
@@ -259,6 +273,9 @@ async def _audio_analyzer(inv, evidence):
                 parts.append({"file": f})
                 label = input_.get("content") or input_.get("fileName") or "audio"
                 parts.append({"text": f"AUDIO_CONTEXT: {label}"})
+                sig_text = signals_lib.inspect_text(input_["filePath"], "audio")
+                if sig_text:
+                    parts.append({"text": sig_text})
     if not any(p.get("file") for p in parts):
         context = _first_text_input(inv) or ""
         if context:

@@ -74,8 +74,23 @@ function InvestigateForm() {
     const onWalletSigning = () => {
       setPaymentStatus("Pera approval requested — approve the $0.50 USDC payment in the Pera window…");
     };
+    const onDiagnostic = (e: Event) => {
+      const step = (e as CustomEvent<{ step: string; connected?: boolean }>)?.detail?.step ?? "";
+      const map: Record<string, string> = {
+        "preparing-session": "Connecting to Pera wallet (reconnect session)…",
+        "session-ready": "Pera session ready.",
+        "requesting-approval": "Opening Pera — approve the $0.50 USDC payment in the wallet now…",
+        "request-approved": "Payment approved.",
+      };
+      if (map[step]) setPaymentStatus(map[step]);
+      console.info("[inquvia:pay]", e as CustomEvent);
+    };
     window.addEventListener("inquvia:wallet-signing", onWalletSigning);
-    return () => window.removeEventListener("inquvia:wallet-signing", onWalletSigning);
+    window.addEventListener("inquvia:pay-diagnostic", onDiagnostic);
+    return () => {
+      window.removeEventListener("inquvia:wallet-signing", onWalletSigning);
+      window.removeEventListener("inquvia:pay-diagnostic", onDiagnostic);
+    };
   }, []);
 
   const handleFiles = useCallback((fileList: FileList | null) => {
@@ -135,7 +150,7 @@ function InvestigateForm() {
       const idempotencyKey = crypto.randomUUID();
 
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 90_000);
+      const timeout = window.setTimeout(() => controller.abort(), 300_000);
       let paid;
       try {
         setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");

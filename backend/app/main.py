@@ -127,6 +127,7 @@ def _unauthorized():
 
 @app.middleware("http")
 async def x402_middleware(request: Request, call_next):
+    from starlette.requests import ClientDisconnect
     if request.url.path.startswith("/api/auth/"):
         return await call_next(request)
     print(f"DEBUG: Path={request.url.path}, Middleware={_X402_MIDDLEWARE is not None}")
@@ -145,6 +146,14 @@ async def x402_middleware(request: Request, call_next):
                 print(f"x402 DIAG payment header on {request.method} {request.url.path} UNDECODABLE: {type(e).__name__}: {e}")
         try:
             res = await middleware(request, call_next)
+        except ClientDisconnect:
+            # The client (browser) dropped the socket mid-upload. This is NOT a
+            # payment failure and must not 402/fail the gate; the user's upload
+            # simply never completed.
+            res = JSONResponse({
+                "error": "Upload interrupted: the connection closed before the file finished "
+                         "uploading. Keep files under 10MB and retry.",
+            }, status_code=400)
         except Exception as e:
             import traceback; traceback.print_exc()
             # Fail closed: a payment-gate error can never mean "run for free".
@@ -681,7 +690,15 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
     body = None
     idempotency_key = request.headers.get("Idempotency-Key") or None
     if "multipart/form-data" in content_type:
-        form = await request.form()
+        try:
+            form = await request.form()
+        except ClientDisconnect:
+            return JSONResponse({
+                "error": "Upload interrupted: the connection closed before the file finished "
+                         "uploading. Keep files under 10MB and retry.",
+            }, status_code=400)
+        except Exception:
+            return JSONResponse({"error": "Could not read the uploaded file."}, status_code=400)
         body = {
             "question": form.get("question"),
             "url": form.get("url"),
