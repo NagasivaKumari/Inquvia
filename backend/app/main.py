@@ -195,6 +195,8 @@ async def api_root(request: Request):
 @app.get("/.well-known/x402", include_in_schema=False)
 async def x402_discovery(request: Request):
     base_url = config.PUBLIC_APP_URL or str(request.base_url).rstrip("/")
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        base_url = str(request.base_url).rstrip("/")
     network = config.ALGORAND_NETWORK_CAIP2
     resources = []
     for capability in config.PAID_CAPABILITIES:

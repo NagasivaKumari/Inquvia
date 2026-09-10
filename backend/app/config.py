@@ -19,7 +19,10 @@ def _env_num(name: str) -> float:
 
 
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
-PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "").rstrip("/")
+PUBLIC_APP_URL = (
+    os.getenv("PUBLIC_APP_URL", "").strip()
+    or os.getenv("NEXT_PUBLIC_SITE_URL", "").strip()
+).rstrip("/")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")

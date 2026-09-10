@@ -177,6 +177,77 @@
 }
 .statLabel { font-size: 0.78rem; color: var(--color-text-faint); margin-top: 2px; }
 
+.services {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.servicesHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+.sectionEyebrow {
+  margin-bottom: 4px;
+  color: var(--color-text-faint);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.serviceCount {
+  color: var(--color-navy);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.servicesIntro {
+  max-width: 760px;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.servicesGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.serviceCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 156px;
+  border-radius: var(--radius-lg);
+}
+.serviceTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.serviceKind {
+  color: var(--color-navy);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.servicePrice {
+  color: var(--color-success);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.serviceCard h3 {
+  color: var(--color-text-strong);
+  font-size: 1rem;
+}
+.serviceCard p {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .recentHead {
   display: flex;
   justify-content: space-between;
@@ -234,4 +305,9 @@
 @media (max-width: 900px) {
   .recentGrid { grid-template-columns: 1fr; }
   .statsGrid { grid-template-columns: repeat(2, 1fr); }
+  .servicesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .servicesHead { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .servicesGrid { grid-template-columns: 1fr; }
 }

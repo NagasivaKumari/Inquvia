@@ -18,11 +18,22 @@ interface DashboardData {
   recentInvestigations: Investigation[];
 }
 
+interface EvidenceService {
+  id?: string;
+  name?: string;
+  capability?: string;
+  description?: string;
+  priceMicro?: number;
+  priceUsdc?: number;
+  paid?: boolean;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [user, setUser] = useState<{ name: string; walletAddress?: string; walletNetwork?: string } | null>(null);
   const [budget, setBudget] = useState<{ spent: number; total: number; remaining: number } | null>(null);
+  const [services, setServices] = useState<EvidenceService[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -31,11 +42,13 @@ export default function DashboardPage() {
       apiFetch(`${API_BASE}/api/dashboard`).then((r) => r.json()),
       apiFetch(`${API_BASE}/api/auth/me`).then((r) => r.json()),
       apiFetch(`${API_BASE}/api/user`).then((r) => r.json()),
+      apiFetch(`${API_BASE}/api/providers`).then((r) => r.json()),
     ])
-      .then(([d, me, b]) => {
+      .then(([d, me, b, providers]) => {
         setData(d);
         setUser(me.user ?? null);
         setBudget(b.budget ?? null);
+        setServices(Array.isArray(providers.services) ? providers.services : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -99,6 +112,43 @@ export default function DashboardPage() {
 
       <section className={styles.statsRow}>
         <StatsCard data={data} budget={budget} />
+      </section>
+
+      <section className={styles.services}>
+        <div className={styles.servicesHead}>
+          <div>
+            <p className={styles.sectionEyebrow}>Available evidence services</p>
+            <h2 className="app-section-title" style={{ marginBottom: 0 }}>
+              What Inquvia can check
+            </h2>
+          </div>
+          <span className={styles.serviceCount}>{services.length} services</span>
+        </div>
+        <p className={styles.servicesIntro}>
+          Inquvia selects the relevant checks for your question. Your wallet payment covers the investigation, and the selected evidence checks are recorded in the report.
+        </p>
+        {services.length === 0 ? (
+          <p className="text-muted">Evidence services are loading or temporarily unavailable.</p>
+        ) : (
+          <div className={styles.servicesGrid}>
+            {services.map((service, index) => (
+              <div key={service.id ?? service.name ?? index} className={`card ${styles.serviceCard}`}>
+                <div className={styles.serviceTop}>
+                  <span className={styles.serviceKind}>{service.capability ?? "Evidence check"}</span>
+                  <span className={styles.servicePrice}>
+                    {typeof service.priceUsdc === "number"
+                      ? `$${service.priceUsdc.toFixed(2)} USDC`
+                      : typeof service.priceMicro === "number"
+                        ? `$${(service.priceMicro / 1_000_000).toFixed(2)} USDC`
+                        : service.paid === false ? "Included" : "Price at checkout"}
+                  </span>
+                </div>
+                <h3>{service.name ?? "Evidence service"}</h3>
+                <p>{service.description ?? "Evidence-backed analysis selected for your investigation."}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className={styles.recent}>
@@ -169,7 +219,7 @@ function StatsCard({
   return (
     <div className={`card ${styles.statsCard}`}>
       <div className={styles.statsHeader}>
-        <p className={styles.statsTitle}>Your investigations</p>
+        <p className={styles.statsTitle}>Your activity</p>
         {budget && (
           <span className={styles.budgetPill}>
             ${budget.remaining.toFixed(2)} remaining
