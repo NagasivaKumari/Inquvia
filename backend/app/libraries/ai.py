@@ -36,7 +36,7 @@ async def call_ai_with_parts(
             }
             async with httpx.AsyncClient(timeout=60.0) as client:
                 res = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={config.GEMINI_API_KEY}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={config.GEMINI_API_KEY}",
                     json=payload,
                 )
                 if res.status_code == 200:
@@ -64,7 +64,7 @@ async def call_text_provider_chain(system_prompt: str, text_context: str, temper
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.GROQ_API_KEY}"},
                     json={
-                        "model": "llama-3.3-70b-versatile",
+                        "model": "openai/gpt-oss-120b",
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": text_context},
@@ -93,7 +93,7 @@ async def call_text_provider_chain(system_prompt: str, text_context: str, temper
                         "X-Title": "Inquvia Forensics Engine",
                     },
                     json={
-                        "model": "google/gemini-2.0-flash-001",
+                        "model": "google/gemini-3.6-flash",
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": text_context},

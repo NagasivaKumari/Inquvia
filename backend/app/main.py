@@ -29,11 +29,11 @@ from .auth import (
     SESSION_DURATION_MS,
 )
 from .libraries import engine, capabilities, atomic_route
-from .libraries import discovery as discovery_lib
-from .libraries import evidence_client
+from .api import evidence as evidence_api
 from .x402.gate import build_x402_middleware, extract_settlement_tx_id_from_response_headers
 
 app = FastAPI(title="Inquvia Backend API")
+app.include_router(evidence_api.router)
 
 from fastapi.middleware.cors import CORSMiddleware
 _ALLOWED_ORIGINS = [
@@ -132,7 +132,16 @@ async def x402_middleware(request: Request, call_next):
     middleware = _X402_MIDDLEWARE
     origin = request.headers.get("origin")
     # Only apply x402 gating to paid capability endpoints
-    if middleware is not None and request.url.path.startswith("/api/x402/"):
+    if middleware is not None and (request.url.path.startswith("/api/x402/") or request.url.path.startswith("/api/evidence/")):
+        # DIAGNOSTIC: log any PAYMENT-SIGNATURE header (v2) or X-PAYMENT (v1) and whether it decodes.
+        _pay_sig = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        if _pay_sig:
+            try:
+                _pay_data = json.loads(base64.b64decode(_pay_sig).decode("utf-8"))
+                _accepted = _pay_data.get("accepted") or _pay_data.get("payload") or {}
+                print(f"x402 DIAG payment header on {request.method} {request.url.path}: version={_pay_data.get('x402Version')} accepted={_accepted}")
+            except Exception as e:
+                print(f"x402 DIAG payment header on {request.method} {request.url.path} UNDECODABLE: {type(e).__name__}: {e}")
         try:
             res = await middleware(request, call_next)
         except Exception as e:
@@ -142,6 +151,24 @@ async def x402_middleware(request: Request, call_next):
                 {"error": "Payment verification failed. No payment was accepted and the capability was not run."},
                 status_code=402,
             )
+        if res.status_code == 402:
+            try:
+                import json as _json
+                detail = _json.loads(res.body if isinstance(res.body, bytes) else b"")
+                # DIAGNOSTIC: the PAYMENT-REQUIRED header carries the actual rejection reason.
+                _req_hdr = (res.headers.get("payment-required")
+                            or res.headers.get("Payment-Required")
+                            or res.headers.get("PAYMENT-REQUIRED"))
+                _reason = ""
+                if _req_hdr:
+                    try:
+                        _req = _json.loads(base64.b64decode(_req_hdr).decode("utf-8"))
+                        _reason = _req.get("error") or ""
+                    except Exception:
+                        _reason = f"(undecodable PAYMENT-REQUIRED hdr {_req_hdr[:60]}...)"
+                print(f"x402 gate rejected {request.method} {request.url.path}: body={detail} reason={_reason!r}")
+            except Exception:
+                pass
         if res.status_code < 400 and getattr(request.state, "payment_requirements", None):
             from .x402.gate import _record_paid_request
             await _record_paid_request(request, res)
@@ -450,31 +477,26 @@ async def api_investigate_post():
     )
 
 
-# ── Providers / discovery ──
+# ── Inquvia capabilities ──
 @app.get("/api/providers")
 async def api_providers():
-    probe = [{"id": "probe", "type": "text", "capability": "source_verify", "reason": "Configured evidence service probe"}]
-    discovery_result = await discovery_lib.discover_services(probe)
-    primary_services = await evidence_client.discover_remote_services()
-    services = []
-    for service in primary_services:
-        normalized = dict(service)
-        normalized["capability"] = normalized.get("capability") or normalized.get("type")
-        services.append(normalized)
-    known = {(s.get("providerId"), s.get("type"), s.get("resourceUrl")) for s in services}
-    for service in discovery_result["services"]:
-        normalized = dict(service)
-        normalized["capability"] = normalized.get("capability") or (
-            (normalized.get("capabilities") or [None])[0]
-        )
-        key = (normalized.get("providerId"), normalized.get("type"), normalized.get("resourceUrl"))
-        if key not in known:
-            services.append(normalized)
-            known.add(key)
-    source = "primary+configured" if primary_services and discovery_result["services"] else (
-        "primary" if primary_services else discovery_result["source"]
-    )
-    return JSONResponse({"services": services, "source": source})
+    services = [
+        {
+            "id": capability["id"],
+            "name": capability["title"],
+            "capability": capability["id"],
+            "capabilities": capability.get("inputTypes") or [capability["id"].removeprefix("evidence-")],
+            "description": capability["description"],
+            "endpoint": capability["endpoint"],
+            "priceUsdc": capability.get("priceUsdc", config.INVESTIGATION_PRICE_USDC),
+            "priceMicro": round(capability.get("priceUsdc", config.INVESTIGATION_PRICE_USDC) * 1e6),
+            "providerId": "inquvia",
+            "providerName": "Inquvia",
+            "paid": True,
+        }
+        for capability in config.EVIDENCE_CAPABILITIES
+    ]
+    return JSONResponse({"services": services, "source": "inquvia"})
 
 
 @app.post("/api/providers/discover")
@@ -483,12 +505,22 @@ async def api_providers_discover(request: Request):
     capabilities = (body or {}).get("capabilities") or []
     if not capabilities:
         return JSONResponse({"requirements": [], "services": [], "source": "none"})
-    requirements = [
-        {"id": f"req_{i + 1}", "type": "text", "capability": cap, "reason": "Requested capability for discovery"}
-        for i, cap in enumerate(capabilities)
+    matches = [
+        capability for capability in config.PAID_CAPABILITIES
+        if capability["id"] in capabilities or any(
+            requested in capability["inputTypes"] for requested in capabilities
+        )
     ]
-    discovery_result = await discovery_lib.discover_services(requirements)
-    return JSONResponse(discovery_result)
+    return JSONResponse({
+        "requirements": capabilities,
+        "services": [
+            {"id": capability["id"], "name": capability["title"], "providerId": "inquvia",
+             "providerName": "Inquvia", "capabilities": capability["inputTypes"],
+             "description": capability["description"], "paid": True}
+            for capability in matches
+        ],
+        "source": "inquvia",
+    })
 
 
 # ── Wallet ──
@@ -630,6 +662,7 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
             "question": form.get("question"),
             "url": form.get("url"),
             "text": form.get("text"),
+            "serviceName": form.get("serviceName"),
         }
         for f in form.getlist("files"):
             data = await f.read()
@@ -687,6 +720,11 @@ async def source_investigation(request: Request):
 @app.post("/api/x402/data-investigation")
 async def data_investigation(request: Request):
     return await _handle_atomic_capability(request, "data-investigation")
+
+
+@app.post("/api/x402/audio-investigation")
+async def audio_investigation(request: Request):
+    return await _handle_atomic_capability(request, "audio-investigation")
 
 
 # ── Helpers ──

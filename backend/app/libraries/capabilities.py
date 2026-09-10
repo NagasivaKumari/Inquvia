@@ -42,7 +42,7 @@ async def run_capability(capability_id, args, requirements, title, before_discov
         before_discover(pending)
         db.save_investigation(pending)
 
-    return await engine.discover_and_acquire(inv["id"], args.get("userId") or "")
+    return await engine.analyze_investigation(inv["id"])
 
 
 async def run_claim_investigation(args):

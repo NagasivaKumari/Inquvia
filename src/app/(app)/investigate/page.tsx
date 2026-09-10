@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { API_BASE, EXAMPLE_PROMPTS, capabilityTitle } from "@/lib/config";
+import { API_BASE, capabilityTitle } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
 import { payForCapability, detectCapabilityEndpoint } from "@/lib/x402/client";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
@@ -19,6 +19,7 @@ function InvestigateForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialQuestion = searchParams.get("q") ?? "";
+  const selectedService = searchParams.get("service") ?? "";
   const rawCap = searchParams.get("cap") ?? "";
   // Normalize: accept either "source-investigation" or "/api/x402/source-investigation"
   const capabilityHint = rawCap
@@ -31,6 +32,7 @@ function InvestigateForm() {
   const [url, setUrl] = useState("");
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState("");
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
@@ -68,6 +70,14 @@ function InvestigateForm() {
     }
   }, [files, url, capabilityHint, capabilities]);
 
+  useEffect(() => {
+    const onWalletSigning = () => {
+      setPaymentStatus("Pera approval requested — approve the $0.50 USDC payment in the Pera window…");
+    };
+    window.addEventListener("inquvia:wallet-signing", onWalletSigning);
+    return () => window.removeEventListener("inquvia:wallet-signing", onWalletSigning);
+  }, []);
+
   const handleFiles = useCallback((fileList: FileList | null) => {
     if (!fileList) return;
     const newFiles: UploadedFile[] = [];
@@ -101,8 +111,22 @@ function InvestigateForm() {
       return;
     }
 
+    const requiredType = capabilityHint.match(/\/api\/x402\/(image|video|document|audio|data)-investigation$/)?.[1];
+    if (requiredType) {
+      const hasRequiredFile = files.some((file) => {
+        if (requiredType === "data") return file.type.includes("json") || file.type.includes("csv");
+        if (requiredType === "document") return file.type === "application/pdf" || file.type.startsWith("text/");
+        return file.type.startsWith(`${requiredType}/`);
+      });
+      if (!hasRequiredFile) {
+        setError(`Please upload a ${requiredType} file before starting this investigation.`);
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setError("");
+    setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");
 
     try {
       const fileObjects = files.map((f) => f.file);
@@ -110,23 +134,33 @@ function InvestigateForm() {
       const endpoint = capabilityHint || detectCapabilityEndpoint(fileObjects, url.trim());
       const idempotencyKey = crypto.randomUUID();
 
-      const paid = await payForCapability({
-        address: walletAddress,
-        endpoint,
-        question: question.trim(),
-        url: url.trim() || undefined,
-        files: fileObjects.length > 0 ? fileObjects : undefined,
-        idempotencyKey,
-      });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 90_000);
+      let paid;
+      try {
+        setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");
+        paid = await payForCapability({
+          address: walletAddress,
+          endpoint,
+          question: question.trim(),
+          serviceName: selectedService || undefined,
+          url: url.trim() || undefined,
+          files: fileObjects.length > 0 ? fileObjects : undefined,
+          idempotencyKey,
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
       router.push(`/investigation/${paid.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Payment failed");
+      const message = err instanceof DOMException && err.name === "AbortError"
+        ? "Payment timed out. Open Pera Wallet and approve the request, then try again."
+        : err instanceof Error ? err.message : "Payment failed";
+      setError(message);
+      setPaymentStatus("");
       setIsSubmitting(false);
     }
-  };
-
-  const fillExample = (prompt: string) => {
-    setQuestion(prompt);
   };
 
   return (
@@ -256,7 +290,7 @@ function InvestigateForm() {
         {detectedCap && price && (
           <div className={styles.priceDisplay}>
             <span className="text-sm text-muted">
-              {capabilityTitle(detectedCap)}
+              {selectedService || capabilityTitle(detectedCap)}
             </span>
             <span className={styles.priceValue}>{price}</span>
           </div>
@@ -271,25 +305,16 @@ function InvestigateForm() {
             ? "Paying & starting investigation…"
             : `Investigate via x402${price ? ` (${price})` : ""}`}
         </button>
+        {paymentStatus && !error && (
+          <div className={styles.paymentStatus} role="status">
+            <strong>Wallet approval required</strong>
+            <span>{paymentStatus}</span>
+            <span className={styles.paymentAmount}>{price ?? "$0.50 USDC"}</span>
+          </div>
+        )}
       </form>
 
-      <section className={styles.examples} aria-labelledby="prompt-examples">
-        <h2 id="prompt-examples" className="heading-sm text-muted">
-          Try an example
-        </h2>
-        <div className={styles.exampleChips}>
-          {EXAMPLE_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              className={styles.chip}
-              onClick={() => fillExample(prompt)}
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      </section>
+
     </div>
   );
 }

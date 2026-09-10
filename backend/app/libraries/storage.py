@@ -1,8 +1,8 @@
-"""File storage for investigation inputs (mirrors src/lib/storage)."""
+"""MongoDB-backed storage for investigation inputs."""
 import shutil
 from pathlib import Path
 
-from .. import config
+from .. import config, db
 
 
 class InputValidationError(Exception):
@@ -36,16 +36,14 @@ def validate_upload(mime: str, size: int) -> tuple[bool, str | None]:
 
 
 def store_file(data: bytes, filename: str, mime: str, case_id: str) -> dict:
-    case_dir = config.STORAGE_PATH / case_id
-    case_dir.mkdir(parents=True, exist_ok=True)
     safe_name = Path(filename).name or "upload.bin"
-    file_path = case_dir / safe_name
-    file_path.write_bytes(data)
-    rel = str(file_path.relative_to(config.STORAGE_PATH)).replace("\\", "/")
-    return {"fileName": safe_name, "mimeType": mime, "filePath": rel}
+    file_id = db.store_upload_file(data, safe_name, mime, case_id)
+    return {"fileName": safe_name, "mimeType": mime, "filePath": file_id, "size": len(data)}
 
 
 def resolve_stored_path(file_path: str) -> Path | None:
+    if file_path.startswith("gridfs:"):
+        return None
     p = (config.STORAGE_PATH / file_path).resolve()
     if not p.is_file():
         return None
@@ -53,11 +51,18 @@ def resolve_stored_path(file_path: str) -> Path | None:
 
 
 def read_stored_text(file_path: str, max_chars: int = 60000) -> str | None:
-    p = resolve_stored_path(file_path)
-    if not p:
+    stored = db.read_upload_file(file_path)
+    buf = stored[0] if stored else None
+    if buf is None:
+        p = resolve_stored_path(file_path)
+        if p:
+            try:
+                buf = p.read_bytes()
+            except OSError:
+                buf = None
+    if buf is None:
         return None
     try:
-        buf = p.read_bytes()
         if len(buf) > 2 * 1024 * 1024:
             return None
         import re
@@ -69,15 +74,23 @@ def read_stored_text(file_path: str, max_chars: int = 60000) -> str | None:
 
 
 def read_stored_file_base64(file_path: str) -> dict | None:
-    p = resolve_stored_path(file_path)
-    if not p:
+    stored = db.read_upload_file(file_path)
+    buf = stored[0] if stored else None
+    mime = stored[1] if stored else None
+    if buf is None:
+        p = resolve_stored_path(file_path)
+        if p:
+            try:
+                buf = p.read_bytes()
+            except OSError:
+                buf = None
+    if buf is None:
         return None
     try:
-        buf = p.read_bytes()
         if len(buf) == 0 or len(buf) > 8 * 1024 * 1024:
             return None
         import base64
-        return {"mimeType": _guess_mime(file_path), "base64": base64.b64encode(buf).decode("ascii")}
+        return {"mimeType": mime or _guess_mime(file_path), "base64": base64.b64encode(buf).decode("ascii")}
     except Exception:
         return None
 
@@ -104,4 +117,5 @@ def _guess_mime(file_path: str) -> str:
 
 
 def cleanup_case(case_id: str) -> None:
+    db.delete_uploads_for_case(case_id)
     shutil.rmtree(config.STORAGE_PATH / case_id, ignore_errors=True)

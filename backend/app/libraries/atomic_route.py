@@ -34,7 +34,8 @@ async def parse_body(body: dict | None, files: list) -> dict:
     question = storage.sanitize_text((body or {}).get("question") or "")
     url = (body or {}).get("url") or ""
     text = storage.sanitize_text((body or {}).get("text") or "")
-    return {"question": question, "url": url, "text": text, "files": files}
+    service_name = storage.sanitize_text((body or {}).get("serviceName") or "")
+    return {"question": question, "url": url, "text": text, "serviceName": service_name, "files": files}
 
 
 def mime_to_base64(mime: str, data: bytes) -> str:
@@ -121,6 +122,10 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
         inv["capabilityPriceUsdc"] = capability.get("priceUsdc")
         if idempotency_key:
             inv["idempotencyKey"] = idempotency_key
+        db.save_investigation(inv)
+    if inv and parsed.get("serviceName"):
+        inv["requestedService"] = parsed["serviceName"]
+        inv["title"] = parsed["serviceName"]
         db.save_investigation(inv)
 
     return {"status": 200, "content": inv or result}

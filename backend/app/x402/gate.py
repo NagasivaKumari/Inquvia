@@ -118,8 +118,8 @@ def build_x402_middleware():
         return f"${price_usdc:.6f}".rstrip("0").rstrip(".")
 
     routes: dict[str, RouteConfig] = {}
-    for cap in config.PAID_CAPABILITIES:
-        amount_micro = round(cap["priceUsdc"] * 1_000_000)
+    for cap in [*config.PAID_CAPABILITIES, *config.EVIDENCE_CAPABILITIES]:
+        amount_micro = round(cap.get("priceUsdc", config.INVESTIGATION_PRICE_USDC) * 1_000_000)
         routes[f"POST {cap['endpoint']}"] = RouteConfig(
             accepts=PaymentOption(
                 scheme="exact",

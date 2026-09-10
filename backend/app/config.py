@@ -35,14 +35,6 @@ X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.go
 X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "x402-global-challenge")
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
 
-# Downstream payer (Tx #2) is an EXTERNAL signer; Core never holds the key.
-# SIGNER_URL points at a wallet/signer integration exposing GET /address and
-# POST /sign (see libraries/wallet_signer.py + tools/signer_service.py). The
-# private key lives in that signer process/device (KMS, vault, hosted signer),
-# never in Core's .env. When unset the downstream evidence path is unavailable.
-SIGNER_URL = os.getenv("SIGNER_URL", "").strip().rstrip("/")
-SIGNER_TOKEN = os.getenv("SIGNER_TOKEN", "")
-
 # x402 payment gating is FAIL-CLOSED: when the middleware is unavailable the
 # atomic endpoints return 402, never run free. The only exception is an
 # explicit INQUVIA_X402_OFFLINE=1 (local dev) flag; even then no payment is
@@ -64,11 +56,6 @@ ALGORAND_NETWORK_CAIP2 = (
     if ALGORAND_NETWORK == "testnet"
     else "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
 )
-
-# Evidence discovery configuration (never fabricates providers).
-EXTERNAL_EVIDENCE_SERVICES_URL = os.getenv("EXTERNAL_EVIDENCE_SERVICES_URL", "")
-EXTERNAL_EVIDENCE_SERVICES_JSON = os.getenv("EXTERNAL_EVIDENCE_SERVICES_JSON", "")
-EVIDENCE_SERVICE_URL = (os.getenv("EVIDENCE_SERVICE_URL") or "").rstrip("/")
 
 STORAGE_PATH = Path(os.getenv("STORAGE_PATH", str(ROOT / "backend" / "data" / "uploads")))
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
@@ -136,6 +123,21 @@ PAID_CAPABILITIES = [
         "endpoint": "/api/x402/audio-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate an audio recording for transcript, context, and evidence.",
      "inputTypes": ["audio"]},
+]
+
+EVIDENCE_CAPABILITIES = [
+    {"id": "evidence-image", "title": "Image Evidence", "endpoint": "/api/evidence/image", "description": "Extract and analyze evidence from an image."},
+    {"id": "evidence-video", "title": "Video Evidence", "endpoint": "/api/evidence/video", "description": "Extract and analyze evidence from a video."},
+    {"id": "evidence-url", "title": "URL Evidence", "endpoint": "/api/evidence/url", "description": "Inspect and analyze a public source URL."},
+    {"id": "evidence-document", "title": "Document Evidence", "endpoint": "/api/evidence/document", "description": "Extract and analyze evidence from a document."},
+    {"id": "evidence-structured", "title": "Structured Evidence", "endpoint": "/api/evidence/structured", "description": "Analyze a JSON or CSV data source."},
+    {"id": "evidence-audio", "title": "Audio Evidence", "endpoint": "/api/evidence/audio", "description": "Extract and analyze evidence from audio."},
+    {"id": "evidence-assess", "title": "Evidence Assessment", "endpoint": "/api/evidence/assess", "description": "Assess a claim against supplied evidence."},
+    {"id": "evidence-contradictions", "title": "Contradictions", "endpoint": "/api/evidence/contradictions", "description": "Find contradictions in supplied evidence."},
+    {"id": "evidence-duplicates", "title": "Duplicate Analysis", "endpoint": "/api/evidence/duplicates", "description": "Find duplicate and dependent evidence."},
+    {"id": "evidence-timeline", "title": "Timeline", "endpoint": "/api/evidence/timeline", "description": "Reconstruct a timeline from supplied evidence."},
+    {"id": "evidence-authenticity", "title": "Authenticity", "endpoint": "/api/evidence/authenticity", "description": "Report forensic consistency signals for media."},
+    {"id": "evidence-gaps", "title": "Evidence Gaps", "endpoint": "/api/evidence/gaps", "description": "Identify missing evidence and unresolved questions."},
 ]
 
 DEFAULT_PAYMENT_PREFS = {

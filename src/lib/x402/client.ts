@@ -1,12 +1,117 @@
 import { x402Client, wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
-import { API_BASE, ALGORAND_NETWORK_CAIP2 } from "../config";
+import type { PaymentRequirements, PaymentPayloadResult } from "@x402/core/types";
+import algosdk from "algosdk";
+import { API_BASE, ALGORAND_NETWORK_CAIP2, ALGORAND_CONFIG } from "../config";
 import { createX402Signer } from "../wallet/x402Signer";
 import { apiFetch } from "../api";
 
+type X402Signer = ConstructorParameters<typeof ExactAvmScheme>[0];
+
+/**
+ * The published ExactAvmScheme.createPaymentPayload rebuilds each txn through
+ * @algorandfoundation/algokit-utils (bundled alpha), whose msgpack codec drops
+ * sender/amount and the signature during encode → the facilitator rejects the
+ * group ("Unsigned transaction from non-facilitator address"). This subclass
+ * rebuilds the identical group with plain algosdk (canonical wire format);
+ * verified against the live facilitator (now only fails on funding/opt-in).
+ */
+class AlgodExactAvmScheme extends ExactAvmScheme {
+  private readonly userSigner: X402Signer;
+
+  constructor(signer: X402Signer) {
+    super(signer);
+    this.userSigner = signer;
+  }
+
+  override async createPaymentPayload(
+    x402Version: number,
+    requirements: PaymentRequirements
+  ): Promise<PaymentPayloadResult> {
+    const { amount, asset, payTo, extra } = requirements;
+    const feePayer = (extra?.feePayer ?? undefined) as string | undefined;
+    const algod = new algosdk.Algodv2(
+      ALGORAND_CONFIG.algodToken,
+      ALGORAND_CONFIG.algodServer,
+      ALGORAND_CONFIG.algodPort
+    );
+    const sp = await algod.getTransactionParams().do();
+    const feePerByte = Number(sp.fee);
+    const minFee = Number(sp.minFee);
+    const encodeNote = (s: string) => new TextEncoder().encode(s);
+    const assetId = BigInt(
+      /^\d+$/.test(asset) ? asset : ALGORAND_CONFIG.usdcAsa
+    );
+    const now = Date.now();
+    const notePay = encodeNote(`x402-payment-v${x402Version}-${now}`);
+
+    const makeTransfer = (fee: bigint, flat: boolean) =>
+      algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+        sender: this.userSigner.address,
+        receiver: payTo,
+        amount: BigInt(amount),
+        assetIndex: assetId,
+        note: notePay,
+        suggestedParams: { ...sp, fee: Number(fee), flatFee: flat },
+      });
+
+    let transactions: algosdk.Transaction[];
+    let paymentIndex = 0;
+    if (feePayer) {
+      const makePayer = (fee: bigint) =>
+        algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+          sender: feePayer,
+          receiver: feePayer,
+          amount: BigInt(0),
+          note: encodeNote(`x402-fee-payer-${now}`),
+          suggestedParams: { ...sp, fee: Number(fee), flatFee: true },
+        });
+      const preliminary = [
+        makePayer(BigInt(minFee)),
+        makeTransfer(BigInt(0), true),
+      ];
+      const total = preliminary.reduce(
+        (sum, tx) =>
+          sum +
+          BigInt(
+            feePerByte > 0
+              ? Math.max(
+                  feePerByte * algosdk.encodeUnsignedTransaction(tx).length,
+                  minFee
+                )
+              : minFee
+          ),
+        BigInt(0)
+      );
+      transactions = [makePayer(total), makeTransfer(BigInt(0), true)];
+      paymentIndex = 1;
+    } else {
+      transactions = [makeTransfer(BigInt(feePerByte), false)];
+    }
+
+    const gid = algosdk.computeGroupID(transactions);
+    transactions.forEach((tx) => {
+      tx.group = gid;
+    });
+
+    const encoded = transactions.map((tx) => algosdk.encodeUnsignedTransaction(tx));
+    const clientIndexes = transactions
+      .map((tx, i) => (tx.sender.toString() === this.userSigner.address ? i : -1))
+      .filter((i) => i !== -1);
+    const signed = await this.userSigner.signTransactions(encoded, clientIndexes);
+
+    const paymentGroup = encoded.map((bytes, i) => {
+      const s = signed[i];
+      return Buffer.from(s ?? bytes).toString("base64");
+    });
+
+    return { x402Version, payload: { paymentGroup, paymentIndex } };
+  }
+}
+
 function buildPaidFetch(address: string) {
   const signer = createX402Signer(address);
-  const scheme = new ExactAvmScheme(signer);
+  const scheme = new AlgodExactAvmScheme(signer);
   const client = new x402Client()
     .register("algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=", scheme)
     .register("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", scheme);
@@ -57,10 +162,12 @@ export async function payForCapability(input: {
   address: string;
   endpoint: string;
   question: string;
+  serviceName?: string;
   text?: string;
   url?: string;
   files?: File[];
   idempotencyKey?: string;
+  signal?: AbortSignal;
 }): Promise<PaidInvestigationResult> {
   const fetchWithPay = buildPaidFetch(input.address);
 
@@ -72,6 +179,7 @@ export async function payForCapability(input: {
     fd.append("question", input.question);
     if (input.text) fd.append("text", input.text);
     if (input.url) fd.append("url", input.url);
+    if (input.serviceName) fd.append("serviceName", input.serviceName);
     for (const file of input.files) {
       fd.append("files", file);
     }
@@ -80,6 +188,7 @@ export async function payForCapability(input: {
     headers = { "Content-Type": "application/json" };
     body = JSON.stringify({
       question: input.question,
+      serviceName: input.serviceName,
       text: input.text,
       url: input.url,
     });
@@ -98,6 +207,7 @@ export async function payForCapability(input: {
     method: "POST",
     headers: requestHeaders,
     body,
+    signal: input.signal,
   });
 
   if (!res.ok) {

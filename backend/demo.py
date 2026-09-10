@@ -1,5 +1,5 @@
-"""Self-check for the pure-logic units (planner, heuristic analysis, budget,
-budget block reasons, hash/verify). No DB or network needed."""
+"""Self-check for the pure-logic units (planner, heuristic analysis, auth,
+hash/verify). No DB or network needed."""
 import asyncio
 import sys
 from pathlib import Path
@@ -12,7 +12,6 @@ from app.libraries.planner import (
     plan_evidence_requirements,
 )
 from app.libraries.analyze import heuristic_analysis, normalize_conclusion, clamp_confidence
-from app.libraries.budget import enforce_budget, budget_block_reason
 from app import auth
 
 
@@ -29,9 +28,9 @@ def test_planner():
 
 def test_heuristic():
     ev = [
-        {"signal": "supporting", "source": "A", "finding": "ok", "status": "collected"},
-        {"signal": "supporting", "source": "B", "finding": "ok", "status": "collected"},
-        {"signal": "contradictory", "source": "C", "finding": "no", "status": "collected"},
+        {"id": "ev1", "signal": "supporting", "source": "A", "finding": "ok", "status": "collected"},
+        {"id": "ev2", "signal": "supporting", "source": "B", "finding": "ok", "status": "collected"},
+        {"id": "ev3", "signal": "contradictory", "source": "C", "finding": "no", "status": "collected"},
     ]
     inv = {"question": "q", "acquisitions": [{}] * 3}
     r = heuristic_analysis(inv, ev)
@@ -43,16 +42,6 @@ def test_heuristic():
     assert normalize_conclusion("likely genuine") == "likely_genuine"
     assert normalize_conclusion("bogus") is None
     assert clamp_confidence(150) == 100 and clamp_confidence(-4) == 0
-
-
-def test_budget():
-    ctx = {"maxPerEvidenceCheck": 0.01, "maxPerInvestigation": 0.5,
-           "sessionBudget": 5, "totalBudget": 50,
-           "investigationSpent": 0, "sessionSpent": 0, "totalSpent": 0}
-    assert enforce_budget(0.005 * 1e6, ctx)["allowed"] is True
-    blocked = enforce_budget(2 * 1e6, ctx)
-    assert blocked["allowed"] is False and blocked["reason"] == "per_evidence"
-    assert budget_block_reason("total_budget") == "Exceeds total budget"
 
 
 def test_auth():
@@ -116,7 +105,6 @@ def test_x402_settlement_header():
 async def main():
     test_planner()
     test_heuristic()
-    test_budget()
     test_auth()
     test_wallet_decode()
     await test_arc60_signature_verify()

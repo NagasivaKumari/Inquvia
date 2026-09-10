@@ -49,7 +49,13 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
     sources_used = _to_str_array(raw.get("sourcesUsed"))
     uncertainty = raw.get("uncertainty") if isinstance(raw.get("uncertainty"), str) else None
     conclusion_text_raw = raw.get("conclusionText")
-    conclusion_text = conclusion_text_raw if isinstance(conclusion_text_raw, str) and conclusion_text_raw else base["conclusionText"]
+    if isinstance(conclusion_text_raw, str) and conclusion_text_raw and conclusion_text_raw != base["conclusionText"]:
+        conclusion_text = conclusion_text_raw
+    elif findings or conclusion != base["conclusion"]:
+        summary = " ".join(findings[:1]) or conclusion.replace("_", " ").upper()
+        conclusion_text = f"Assessment: {conclusion.replace('_', ' ').upper()}. {summary}".strip()
+    else:
+        conclusion_text = base["conclusionText"]
     if not conclusion_text:
         conclusion_text = (
             f"Assessment: {conclusion.replace('_', ' ').upper()}. "
@@ -73,17 +79,19 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
     # (provider-flagged) stay in the trail but must not be fed as if they were
     # extra independent confirmations.
     effective = [e for e in evidence if e["id"] not in redundant_evidence_ids(inv, evidence)]
-    if not effective:
-        # Do not let a model manufacture a conclusion from copied or dependent
-        # evidence. Keep the acquired items in the trail and report insufficiency.
-        return heuristic_analysis(inv, evidence)
     if effective:
         evidence_text = "\n".join(
             f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
             for i, e in enumerate(effective)
         )
+    elif evidence:
+        # Do not let a model manufacture a conclusion from copied or dependent
+        # evidence. Keep the acquired items in the trail and report insufficiency.
+        return heuristic_analysis(inv, evidence)
     else:
-        evidence_text = "No independent evidence was acquired (acquired items were duplicates/dependent)."
+        # Internal capability analysis is allowed to reason over the user's
+        # submitted input without buying evidence from another service.
+        evidence_text = "No external evidence was acquired. Analyze only the submitted input and state limitations clearly."
     context_parts.append({"text": f"QUESTION: {inv.get('question')}\n\nACQUIRED EVIDENCE:\n{evidence_text}"})
     raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
     raw = ai_lib.parse_ai_json(raw_text)
@@ -92,8 +100,13 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
 
 def _first_text_input(inv):
     for i in inv.get("inputs") or []:
-        if i.get("type") in ("text", "url"):
+        t = i.get("type")
+        if t in ("text", "url"):
             return i.get("content")
+        if t in ("document", "data"):
+            text = read_stored_text(i["filePath"]) if i.get("filePath") else None
+            if text:
+                return text
     return None
 
 
@@ -107,11 +120,24 @@ def _find_input(inv, input_type):
 async def _claim_analyzer(inv, evidence):
     system_prompt = (
         "You are Inquvia's claim verification analyst. Assess whether the submitted claim is supported, contradicted, or unresolved, "
-        "using only the acquired evidence. Do not use internal knowledge to fill evidence gaps. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
+        "using the submitted input and any acquired evidence. Do not use internal knowledge to fill evidence gaps. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
     )
     claim = _first_text_input(inv) or inv.get("question")
-    return await _run_analysis(inv, evidence, system_prompt, [{"text": f"CLAIM: {claim}"}])
+    parts = [{"text": f"CLAIM: {claim}"}]
+    # Read content from any submitted file inputs (document, data, audio, etc.)
+    # so the AI can reason over the actual submitted content, not just the question.
+    for inp in inv.get("inputs") or []:
+        if inp.get("filePath"):
+            extracted = read_stored_text(inp["filePath"])
+            if extracted:
+                label = inp.get("content") or inp.get("fileName") or "file"
+                parts.append({"text": f"SUBMITTED_DOCUMENT ({label}):\n{extracted}"})
+            else:
+                f = read_stored_file_base64(inp["filePath"])
+                if f:
+                    parts.append({"file": f})
+    return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
 async def _image_analyzer(inv, evidence):
@@ -199,6 +225,24 @@ async def _data_analyzer(inv, evidence):
     return await _run_analysis(inv, evidence, system_prompt, [{"text": f"DATA_CONTEXT:\n{data_context}"}])
 
 
+async def _audio_analyzer(inv, evidence):
+    system_prompt = (
+        "You are Inquvia's audio forensics analyst. Assess the submitted audio for authenticity, "
+        "manipulation, or context issues using the audio content (when provided) and the acquired evidence. "
+        "Express confidence honestly; explicit uncertainty is expected. "
+        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+    )
+    input_ = _find_input(inv, "audio")
+    parts = []
+    if input_ and input_.get("filePath"):
+        f = read_stored_file_base64(input_["filePath"])
+        if f:
+            parts.append({"file": f})
+    context_text = (input_.get("content") if input_ else None) or _first_text_input(inv) or ""
+    parts.append({"text": f"AUDIO_CONTEXT: {context_text}"})
+    return await _run_analysis(inv, evidence, system_prompt, parts)
+
+
 def json_dumps(obj):
     import json
     try:
@@ -213,3 +257,4 @@ register_analyzer("video-investigation", _video_analyzer)
 register_analyzer("document-investigation", _document_analyzer)
 register_analyzer("source-investigation", _source_analyzer)
 register_analyzer("data-investigation", _data_analyzer)
+register_analyzer("audio-investigation", _audio_analyzer)

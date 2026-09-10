@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Investigation } from "@/lib/types";
-import { API_BASE, APP_NAME, EXAMPLE_PROMPTS } from "@/lib/config";
+import { API_BASE, APP_NAME } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
 import styles from "./page.module.css";
 
@@ -26,6 +26,7 @@ interface EvidenceService {
   priceMicro?: number;
   priceUsdc?: number;
   paid?: boolean;
+  endpoint?: string;
 }
 
 export default function DashboardPage() {
@@ -100,14 +101,7 @@ export default function DashboardPage() {
           )}
         </form>
 
-        <div className={styles.examples}>
-          <span className={styles.examplesLabel}>Try:</span>
-          {EXAMPLE_PROMPTS.slice(0, 3).map((p) => (
-            <button key={p} className={styles.exampleChip} onClick={() => setQuestion(p)}>
-              {p}
-            </button>
-          ))}
-        </div>
+
       </section>
 
       <section className={styles.statsRow}>
@@ -132,7 +126,11 @@ export default function DashboardPage() {
         ) : (
           <div className={styles.servicesGrid}>
             {services.map((service, index) => (
-              <div key={service.id ?? service.name ?? index} className={`card ${styles.serviceCard}`}>
+              <Link
+                key={service.id ?? service.name ?? index}
+                href={`/investigate?cap=${encodeURIComponent(capabilityForService(service))}&service=${encodeURIComponent(service.name ?? "Evidence check")}&q=${encodeURIComponent(`Use the ${service.name ?? "evidence"} check for my investigation`)}`}
+                className={`card card-hover ${styles.serviceCard}`}
+              >
                 <div className={styles.serviceTop}>
                   <span className={styles.serviceKind}>{service.capability ?? "Evidence check"}</span>
                   <span className={styles.servicePrice}>
@@ -145,7 +143,7 @@ export default function DashboardPage() {
                 </div>
                 <h3>{service.name ?? "Evidence service"}</h3>
                 <p>{service.description ?? "Evidence-backed analysis selected for your investigation."}</p>
-              </div>
+              </Link>
             ))}
           </div>
         )}
@@ -201,6 +199,17 @@ function AddButton({ label, cap }: { label: string; cap: string }) {
       {label}
     </button>
   );
+}
+
+function capabilityForService(service: EvidenceService): string {
+  const type = (service.capability ?? service.id ?? "").replace(/^evidence-/, "");
+  if (type === "authenticity") return "image-investigation";
+  if (type === "structured") return "data-investigation";
+  if (type === "url") return "source-investigation";
+  if (["image", "video", "document", "audio", "data"].includes(type)) {
+    return `${type}-investigation`;
+  }
+  return "claim-investigation";
 }
 
 function StatsCard({

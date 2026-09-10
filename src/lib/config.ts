@@ -48,33 +48,12 @@ export const ALGORAND_NETWORK_CAIP2 =
     : "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=";
 
 /**
- * Evidence Acquisition Gateway configuration.
- *
- * Real external evidence services are discovered in one of two ways:
- *  1. EXTERNAL_EVIDENCE_SERVICES_URL — a facilitator/Bazaar discovery catalog
- *     JSON endpoint that returns x402-protected evidence services with the
- *     configured challenge tag. When set, discovery queries it live.
- *  2. EXTERNAL_EVIDENCE_SERVICES_JSON — a comma/newline-separated inline catalog
- *     of one or more evidence services (name|url|capabilities|price_usdc).
- *
- * If neither is configured, discovery returns NO services and new
- * investigations requiring external evidence enter the `evidence_unavailable`
- * state. No fake providers are ever invented.
- */
-export const EVIDENCE_GATEWAY_CONFIG = {
-  discoveryUrl: process.env.EXTERNAL_EVIDENCE_SERVICES_URL ?? "",
-  inlineCatalog: process.env.EXTERNAL_EVIDENCE_SERVICES_JSON ?? "",
-  discoveryTag: process.env.X402_CHALLENGE_TAG ?? "x402-global-challenge",
-} as const;
-
-/**
  * Inquvia merchant-side config.
  *
  * Inquvia exposes multiple genuinely independent atomic x402-paid
  * investigation capabilities (see PAID_CAPABILITIES below). All of them
  * share ONE payTo address and settle through the same GoPlausible
- * facilitator on Algorand. Inquvia's backend may additionally pay downstream
- * evidence services from its own wallet.
+ * facilitator on Algorand.
  */
 export const ORCHESTRATOR_CONFIG = {
   /** Inquvia's single USDC receiving address for ALL paid capabilities. */
@@ -82,8 +61,6 @@ export const ORCHESTRATOR_CONFIG = {
     process.env.NEXT_PUBLIC_INQUVIA_PAYTO_ADDRESS ??
     process.env.INQUVIA_PAYTO_ADDRESS ??
     "",
-  /** Optional server wallet mnemonic used to pay downstream evidence services. */
-  serverSignerUrl: process.env.SIGNER_URL ?? "",
 } as const;
 
 export interface PaidCapability {
@@ -190,16 +167,6 @@ export const ALLOWED_MIME_TYPES = [
   "text/plain",
   "text/csv",
   "application/json",
-] as const;
-
-export const EXAMPLE_PROMPTS = [
-  "Is this seller legitimate?",
-  "Is this job offer genuine?",
-  "Is this image authentic?",
-  "Can I trust this website?",
-  "Is this video being taken out of context?",
-  "Does this document look suspicious?",
-  "Does this claim have reliable evidence?",
 ] as const;
 
 export const INVESTIGATION_STAGES = [
@@ -373,27 +340,19 @@ export const PIPELINE_STEPS = [
   },
   {
     title: "Investigation planner",
-    detail: "The agent determines what verifiable evidence is required for this claim.",
+    detail: "The engine determines what checks are required for the submitted question and input.",
   },
   {
-    title: "Service discovery",
-    detail: "External evidence services are discovered from the configured x402 catalog.",
+    title: "In-house evidence analysis",
+    detail: `Inquvia analyzes the submitted input with its AI model providers — no third-party evidence service fees.`,
   },
   {
-    title: "Select evidence services",
-    detail: "Paid evidence endpoints are chosen within the enforced budget.",
-  },
-  {
-    title: "Downstream x402 payments",
-    detail: `${APP_NAME} pays each evidence service from its own wallet when a real service is available.`,
-  },
-  {
-    title: "Evidence returned",
-    detail: "Each paid service returns evidence settled on-chain. Nothing is fabricated.",
+    title: "Evidence assessment",
+    detail: "Findings are weighed, contradictions surfaced, and confidence scored.",
   },
   {
     title: "Cross-check and reasoning",
-    detail: "Independent sources are compared for contradiction and consensus.",
+    detail: "Independent signals are compared for contradiction and consensus.",
   },
   {
     title: "Evidence-backed result",

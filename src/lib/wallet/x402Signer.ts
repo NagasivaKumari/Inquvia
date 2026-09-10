@@ -30,6 +30,9 @@ export function createX402Signer(address: string): ClientAvmSigner {
         signers: toSign.includes(i) ? [address] : [],
       }));
 
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("inquvia:wallet-signing"));
+      }
       const signed = await pera.signTransaction([signerTxns]);
 
       // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.

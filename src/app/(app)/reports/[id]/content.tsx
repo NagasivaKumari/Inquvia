@@ -13,11 +13,19 @@ export default function ReportDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const [investigation, setInvestigation] = useState<Investigation | null>(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     apiFetch(`${API_BASE}/api/investigations/${id}`)
-      .then((r) => r.json())
-      .then(setInvestigation);
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data?.id) {
+          setError(data?.error || "Report could not be loaded.");
+          return;
+        }
+        setInvestigation(data as Investigation);
+      })
+      .catch(() => setError("Report could not be loaded."));
   }, [id]);
 
   const handleExport = () => {
@@ -47,6 +55,15 @@ export default function ReportDetailPage() {
   };
 
   if (!investigation) {
+    if (error) {
+      return (
+        <div className="empty-state">
+          <h1 className="heading-md">Report unavailable</h1>
+          <p className="text-muted">{error}</p>
+          <Link href="/history" className="btn btn-primary">Back to history</Link>
+        </div>
+      );
+    }
     return <p className="text-muted animate-pulse">Loading report…</p>;
   }
 
@@ -74,7 +91,7 @@ export default function ReportDetailPage() {
 
       <ReportSection title="Inputs">
         <ul>
-          {investigation.inputs.map((input, i) => (
+          {(investigation.inputs ?? []).map((input, i) => (
             <li key={i}>
               <strong>{input.type}:</strong> {input.content}
               {input.fileName && ` (${input.fileName})`}
@@ -85,7 +102,7 @@ export default function ReportDetailPage() {
 
       <ReportSection title="Investigation plan">
         <ul>
-          {investigation.investigationPlan.map((p) => (
+          {(investigation.investigationPlan ?? []).map((p) => (
             <li key={p.id}>
               <strong>{p.capability}</strong> — {p.reason} (${p.estimatedCost.toFixed(3)})
             </li>
@@ -94,7 +111,7 @@ export default function ReportDetailPage() {
       </ReportSection>
 
       <ReportSection title="Evidence">
-        {investigation.evidence.map((e) => (
+        {(investigation.evidence ?? []).map((e) => (
           <div key={e.id} className={styles.evidenceItem}>
             <p><strong>{e.type}</strong> — {SIGNAL_LABELS[e.signal]}</p>
             <p className="text-sm text-muted">Source: {e.source}</p>
@@ -106,10 +123,10 @@ export default function ReportDetailPage() {
         ))}
       </ReportSection>
 
-      {investigation.contradictions.length > 0 && (
+      {(investigation.contradictions ?? []).length > 0 && (
         <ReportSection title="Contradictions">
           <ul>
-            {investigation.contradictions.map((c, i) => (
+            {(investigation.contradictions ?? []).map((c, i) => (
               <li key={i}>{c}</li>
             ))}
           </ul>
@@ -186,10 +203,10 @@ function generateReportText(inv: Investigation): string {
     `Risk: ${RISK_LABELS[inv.risk]}`,
     "",
     "FINDINGS",
-    ...inv.findings.map((f) => `- ${f}`),
+    ...(inv.findings ?? []).map((f) => `- ${f}`),
     "",
     "LIMITATIONS",
-    ...inv.limitations.map((l) => `- ${l}`),
+    ...(inv.limitations ?? []).map((l) => `- ${l}`),
     "",
     "ECONOMIC TRAIL",
     `Total spend: $${eco.spend.toFixed(4)} USDC`,

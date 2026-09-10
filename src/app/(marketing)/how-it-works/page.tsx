@@ -11,8 +11,8 @@ export default function HowItWorksPage() {
           <h1 className={styles.title}>{`How ${APP_NAME} works`}</h1>
           <p className={styles.lede}>
             One paid, evidence-backed investigation across real x402 endpoints.
-            You pay {APP_NAME}; it pays evidence services when they exist; you
-            receive a verified result.
+            You pay {APP_NAME}; it analyzes your submission and returns a
+            verified result.
           </p>
         </div>
       </header>
@@ -23,8 +23,8 @@ export default function HowItWorksPage() {
         </figure>
 
         <p className={styles.hint}>
-          Every payment in this pipeline is intended to settle on-chain. If a
-          downstream service is not discovered, the case reports that gap.
+          Every payment in this pipeline is intended to settle on-chain.
+          Analysis of your submission uses Inquvia&apos;s in-house AI providers.
         </p>
 
         <ol className={styles.flow}>

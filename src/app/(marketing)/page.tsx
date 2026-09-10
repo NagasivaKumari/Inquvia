@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import {
   APP_NAME,
   SUBHEADLINE,
-  EXAMPLE_PROMPTS,
   PAID_CAPABILITIES,
   API_BASE,
   PROCESS_STEPS,
@@ -90,19 +89,7 @@ function HomePageContent() {
               </button>
             </form>
 
-            <div className={styles.promptTags}>
-              <span className={styles.promptTagLabel}>Examples</span>
-              {EXAMPLE_PROMPTS.slice(0, 5).map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => run(prompt)}
-                  className={styles.promptTag}
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
+
           </div>
 
           <figure className={styles.heroVisual}>

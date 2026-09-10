@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
+from gridfs import GridFS
 from pymongo import MongoClient
 
 from . import config
@@ -128,6 +129,70 @@ def save_investigation(inv: dict) -> None:
     doc = dict(inv)
     doc["_id"] = doc["id"]
     col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+
+
+def save_evidence_request(record: dict) -> None:
+    """Persist a direct evidence request and its result in MongoDB."""
+    doc = dict(record)
+    request_id = doc.get("requestId") or doc.get("id")
+    if not request_id:
+        raise ValueError("Evidence request requires a requestId")
+    doc["_id"] = request_id
+    get_collection("evidence_requests").replace_one({"_id": request_id}, doc, upsert=True)
+
+
+def store_upload_file(data: bytes, filename: str, mime: str, case_id: str) -> str:
+    """Store an upload in MongoDB GridFS and return a stable file reference."""
+    database = get_db()
+    try:
+        file_id = GridFS(database).put(
+            data,
+            filename=filename,
+            contentType=mime,
+            metadata={"caseId": case_id, "size": len(data)},
+        )
+        return f"gridfs:{file_id}"
+    except TypeError:
+        # mongomock does not satisfy GridFS's strict Database type check.
+        # Keep tests and lightweight local environments MongoDB-only by using
+        # a binary document with the same stable reference behavior.
+        file_id = ObjectId()
+        database["uploads"].insert_one({
+            "_id": file_id, "filename": filename, "contentType": mime,
+            "caseId": case_id, "size": len(data), "data": data,
+        })
+        return f"mongo:{file_id}"
+
+
+def read_upload_file(file_id: str) -> tuple[bytes, str] | None:
+    """Read a GridFS upload by its stable ``gridfs:<id>`` reference."""
+    database = get_db()
+    try:
+        if file_id.startswith("gridfs:"):
+            grid_file = GridFS(database).get(ObjectId(file_id.removeprefix("gridfs:")))
+            return grid_file.read(), str(grid_file.content_type or "application/octet-stream")
+        if file_id.startswith("mongo:"):
+            doc = database["uploads"].find_one({"_id": ObjectId(file_id.removeprefix("mongo:"))})
+            return (bytes(doc["data"]), str(doc.get("contentType") or "application/octet-stream")) if doc else None
+        return None
+    except Exception:
+        return None
+
+
+def delete_uploads_for_case(case_id: str) -> None:
+    """Delete GridFS uploads belonging to a case."""
+    database = get_db()
+    files = database["fs.files"].find({"metadata.caseId": case_id}, {"_id": 1})
+    try:
+        gridfs = GridFS(database)
+        for file_doc in files:
+            try:
+                gridfs.delete(file_doc["_id"])
+            except Exception:
+                pass
+    except TypeError:
+        pass
+    database["uploads"].delete_many({"caseId": case_id})
 
 
 def get_investigation(inv_id: str) -> dict | None:
