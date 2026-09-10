@@ -190,7 +190,13 @@ async def x402_middleware(request: Request, call_next):
 @app.get("/")
 async def api_root(request: Request):
     accepts = request.headers.get("accept", "").lower()
-    if "text/html" in accepts and "application/json" not in accepts:
+    ua = (request.headers.get("user-agent") or "").lower()
+    crawler = any(t in ua for t in (
+        "bot/", "spider", "crawler", "googlebot", "facebookexternalhit",
+        "twitterbot", "linkedinbot", "slackbot", "discordbot", "whatsapp",
+        "telegrambot", "bingbot", "duckduckgo",
+    ))
+    if crawler or "application/json" not in accepts:
         public_url = config.PUBLIC_APP_URL or str(request.base_url).rstrip("/")
         title = escape(config.APP_NAME)
         description = escape("Evidence-backed investigations paid per request with x402 on Algorand.")
