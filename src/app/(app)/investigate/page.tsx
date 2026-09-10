@@ -46,7 +46,11 @@ function InvestigateForm() {
   useEffect(() => {
     apiFetch(`${API_BASE}/api/auth/me`)
       .then((r) => r.json())
-      .then((d) => setWalletAddress(d.user?.walletAddress ?? ""))
+      .then((d) => {
+        if (d.user?.walletAddress) {
+          setWalletAddress(d.user.walletAddress);
+        }
+      })
       .catch(() => {});
     // Fetch capabilities once and cache for the session
     apiFetch(`${API_BASE}/api/investigate`)
