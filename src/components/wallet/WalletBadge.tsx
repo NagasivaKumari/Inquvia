@@ -59,7 +59,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
         const w = await connectPera();
         const message = `Sign to verify control of ${w.address} in ${ALGORAND_CONFIG.network} at ${Date.now()}`;
         const { signChallenge } = await import("@/lib/wallet/pera");
-        const { signature, authenticatorData } = await signChallenge(
+        const { signature, authenticatorData, message: signedMessage } = await signChallenge(
           w.address,
           message,
           window.location.origin
@@ -71,7 +71,7 @@ export function WalletBadge({ address, onConnected, onDisconnected, compact }: W
           body: JSON.stringify({
             providerId: "pera",
             address: w.address,
-            message,
+            message: signedMessage,
             authenticatorData: base64(authenticatorData),
             signatureB64: base64(signature),
           }),

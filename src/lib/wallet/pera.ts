@@ -4,6 +4,13 @@ import { PeraWalletConnect } from "@perawallet/connect";
 import algosdk from "algosdk";
 import { ALGORAND_CONFIG } from "@/lib/config";
 
+function canonicalJson(value: Record<string, unknown>): string {
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${JSON.stringify(value[key])}`)
+    .join(",")}}`;
+}
+
 let peraWallet: PeraWalletConnect | null = null;
 
 export function getPera(): PeraWalletConnect {
@@ -78,11 +85,21 @@ export async function disconnectPera(): Promise<void> {
  */
 export async function signChallenge(
   address: string,
-  message: string,
+  statement: string,
   domain: string
-): Promise<{ signature: Uint8Array; authenticatorData: Uint8Array; dataB64: string }> {
+): Promise<{ signature: Uint8Array; authenticatorData: Uint8Array; dataB64: string; message: string }> {
   const encoder = new TextEncoder();
   const authenticatorData = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(domain)));
+  const message = canonicalJson({
+    account_address: address,
+    chain_id: ALGORAND_CONFIG.network === "mainnet" ? "416001" : "416002",
+    domain,
+    "issued-at": new Date().toISOString(),
+    statement,
+    type: "ed25519",
+    uri: domain,
+    version: "1",
+  });
   let dataBin = "";
   const messageBytes = encoder.encode(message);
   messageBytes.forEach((b) => (dataBin += String.fromCharCode(b)));
@@ -103,6 +120,7 @@ export async function signChallenge(
     signature: signed.signature,
     authenticatorData: signed.authenticatorData ?? authenticatorData,
     dataB64,
+    message,
   };
 }
 

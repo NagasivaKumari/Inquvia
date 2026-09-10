@@ -21,7 +21,7 @@ export const ALGORAND_CONFIG = {
   usdcAsa:
     process.env.NEXT_PUBLIC_ALGORAND_USDC_ASA ??
     process.env.ALGORAND_USDC_ASA ??
-    ((process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? process.env.ALGORAND_NETWORK) === "mainnet" ? "31566704" : "10458941"),
+    "",
   facilitatorUrl:
     process.env.NEXT_PUBLIC_X402_FACILITATOR_URL ??
     process.env.X402_FACILITATOR_URL ??

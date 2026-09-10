@@ -53,7 +53,11 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
       const { address } = await connectPera();
       const message = `Sign to verify control of ${address} in ${ALGORAND_CONFIG.network} at ${Date.now()}`;
       const { signChallenge } = await import("@/lib/wallet/pera");
-      const { signature, authenticatorData } = await signChallenge(address, message, window.location.origin);
+      const { signature, authenticatorData, message: signedMessage } = await signChallenge(
+        address,
+        message,
+        window.location.origin
+      );
       let bin = "";
       signature.forEach((b) => (bin += String.fromCharCode(b)));
       let authBin = "";
@@ -64,7 +68,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
         body: JSON.stringify({
           providerId: "pera",
           address,
-          message,
+          message: signedMessage,
           authenticatorData: btoa(authBin),
           signatureB64: btoa(bin),
         }),

@@ -8,14 +8,14 @@ ROOT = Path(__file__).resolve().parents[2]  # D:\Inquvia
 load_dotenv(ROOT / ".env")
 
 
-def _num(name: str, fallback: float) -> float:
+def _env_num(name: str) -> float:
     raw = os.getenv(name)
-    if raw is None or raw == "":
-        return fallback
+    if raw is None or raw.strip() == "":
+        return 0.0
     try:
         return float(raw)
     except ValueError:
-        return fallback
+        return 0.0
 
 
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
@@ -25,7 +25,7 @@ MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
 
 ALGORAND_NETWORK = os.getenv("NEXT_PUBLIC_ALGORAND_NETWORK", None) or os.getenv("ALGORAND_NETWORK", "mainnet")
-ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "31566704")
+ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "").strip()
 X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.goplausible.xyz")
 # Required for the Global x402 Challenge Bazaar listing when no deployment
 # override is supplied. Production can still set the same value explicitly.
@@ -102,7 +102,7 @@ INVESTIGATION_BLOCKED_STATES = [
 ]
 
 # All capability endpoints use one shared price in whole USDC dollars.
-INVESTIGATION_PRICE_USDC = _num("INVESTIGATION_PRICE_USDC", 0.5)
+INVESTIGATION_PRICE_USDC = _env_num("INVESTIGATION_PRICE_USDC")
 
 PAID_CAPABILITIES = [
     {"id": "claim-investigation", "title": "Claim Investigation",
@@ -137,7 +137,7 @@ PAID_CAPABILITIES = [
 
 DEFAULT_PAYMENT_PREFS = {
     "maxPerEvidenceCheck": 0.01,
-    "maxPerInvestigation": 0.50,
+    "maxPerInvestigation": INVESTIGATION_PRICE_USDC,
     "sessionBudget": 5.00,
     "totalBudget": 50.00,
 }

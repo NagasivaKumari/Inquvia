@@ -82,13 +82,22 @@ def _network() -> str:
 
 
 def _asset_id() -> int:
-    return USDC_TESTNET_ASA_ID if config.ALGORAND_NETWORK == "testnet" else USDC_MAINNET_ASA_ID
+    if not config.ALGORAND_USDC_ASA:
+        raise RuntimeError("Missing required environment variable: ALGORAND_USDC_ASA")
+    try:
+        return int(config.ALGORAND_USDC_ASA)
+    except ValueError:
+        raise RuntimeError("Invalid numeric environment variable: ALGORAND_USDC_ASA") from None
 
 
 def build_x402_middleware():
     """Build and return the FastAPI payment middleware for the 6 atomic
     capabilities. Shared payTo across all endpoints (Composite entry)."""
     pay_to = config.INQUVIA_PAYTO_ADDRESS.strip()
+    if not pay_to:
+        raise RuntimeError("Missing required environment variable: INQUVIA_PAYTO_ADDRESS")
+    if config.INVESTIGATION_PRICE_USDC <= 0:
+        raise RuntimeError("Missing or invalid required environment variable: INVESTIGATION_PRICE_USDC")
     facilitator_url = config.X402_FACILITATOR_URL or None
 
     facade = HTTPFacilitatorClient(FacilitatorConfig(url=facilitator_url))
