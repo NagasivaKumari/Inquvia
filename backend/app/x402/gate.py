@@ -124,9 +124,15 @@ def build_x402_middleware():
             accepts=PaymentOption(
                 scheme="exact",
                 pay_to=pay_to,
-                price={"asset": str(_asset_id()), "amount": str(amount_micro)},
+                price={
+                    "asset": str(_asset_id()),
+                    "amount": str(amount_micro),
+                    "extra": {
+                        "decimals": 6,
+                        "tag": config.X402_CHALLENGE_TAG,
+                    },
+                },
                 network=_network(),
-                extra={"tag": config.X402_CHALLENGE_TAG},
             ),
             description=f"Inquvia: {cap['title']} - {cap['description']}",
             mime_type="application/json",

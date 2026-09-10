@@ -37,6 +37,12 @@ const SOURCES: { key: string; label: string; description: string }[] = [
   { key: "dev", label: "Developer", description: "Localhost / bot traffic — not challenge volume" },
 ];
 
+const CONFIGURED_SOURCES = SOURCES.map((source) =>
+  source.key === "x402-global-challenge"
+    ? { ...source, key: ALGORAND_CONFIG.challengeTag }
+    : source
+);
+
 export default function FacilitatorPage() {
   const [rows, setRows] = useState<SourceRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +56,7 @@ export default function FacilitatorPage() {
       return;
     }
     Promise.all(
-      SOURCES.map(async (s) => {
+      CONFIGURED_SOURCES.map(async (s) => {
         try {
           const res = await fetch(
             `${ALGORAND_CONFIG.facilitatorUrl}/data/leaderboards?cat=merchants&limit=2000&range=all&env=${network}&src=${s.key}`
@@ -68,8 +74,10 @@ export default function FacilitatorPage() {
       .catch(() => setError("Failed to load facilitator data."));
   }, [payTo, network]);
 
-  const challenge = rows?.find((r) => r.key === "x402-global-challenge");
-  const found = (challenge?.item ?? rows?.find((r) => r.item)?.item);
+  const challenge = rows?.find((r) => r.key === ALGORAND_CONFIG.challengeTag);
+  const found = rows
+    ?.filter((row) => row.item)
+    .sort((a, b) => (b.item?.settles ?? 0) - (a.item?.settles ?? 0))[0]?.item;
 
   const boardUrl = (src: string) =>
     `${ALGORAND_CONFIG.facilitatorUrl}/dashboard/leaderboards?cat=merchants&env=${network}&src=${src}&range=all`;
@@ -137,7 +145,7 @@ export default function FacilitatorPage() {
                 </a>
               </div>
               <p className={`text-muted ${styles.muted}`} style={{ fontSize: 13 }}>
-                Volume filed under each source at settlement time. Only x402-global-challenge counts toward the competition.
+                Volume is separated by attribution source. Local development payments appear under Developer; production payments should appear under the configured challenge tag or Bazaar.
               </p>
               <div className={styles.attribution}>
                 {rows.map((r) => (
@@ -146,7 +154,7 @@ export default function FacilitatorPage() {
                       <div className={styles.attributionName}>
                         {r.label}
                         {r.item && (
-                          <span className={`badge ${r.key === "x402-global-challenge" ? "badge-success" : r.key === "dev" ? "badge-warning" : "badge-info"}`} style={{ marginLeft: 8 }}>
+                            <span className={`badge ${r.key === ALGORAND_CONFIG.challengeTag ? "badge-success" : r.key === "dev" ? "badge-warning" : "badge-info"}`} style={{ marginLeft: 8 }}>
                             {r.item.volume > 0 ? "active" : "0 vol"}
                           </span>
                         )}
