@@ -75,7 +75,13 @@ function InvestigateForm() {
       setPaymentStatus("Pera approval requested — approve the $0.50 USDC payment in the Pera window…");
     };
     const onDiagnostic = (e: Event) => {
-      const step = (e as CustomEvent<{ step: string; connected?: boolean }>)?.detail?.step ?? "";
+      const d = (e as CustomEvent<{ step: string; connected?: boolean; message?: string }>)?.detail;
+      const step = d?.step ?? "";
+      if (step === "error") {
+        setPaymentStatus("");
+        setError(`Payment flow: ${d?.message ?? "unknown wallet error"}`);
+        return;
+      }
       const map: Record<string, string> = {
         "preparing-session": "Connecting to Pera wallet (reconnect session)…",
         "session-ready": "Pera session ready.",

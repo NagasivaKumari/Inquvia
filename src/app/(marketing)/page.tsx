@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -25,7 +25,7 @@ function HomePageContent() {
   >([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/investigate`, { cache: "no-store" })
+    fetch(`${API_BASE}/api/investigate`)
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         const nextPrices: Record<string, number> = {};
@@ -40,7 +40,7 @@ function HomePageContent() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/providers`, { cache: "no-store" })
+    fetch(`${API_BASE}/api/providers`)
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (Array.isArray(data?.services)) setEvidenceServices(data.services);
@@ -66,7 +66,7 @@ function HomePageContent() {
       <section className={styles.heroSection}>
         <div className={`container ${styles.heroGrid}`}>
           <div className={styles.heroContent}>
-            <p className={styles.eyebrow}>{APP_NAME} · Evidence-backed investigation</p>
+            <p className={styles.eyebrow}>{APP_NAME} Â· Evidence-backed investigation</p>
             <h1 className={styles.heroTitle}>
               Investigate before you decide.
             </h1>
@@ -85,7 +85,7 @@ function HomePageContent() {
                 className={styles.searchInput}
               />
               <button type="submit" className="btn btn-primary">
-                Investigate →
+                Investigate â†’
               </button>
             </form>
 
@@ -135,7 +135,7 @@ function HomePageContent() {
                       ? "Price at checkout"
                       : `$${prices[cap.id]} USDC`}
                   </span>
-                  <span className={styles.toolGo}>Investigate →</span>
+                  <span className={styles.toolGo}>Investigate â†’</span>
                 </div>
               </button>
             ))}
@@ -194,7 +194,7 @@ function HomePageContent() {
                 onClick={() => run(c.question)}
               >
                 <span className={styles.caseTitle}>{c.title}</span>
-                <span className={styles.caseQuestion}>“{c.question}”</span>
+                <span className={styles.caseQuestion}>â€œ{c.question}â€</span>
               </button>
             ))}
           </div>
@@ -206,7 +206,7 @@ function HomePageContent() {
         <div className="container">
           <div className="section-header">
             <span className="section-kicker">How it works</span>
-            <h2 className="section-title">From “I’m not sure” to “I can decide”</h2>
+            <h2 className="section-title">From â€œIâ€™m not sureâ€ to â€œI can decideâ€</h2>
             <p className="section-lede">
               No spreadsheets, no workflows. Just a question and an
               evidence-backed answer.
@@ -237,7 +237,7 @@ function HomePageContent() {
             {DECISION_MOMENTS.map((d) => (
               <div key={d.before} className={styles.decideRow}>
                 <span className={styles.decideBefore}>{d.before}</span>
-                <span className={styles.decideArrow}>→</span>
+                <span className={styles.decideArrow}>â†’</span>
                 <span className={styles.decideAction}>investigate</span>
               </div>
             ))}
@@ -274,7 +274,7 @@ function HomePageContent() {
             <span className="section-kicker">Example</span>
             <h2 className="heading-xl">What does an assessment look like?</h2>
             <p className="text-muted">
-              Question → Investigation → Evidence → Cross-check → Assessment. A
+              Question â†’ Investigation â†’ Evidence â†’ Cross-check â†’ Assessment. A
               product demonstration, not a testimonial.
             </p>
             <ol className={styles.exampleSteps}>
@@ -287,7 +287,7 @@ function HomePageContent() {
           </div>
 
           <div className={styles.resultCard}>
-            <p className={styles.resultQ}>“Is this online seller legitimate?”</p>
+            <p className={styles.resultQ}>â€œIs this online seller legitimate?â€</p>
             <div className={styles.resultVerdict}>
               <span className={styles.verdictBadge}>SUSPICIOUS</span>
               <span className={styles.verdictConfidence}>91% confidence</span>
@@ -314,10 +314,10 @@ function HomePageContent() {
             </div>
             <p className={styles.resultNote}>
               Not every answer is true or false. Inconclusive. Some evidence
-              conflicts. What we couldn’t verify stays visible.
+              conflicts. What we couldnâ€™t verify stays visible.
             </p>
             <Link href="/investigate" className="btn btn-primary">
-              Start an Investigation →
+              Start an Investigation â†’
             </Link>
           </div>
         </div>
@@ -328,20 +328,20 @@ function HomePageContent() {
         <div className="container">
           <div className="section-header centered">
             <span className="section-kicker">Evidence first</span>
-            <h2 className="section-title">Don’t just get an answer. See why.</h2>
+            <h2 className="section-title">Donâ€™t just get an answer. See why.</h2>
             <p className="section-lede">
-              Every conclusion comes with the evidence behind it — what supports
+              Every conclusion comes with the evidence behind it â€” what supports
               it, what contradicts it, and what remains unknown.
             </p>
           </div>
           <div className={styles.evidenceCols}>
             <div className={styles.evidenceCol}>
-              <span className={styles.evidenceIcon}>＋</span>
+              <span className={styles.evidenceIcon}>ï¼‹</span>
               <h3>What supports the conclusion</h3>
               <p>Cited findings and sources back up the assessment.</p>
             </div>
             <div className={styles.evidenceCol}>
-              <span className={styles.evidenceIcon}>−</span>
+              <span className={styles.evidenceIcon}>âˆ’</span>
               <h3>What contradicts it</h3>
               <p>Conflicting signals are called out, not hidden.</p>
             </div>
@@ -359,13 +359,13 @@ function HomePageContent() {
         <div className={`container ${styles.x402Grid}`}>
           <div className={styles.x402Flow}>
             <span>Investigation</span>
-            <span className={styles.x402Step}>↓</span>
+            <span className={styles.x402Step}>â†“</span>
             <span>x402</span>
-            <span className={styles.x402Step}>↓</span>
+            <span className={styles.x402Step}>â†“</span>
             <span>Algorand</span>
-            <span className={styles.x402Step}>↓</span>
+            <span className={styles.x402Step}>â†“</span>
             <span>USDC</span>
-            <span className={styles.x402Step}>↓</span>
+            <span className={styles.x402Step}>â†“</span>
             <span>Result</span>
           </div>
           <div>
@@ -373,17 +373,17 @@ function HomePageContent() {
             <h2 className="heading-xl">Pay only for the investigation you use.</h2>
             <p className="text-muted">
               Each investigation capability is a pay-per-request service.
-              Payments use x402 with USDC on Algorand. You explore first — a
+              Payments use x402 with USDC on Algorand. You explore first â€” a
               wallet is only needed when a real payment is required, and you
               authorize each payment yourself in your Algorand wallet.
             </p>
             <div className={styles.walletSteps}>
               <span>Payment required</span>
-              <span className={styles.x402Step}>↓</span>
+              <span className={styles.x402Step}>â†“</span>
               <span>Connect Algorand wallet</span>
-              <span className={styles.x402Step}>↓</span>
+              <span className={styles.x402Step}>â†“</span>
               <span>Authorize</span>
-              <span className={styles.x402Step}>↓</span>
+              <span className={styles.x402Step}>â†“</span>
               <span>Continue</span>
             </div>
           </div>
@@ -396,7 +396,7 @@ function HomePageContent() {
           <div className={styles.ctaCard}>
             <div>
               <h2 className={styles.ctaCardTitle}>
-                Something you’re unsure about? Investigate it.
+                Something youâ€™re unsure about? Investigate it.
               </h2>
               <p className={styles.ctaCardSub}>
                 Bring a claim, image, video, document, website, or data. See the
@@ -405,7 +405,7 @@ function HomePageContent() {
             </div>
             <div className={styles.ctaButtons}>
               <Link href="/investigate" className="btn btn-primary btn-lg">
-                Start an Investigation →
+                Start an Investigation â†’
               </Link>
               <a href="/#process" className="btn btn-secondary btn-lg">
                 See How It Works

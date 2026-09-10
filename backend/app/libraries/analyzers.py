@@ -13,6 +13,17 @@ from ..libraries.analyze import (
 REGISTRY = {}
 
 
+_QUESTION_RULE = (
+    "Match your conclusion to the user's actual question. If the question is to extract, list, summarize, "
+    "transcribe, or describe content, DO NOT issue an authenticity/manipulation verdict: report the extracted "
+    "content in findings and use conclusion 'inconclusive' with confidence reflecting the reliability of the "
+    "facts you extracted. If the question asks whether content is genuine, manipulated, fake, or risky, issue a "
+    "verdict ONLY when observable file-level or extracted signals support it; never allege manipulation without "
+    "evidence, and state the evidence and limitations each time. Set confidence relative to the question actually "
+    "being answered, and be explicit about uncertainty. "
+)
+
+
 def register_analyzer(capability_id, fn):
     REGISTRY[capability_id] = fn
 
@@ -118,7 +129,7 @@ def _find_input(inv, input_type):
 
 
 async def _claim_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's claim verification analyst. Assess whether the submitted claim is supported, contradicted, or unresolved, "
         "using the submitted input and any acquired evidence. Do not use internal knowledge to fill evidence gaps. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
@@ -141,7 +152,7 @@ async def _claim_analyzer(inv, evidence):
 
 
 async def _image_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's image forensics analyst. Inspect the provided image(s) for signs of manipulation, "
         "generative-AI artifacts, or provenance inconsistencies, together with the acquired evidence and the "
         "extracted FILE_LEVEL_SIGNALS (metadata, format, dimensions, editor tags). "
@@ -172,7 +183,7 @@ async def _image_analyzer(inv, evidence):
 
 
 async def _video_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's video forensics analyst. Assess the submitted video(s) using the extracted "
         "FILE_LEVEL_SIGNALS (container, brands, track dimensions, duration) and the visible frame content, "
         "together with the acquired evidence. Identify only defensible forensic or file-level signals such as "
@@ -204,7 +215,7 @@ async def _video_analyzer(inv, evidence):
 
 
 async def _document_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's document forensics analyst. Extract claims from the provided document, identify internal inconsistencies, and flag suspicious or "
         "altered content, together with acquired evidence. Express confidence honestly. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
@@ -226,7 +237,7 @@ async def _document_analyzer(inv, evidence):
 
 
 async def _source_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's web source credibility analyst. Evaluate the submitted URL using the live web inspection data (DNS, SSL, HTTP, content snippet) "
         "and the acquired evidence. Assess credibility signals, not absolute verification. Express confidence honestly. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
@@ -241,7 +252,7 @@ async def _source_analyzer(inv, evidence):
 
 
 async def _data_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's structured-data analyst. Inspect the submitted CSV/JSON dataset for anomalies, inconsistencies, missing values, or suspicious patterns, "
         "together with acquired evidence. Express confidence honestly. "
         "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
@@ -255,7 +266,7 @@ async def _data_analyzer(inv, evidence):
 
 
 async def _audio_analyzer(inv, evidence):
-    system_prompt = (
+    system_prompt = _QUESTION_RULE + (
         "You are Inquvia's audio forensics analyst. Assess the submitted audio recording(s) using the extracted "
         "FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration) and any audible content, "
         "together with the acquired evidence. Base conclusions only on defensible, observable signals; do not "

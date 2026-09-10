@@ -481,6 +481,46 @@ async def api_investigation_evidence(inv_id: str, request: Request):
     return JSONResponse({"evidence": (investigation or {}).get("evidence") or []})
 
 
+@app.get("/api/investigations/{inv_id}/files/{file_name}")
+async def api_investigation_file(inv_id: str, file_name: str, request: Request):
+    """Serve a file the user uploaded to this investigation (owner-only)."""
+    from urllib.parse import quote
+    from .libraries import storage as _storage
+
+    user = _resolve_user(request)
+    if not user:
+        return _unauthorized()
+    if not _owns(user, inv_id):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    investigation = db.get_investigation(inv_id)
+    hit = next(
+        (i for i in (investigation or {}).get("inputs") or [] if i.get("fileName") == file_name and i.get("filePath")),
+        None,
+    )
+    if not hit:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    stored = db.read_upload_file(hit["filePath"])
+    buf = stored[0] if stored else None
+    mime = (stored[1] if stored else None) or hit.get("mimeType") or "application/octet-stream"
+    if buf is None:
+        p = _storage.resolve_stored_path(hit["filePath"])
+        if p:
+            try:
+                buf = p.read_bytes()
+            except OSError:
+                buf = None
+    if buf is None:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return Response(
+        content=buf,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{quote(file_name)}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 # ── Investigate portfolio ──
 @app.get("/api/investigate")
 async def api_investigate():
@@ -496,7 +536,7 @@ async def api_investigate():
             }
             for c in config.PAID_CAPABILITIES
         ],
-    })
+    }, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.post("/api/investigate")
@@ -529,7 +569,8 @@ async def api_providers():
         }
         for capability in config.EVIDENCE_CAPABILITIES
     ]
-    return JSONResponse({"services": services, "source": "inquvia"})
+    return JSONResponse({"services": services, "source": "inquvia"},
+                        headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.post("/api/providers/discover")

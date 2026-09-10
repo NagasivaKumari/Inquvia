@@ -23,38 +23,44 @@ export function createX402Signer(address: string): ClientAvmSigner {
   return {
     address,
     async signTransactions(txns, indexesToSign) {
-      emit("preparing-session", { address });
-      const pera = await ensurePeraSession();
-      emit("session-ready", { connected: pera.isConnected });
-      const decoded = txns.map((t) => algosdk.decodeUnsignedTransaction(t));
-      // Determine which transactions this wallet should sign:
-      // Default to transactions where txn.sender matches address, or explicitly indexesToSign.
-      const toSign = indexesToSign ?? decoded
-        .map((txn, i) => (txn.sender.toString() === address ? i : -1))
-        .filter((i) => i !== -1);
+      try {
+        emit("preparing-session", { address });
+        const pera = await ensurePeraSession();
+        emit("session-ready", { connected: pera.isConnected });
+        const decoded = txns.map((t) => algosdk.decodeUnsignedTransaction(t));
+        // Determine which transactions this wallet should sign:
+        // Default to transactions where txn.sender matches address, or explicitly indexesToSign.
+        const toSign = indexesToSign ?? decoded
+          .map((txn, i) => (txn.sender.toString() === address ? i : -1))
+          .filter((i) => i !== -1);
 
-      // In ARC-0001 / Pera, unsigned transactions in an atomic group must have signers: []
-      const signerTxns = decoded.map((txn, i) => ({
-        txn,
-        signers: toSign.includes(i) ? [address] : [],
-      }));
+        // In ARC-0001 / Pera, unsigned transactions in an atomic group must have signers: []
+        const signerTxns = decoded.map((txn, i) => ({
+          txn,
+          signers: toSign.includes(i) ? [address] : [],
+        }));
 
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("inquvia:wallet-signing"));
-      }
-      emit("requesting-approval", { txCount: signerTxns.length });
-      const signed = await pera.signTransaction([signerTxns]);
-      emit("request-approved");
-
-      // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.
-      const signedMap = new Map<number, Uint8Array>();
-      toSign.forEach((txnIndex, k) => {
-        if (signed && signed[k]) {
-          signedMap.set(txnIndex, signed[k]);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("inquvia:wallet-signing"));
         }
-      });
+        emit("requesting-approval", { txCount: signerTxns.length });
+        const signed = await pera.signTransaction([signerTxns]);
+        emit("request-approved");
 
-      return txns.map((_, i) => signedMap.get(i) ?? null);
+        // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.
+        const signedMap = new Map<number, Uint8Array>();
+        toSign.forEach((txnIndex, k) => {
+          if (signed && signed[k]) {
+            signedMap.set(txnIndex, signed[k]);
+          }
+        });
+
+        return txns.map((_, i) => signedMap.get(i) ?? null);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        emit("error", { message });
+        throw err;
+      }
     },
   };
 }

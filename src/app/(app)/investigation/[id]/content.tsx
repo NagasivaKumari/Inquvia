@@ -148,9 +148,6 @@ export default function InvestigationPage() {
   const graph: EvidenceGraph | undefined = inv.evidenceGraph;
   const stage = inv.currentStage;
   const date = new Date(inv.createdAt).toLocaleString();
-  const spentMicro = acqs
-    .filter((a) => a.paymentState === "evidence_received")
-    .reduce((sum, a) => sum + (a.amountMicro ?? 0), 0);
 
   return (
     <div className={styles.page}>
@@ -172,11 +169,6 @@ export default function InvestigationPage() {
           {inv.capabilityPriceUsdc != null && (
             <span>Paid: ${inv.capabilityPriceUsdc.toFixed(4)} USDC</span>
           )}
-          <span>
-            {acqs.filter((a) => a.paymentState === "evidence_received").length}{" "}
-            evidence acquired
-          </span>
-          <span>${microToUsdc(spentMicro)} USDC spent on evidence</span>
         </div>
         {inv.blockReason && (
           <div className={styles.blocked}>
@@ -184,6 +176,9 @@ export default function InvestigationPage() {
           </div>
         )}
       </header>
+
+      {/* UPLOADED SOURCE */}
+      <SubmittedSource inv={inv} />
 
       {/* LEFT — timeline / RIGHT — assessment */}
       <div className={styles.layout}>
@@ -215,22 +210,16 @@ export default function InvestigationPage() {
       </div>
 
       {/* ECONOMIC EVENTS */}
-      <section className={`card ${styles.section}`}>
-        <h2 className="heading-sm">Evidence acquisition</h2>
-        {acqs.length === 0 ? (
-          <p className="text-muted">
-            No evidence services have been purchased yet.
-          </p>
-        ) : (
-          <>
-            <div className={styles.acqList}>
-              {acqs.map((a) => (
-                <AcquisitionRow key={a.id} acq={a} />
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+      {acqs.length > 0 && (
+        <section className={`card ${styles.section}`}>
+          <h2 className="heading-sm">Evidence acquisition</h2>
+          <div className={styles.acqList}>
+            {acqs.map((a) => (
+              <AcquisitionRow key={a.id} acq={a} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ACTIVITY */}
       {activity.length > 0 && (
@@ -251,6 +240,50 @@ export default function InvestigationPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+function SubmittedSource({ inv }: { inv: Investigation }) {
+  const files = (inv.inputs ?? []).filter((i) => i.filePath);
+  const plain = (inv.inputs ?? []).filter((i) => i.type === "text" || i.type === "url");
+  if (files.length === 0 && plain.length === 0) return null;
+  return (
+    <section className={`card ${styles.section}`}>
+      <h2 className="heading-sm">Uploaded source</h2>
+      {plain.length > 0 && (
+        <ul className={styles.findings}>
+          {plain.map((i, n) => (
+            <li key={n}>
+              <strong>{i.type}:</strong> {i.content}
+            </li>
+          ))}
+        </ul>
+      )}
+      {files.map((f, i) => {
+        const src = `${API_BASE}/api/investigations/${inv.id}/files/${encodeURIComponent(
+          f.fileName ?? "file"
+        )}`;
+        const style: React.CSSProperties = { maxWidth: "100%", marginTop: 8 };
+        return (
+          <div key={i} style={{ marginTop: 12 }}>
+            <div className="text-muted">
+              {f.type}: {f.fileName} {f.mimeType ? `(${f.mimeType})` : ""}
+            </div>
+            {f.type === "video" ? (
+              <video controls preload="metadata" src={src} style={style} />
+            ) : f.type === "audio" ? (
+              <audio controls preload="metadata" src={src} style={style} />
+            ) : f.type === "image" ? (
+              <img src={src} alt={f.fileName ?? "uploaded image"} style={style} />
+            ) : (
+              <a href={src} target="_blank" rel="noreferrer">
+                Open uploaded file
+              </a>
+            )}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

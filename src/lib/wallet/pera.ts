@@ -37,8 +37,14 @@ export async function ensurePeraSession(): Promise<PeraWalletConnect> {
   } catch {
     // Reconnect failed or no active session
   }
-  await pera.connect();
-  return pera;
+  const accounts = await pera.connect();
+  if (accounts && accounts.length > 0) {
+    return pera;
+  }
+  throw new Error(
+    "Pera connection was not completed. Approve the connect request shown in the Pera app " +
+      "(or the QR on screen) before sending the payment."
+  );
 }
 
 function getAlgod(): algosdk.Algodv2 {
