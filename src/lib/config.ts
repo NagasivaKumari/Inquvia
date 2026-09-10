@@ -154,6 +154,14 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
       "Investigate structured data for anomalies and supporting signals.",
     inputTypes: ["data"],
   },
+  {
+    id: "audio-investigation",
+    title: "Audio Investigation",
+    endpoint: "/api/x402/audio-investigation",
+    description:
+      "Investigate an audio recording for transcript, context, and evidence.",
+    inputTypes: ["audio"],
+  },
 ] as const;
 
 /** Return a capability descriptor by id, or undefined. */

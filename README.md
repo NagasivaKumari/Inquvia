@@ -167,7 +167,7 @@ Never commit private keys, signer tokens, database credentials, or API keys.
 | `POST` | `/api/x402/{capability}` | Run a paid investigation capability |
 | `GET` | `/.well-known/x402` | x402 resource discovery catalogue |
 
-Paid capabilities are claim, image, video, document, source, and data
+Paid capabilities are claim, image, video, audio, document, source, and data
 investigation. All use the shared `INVESTIGATION_PRICE_USDC` value.
 
 ## Development

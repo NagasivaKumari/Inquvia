@@ -16,6 +16,7 @@ CAPABILITY_BANK = {
     "independent_source": {"capability": "independent_source", "reason": "Locate independent corroborating sources", "type": "text"},
     "data_consistency": {"capability": "data_consistency", "reason": "Validate structured data for consistency", "type": "data"},
     "document_verify": {"capability": "document_verify", "reason": "Verify document authenticity and issuer", "type": "document"},
+    "audio_transcription": {"capability": "audio_transcription", "reason": "Transcribe and inspect the audio recording", "type": "audio"},
 }
 
 
@@ -105,3 +106,4 @@ plan_video_requirements = _make_planner(["video_analysis", "frame_evidence", "im
 plan_document_requirements = _make_planner(["document_verify", "source_verify"])
 plan_source_requirements = _make_planner(["domain_lookup", "ssl_scan", "content_extract", "source_verify"])
 plan_data_requirements = _make_planner(["data_consistency", "source_verify"])
+plan_audio_requirements = _make_planner(["audio_transcription", "source_verify"])

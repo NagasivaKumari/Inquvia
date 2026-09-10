@@ -20,10 +20,7 @@
 }
 
 .logoPill {
-  background: var(--color-navy);
   color: #ffffff;
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
 }
 
 .nav {

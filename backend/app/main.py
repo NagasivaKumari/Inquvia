@@ -30,6 +30,7 @@ from .auth import (
 )
 from .libraries import engine, capabilities, atomic_route
 from .libraries import discovery as discovery_lib
+from .libraries import evidence_client
 from .x402.gate import build_x402_middleware, extract_settlement_tx_id_from_response_headers
 
 app = FastAPI(title="Inquvia Backend API")
@@ -452,7 +453,26 @@ async def api_investigate_post():
 async def api_providers():
     probe = [{"id": "probe", "type": "text", "capability": "source_verify", "reason": "Configured evidence service probe"}]
     discovery_result = await discovery_lib.discover_services(probe)
-    return JSONResponse({"services": discovery_result["services"], "source": discovery_result["source"]})
+    primary_services = await evidence_client.discover_remote_services()
+    services = []
+    for service in primary_services:
+        normalized = dict(service)
+        normalized["capability"] = normalized.get("capability") or normalized.get("type")
+        services.append(normalized)
+    known = {(s.get("providerId"), s.get("type"), s.get("resourceUrl")) for s in services}
+    for service in discovery_result["services"]:
+        normalized = dict(service)
+        normalized["capability"] = normalized.get("capability") or (
+            (normalized.get("capabilities") or [None])[0]
+        )
+        key = (normalized.get("providerId"), normalized.get("type"), normalized.get("resourceUrl"))
+        if key not in known:
+            services.append(normalized)
+            known.add(key)
+    source = "primary+configured" if primary_services and discovery_result["services"] else (
+        "primary" if primary_services else discovery_result["source"]
+    )
+    return JSONResponse({"services": services, "source": source})
 
 
 @app.post("/api/providers/discover")

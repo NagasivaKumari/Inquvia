@@ -25,7 +25,6 @@ const PRIMARY = [
               : "dashboard",
     })
   ),
-  { href: "/facilitator", label: "Facilitator", icon: "facilitator" },
 ];
 
 export function Sidebar({

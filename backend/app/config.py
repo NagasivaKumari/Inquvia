@@ -129,6 +129,10 @@ PAID_CAPABILITIES = [
         "endpoint": "/api/x402/data-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate structured data for anomalies and supporting signals.",
      "inputTypes": ["data"]},
+    {"id": "audio-investigation", "title": "Audio Investigation",
+        "endpoint": "/api/x402/audio-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
+     "description": "Investigate an audio recording for transcript, context, and evidence.",
+     "inputTypes": ["audio"]},
 ]
 
 DEFAULT_PAYMENT_PREFS = {

@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { APP_NAME, TAGLINE } from "@/lib/config";
 import "@/styles/globals.css";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? process.env.PUBLIC_APP_URL)?.replace(/\/$/, "");
 const logoPath = "/logo.png";
 
 export const viewport: Viewport = {

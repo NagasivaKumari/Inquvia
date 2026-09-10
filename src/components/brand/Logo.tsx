@@ -14,7 +14,7 @@ export function Logo({
   return (
     <Link href={href} className={`${styles.logo} ${inverted ? styles.inverted : ""}`}>
       <span className={styles.mark} aria-hidden="true">
-        <img src="/logo.png" alt="" width="32" height="32" />
+        <img src="/logo.png" alt="" width="90" height="90" />
       </span>
       {!compact && <span className={styles.name}>{APP_NAME}</span>}
     </Link>

@@ -36,6 +36,9 @@ dev-*.log
 /data/
 /backend/data/
 
+# endpoints (local)
+/endpoints/
+
 # python / backend
 __pycache__/
 *.pyc

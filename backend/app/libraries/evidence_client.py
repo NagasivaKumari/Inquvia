@@ -310,6 +310,7 @@ async def discover_remote_services() -> list[dict]:
                 normalized.append({
                     "id": svc_id or svc_type,
                     "type": svc_type or svc_id,
+                    "endpoint": service_endpoint,
                     "name": s.get("name") or svc_type or svc_id,
                     "description": s.get("description") or s.get("summary") or "",
                     "priceMicro": s.get("priceMicro") or _price_to_micro(

@@ -112,6 +112,15 @@ async def run_data_investigation(args):
     )
 
 
+async def run_audio_investigation(args):
+    question = (args.get("question") or "").strip()
+    from ..libraries.planner import plan_audio_requirements
+    return await run_capability(
+        "audio-investigation", args, plan_audio_requirements(question, ["audio"]),
+        "Audio Investigation",
+    )
+
+
 CAPABILITY_RUNNERS = {
     "claim-investigation": run_claim_investigation,
     "image-investigation": run_image_investigation,
@@ -119,4 +128,5 @@ CAPABILITY_RUNNERS = {
     "document-investigation": run_document_investigation,
     "source-investigation": run_source_investigation,
     "data-investigation": run_data_investigation,
+    "audio-investigation": run_audio_investigation,
 }

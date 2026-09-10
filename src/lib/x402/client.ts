@@ -166,6 +166,7 @@ export function detectCapabilityEndpoint(files: File[], url: string): string {
   if (mimes.some((m) => m.startsWith("video/"))) return "/api/x402/video-investigation";
   if (mimes.some((m) => m === "application/pdf")) return "/api/x402/document-investigation";
   if (mimes.some((m) => m.includes("json") || m.includes("csv"))) return "/api/x402/data-investigation";
+  if (mimes.some((m) => m.startsWith("audio/"))) return "/api/x402/audio-investigation";
   if (url?.trim()) return "/api/x402/source-investigation";
   return "/api/x402/claim-investigation";
 }

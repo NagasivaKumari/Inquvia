@@ -196,14 +196,14 @@ function InvestigateForm() {
             <div className="upload-zone-icon" aria-hidden="true">+</div>
             <p>Drag and drop files here, or click to browse</p>
             <p className="text-xs text-muted">
-              Images, videos, PDFs, documents, JSON, CSV — up to 10MB each
+              Images, videos, audio, PDFs, documents, JSON, CSV — up to 10MB each
             </p>
           </div>
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*,video/*,application/pdf,text/*,application/json,text/csv"
+            accept="image/*,video/*,audio/*,application/pdf,text/*,application/json,text/csv"
             onChange={(e) => handleFiles(e.target.files)}
             className="sr-only"
             aria-hidden
