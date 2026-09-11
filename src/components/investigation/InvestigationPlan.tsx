@@ -30,11 +30,11 @@ export function InvestigationPlan({ items }: Props) {
             <div className={styles.meta}>
               <div>
                 <span className={styles.detailLabel}>Cost</span>
-                <span>${item.estimatedCost.toFixed(3)}</span>
+                <span>${(item.estimatedCost ?? 0).toFixed(3)}</span>
               </div>
               <div>
                 <span className={styles.detailLabel}>Expected value</span>
-                <span>{Math.round(item.expectedValue * 100)}%</span>
+                <span>{Math.round((item.expectedValue ?? 0) * 100)}%</span>
               </div>
             </div>
           </div>

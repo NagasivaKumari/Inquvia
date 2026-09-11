@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from .. import db, config
 from ..libraries import signals as signals_lib
 from ..libraries import web_inspector
-from ..libraries.analyze import read_stored_text
+from ..libraries import document_extract
+from ..libraries.analyze import read_stored_text, run_ai_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -56,40 +57,133 @@ def _inputs_of(inv: dict, input_type: str) -> list[dict]:
     return [i for i in (inv.get("inputs") or []) if i.get("type") == input_type]
 
 
-def _media_findings(inv: dict, kind: str) -> list[str]:
-    findings = []
+def _media_findings(inv: dict, kind: str) -> list[dict]:
+    """Observed file-level evidence, as structured records.
+
+    Each record carries the human finding plus structured provenance
+    (format, dimensions, mode, size, MIME, EXIF/PNG tags) and a flag for the
+    "could not be read / could not be probed" state, which is distinct from
+    "no metadata found". The same signals are written back onto the input
+    record so the report renders provenance separately from semantic
+    visual evidence.
+    """
+    records = []
     for inp in _inputs_of(inv, kind):
         path = inp.get("filePath")
+        label = inp.get("content") or inp.get("fileName") or kind
         if not path:
             continue
         data = signals_lib.load_bytes(path)
         if not data:
+            records.append({
+                "finding": f"{kind.capitalize()} check ({label}): the file could not be read — evidence unavailable.",
+                "metadata": {
+                    "fileName": inp.get("fileName"),
+                    "mimeType": inp.get("mimeType"),
+                    "filePath": path,
+                    "evidenceUnavailable": True,
+                },
+            })
             continue
-        desc = signals_lib.describe(data, kind)
-        if desc:
-            findings.append(desc)
-    return findings
+        sig = signals_lib.inspect_bytes(data, kind, inp.get("mimeType"))
+        desc = signals_lib.describe(data, kind, sig)
+        meta = {
+            "fileName": inp.get("fileName"),
+            "mimeType": inp.get("mimeType") or sig.get("mimeType"),
+            "filePath": path,
+            "fileSignals": {k: v for k, v in sig.items() if k != "_kind" and k != "probe"},
+        }
+        if sig.get("error"):
+            meta["probeError"] = True
+        inp["fileSignals"] = dict(meta["fileSignals"])
+        records.append({
+            "finding": desc or f"{kind.capitalize()} check ({label}): no observable file-level metadata extracted.",
+            "metadata": meta,
+        })
+    return records
 
 
-def _document_findings(inv: dict) -> list[str]:
-    findings = []
+SOURCE_LABELS = {
+    "text_layer": "selectable text layer",
+    "ocr": "scanned page (no text layer — read via OCR)",
+    "plain_text": "plain text",
+}
+
+
+async def _document_findings(inv: dict) -> list[dict]:
+    """Comprehensive page-structured document extraction, labeled by source.
+
+    The whole document is extracted (never the first match — the question
+    drives selection later in analysis). Each page becomes its own evidence
+    record carrying page number, text-layer/OCR label and the investigation
+    objective, so page-level provenance survives extraction, reasoning and
+    the final report. Pages with no selectable text are passed to the app's
+    OCR capability; the resulting text (if any) is labeled 'ocr' with page
+    provenance. Pages OCR cannot read stay in the trail labeled as unread,
+    with an honest reason — never dropped or fabricated.
+    """
+    records = []
     for inp in _inputs_of(inv, "document"):
         path = inp.get("filePath")
+        label = inp.get("content") or inp.get("fileName") or "document"
         if not path:
             continue
-        text = read_stored_text(path, 4000)
-        label = inp.get("content") or inp.get("fileName") or "document"
-        if text and text.strip():
-            snippet = text.strip().replace("\n", " ")[:400]
-            findings.append(
-                f"Document check ({label}): extracted {len(text)} characters of text. "
-                f"Start: {snippet}"
-            )
-        else:
-            findings.append(
-                f"Document check ({label}): no extractable text layer found (scanned/OCR-required)."
-            )
-    return findings
+        stored = signals_lib.load_bytes(path)
+        if not stored:
+            records.append({
+                "finding": f"Document check ({label}): the file could not be read — evidence unavailable.",
+                "metadata": {
+                    "fileName": inp.get("fileName"),
+                    "mimeType": inp.get("mimeType"),
+                    "filePath": path,
+                    "evidenceUnavailable": True,
+                },
+            })
+            continue
+        extracted = await document_extract.extract_document_pages_with_ocr(
+            stored, inp.get("mimeType"), run_ai_ocr
+        )
+        if not extracted or not extracted.get("pages"):
+            records.append({
+                "finding": f"Document check ({label}): no readable text could be extracted — evidence unavailable.",
+                "metadata": {
+                    "fileName": inp.get("fileName"),
+                    "mimeType": inp.get("mimeType"),
+                    "filePath": path,
+                    "evidenceUnavailable": True,
+                },
+            })
+            continue
+        # Cache the full numbered extraction (including any OCR text) on the
+        # input so the analyzer and report reuse identical page text/provenance
+        # instead of re-reading.
+        inp["documentExtraction"] = extracted
+        for page in extracted["pages"]:
+            text = page["text"]
+            source_label = SOURCE_LABELS.get(page["source"], page["source"])
+            if text:
+                finding = (
+                    f"Document check ({label}), page {page['page']} [{source_label}]: {text}"
+                )
+            else:
+                finding = (
+                    f"Document check ({label}), page {page['page']} [{source_label}]: "
+                    "no readable text was recovered (scanned page, OCR returned nothing)."
+                )
+            records.append({
+                "finding": finding,
+                "metadata": {
+                    "fileName": inp.get("fileName"),
+                    "mimeType": inp.get("mimeType"),
+                    "filePath": path,
+                    "page": page["page"],
+                    "textLayer": page["source"] == "text_layer",
+                    "extractionSource": page["source"],
+                    "documentLabel": label,
+                    "objective": (inv.get("question") or "").strip(),
+                },
+            })
+    return records
 
 
 def _data_findings(inv: dict) -> list[str]:
@@ -161,16 +255,28 @@ async def _url_findings(inv: dict) -> list[str]:
     return findings
 
 
-async def _execute_check(inv: dict, cap: str) -> list[str]:
+async def _execute_check(inv: dict, cap: str):
+    """Runnable checks return a mix of plain finding strings (text checks) and
+    structured records {finding, metadata} (media checks)."""
     if cap in KIND_FOR_CAP:
         return _media_findings(inv, KIND_FOR_CAP[cap])
     if cap == "document_verify":
-        return _document_findings(inv)
+        return await _document_findings(inv)
     if cap == "data_consistency":
         return _data_findings(inv)
     if cap == "content_extract":
         return await _url_findings(inv)
     return []
+
+
+def _normalize_records(records) -> list[dict]:
+    out = []
+    for rec in records or []:
+        if isinstance(rec, str):
+            out.append({"finding": rec, "metadata": {}})
+        else:
+            out.append(rec)
+    return out
 
 
 async def run_evidence_checks(inv: dict) -> dict:
@@ -186,12 +292,16 @@ async def run_evidence_checks(inv: dict) -> dict:
         if cap not in CHECK_LABELS:
             continue
         try:
-            findings = await _execute_check(inv, cap)
+            records = await _execute_check(inv, cap)
         except Exception:
             logger.exception("evidence check %s failed", cap)
             continue
-        for finding in findings:
-            finding = finding[:2000]
+        for rec in _normalize_records(records):
+            finding = rec.get("finding") or ""
+            # Document page records carry the passage text as evidence; allow
+            # them more room than a one-line media observation.
+            limit = 12000 if (rec.get("metadata") or {}).get("page") else 2000
+            finding = finding[:limit]
             now = _now_iso()
             ev_id = _nanoid("ev")
             ev = {
@@ -206,6 +316,7 @@ async def run_evidence_checks(inv: dict) -> dict:
                 "metadata": {
                     "origin": "evidence_service",
                     "checkCapability": cap,
+                    **(rec.get("metadata") or {}),
                 },
             }
             inv.setdefault("evidence", []).append(ev)

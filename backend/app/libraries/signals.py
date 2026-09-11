@@ -16,6 +16,15 @@ IMAGE_KINDS = {"image", "jpeg", "png", "gif", "webp", "bmp", "tiff"}
 VIDEO_KINDS = {"video", "mp4", "mov", "webm", "mkv", "avi"}
 AUDIO_KINDS = {"audio", "wav", "mp3", "flac", "ogg", "m4a", "aac"}
 
+_MIME_FOR_FORMAT = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+    "BMP": "image/bmp",
+    "TIFF": "image/tiff",
+}
+
 
 def load_bytes(file_path: str) -> bytes | None:
     from .. import db
@@ -37,12 +46,13 @@ def _probe_image(buf: bytes) -> dict:
     from PIL import Image
     from PIL.ExifTags import Base as EBase
 
-    s = {}
+    s = {"fileSizeBytes": len(buf)}
     try:
         with Image.open(io.BytesIO(buf)) as img:
             s["format"] = (img.format or "UNKNOWN").upper()
-            s["width"] = img.width
-            s["height"] = img.height
+            s["mimeType"] = _MIME_FOR_FORMAT.get(s["format"]) or "application/octet-stream"
+            s["width"] = int(img.width)
+            s["height"] = int(img.height)
             s["mode"] = img.mode
             try:
                 s["animated"] = bool(img.is_animated)
@@ -52,23 +62,23 @@ def _probe_image(buf: bytes) -> dict:
             if s["format"] == "PNG":
                 txt = getattr(img, "text", None)
                 if isinstance(txt, dict):
-                    for k in ("Software", "Creation Time", "Source", "Comment"):
-                        if k in txt:
-                            s["png_" + k.replace(" ", "_").lower()] = str(txt[k])[:200]
+                    for png_key, val in list(txt.items())[:10]:
+                        s["png_" + str(png_key).replace(" ", "_").lower()] = str(val)[:200]
             exif = img.getexif()
             if exif:
                 s["exifPresent"] = True
                 ex = {}
-                for k in (
-                    EBase.Make, EBase.Model, EBase.Software,
-                    EBase.DateTimeOriginal, EBase.Artist, EBase.Orientation,
-                ):
+                for k in _IMAGE_EXIF_TAG_IDS(EBase):
                     try:
-                        v = exif.get(k)
-                        if v not in (None, ""):
-                            ex[EBase(k).name] = str(v)
+                        v = str(exif.get(k) or "")
+                        if v:
+                            ex[EBase(k).name] = v[:200]
                     except Exception:
                         pass
+                try:
+                    s["hasGps"] = bool(exif.get_ifd(EBase.GPSInfo))
+                except Exception:
+                    s["hasGps"] = False
                 if ex:
                     s["exif"] = ex
             else:
@@ -77,6 +87,19 @@ def _probe_image(buf: bytes) -> dict:
     except Exception as e:  # pragma: no cover - defensive
         s["error"] = str(e)[:200]
     return s
+
+
+def _IMAGE_EXIF_TAG_IDS(EBase) -> tuple:
+    """Curated EXIF tag set — widened beyond Make/Model/Software so the report
+    shows exposure, lens, and GPS-presence facts when the camera wrote them.
+    Absence of these tags is reported as absence, never as evidence of editing."""
+    return (
+        EBase.Make, EBase.Model, EBase.Software, EBase.DateTimeOriginal,
+        EBase.DateTimeDigitized, EBase.Artist, EBase.Orientation,
+        EBase.ExposureTime, EBase.FNumber, EBase.ISOSpeedRatings,
+        EBase.FocalLength, EBase.LensModel, EBase.Flash, EBase.ExifVersion,
+        EBase.XResolution, EBase.YResolution, EBase.ResolutionUnit, EBase.GPSInfo,
+    )
 
 
 def _iso_boxes(buf: bytes, tags: set, depth: int = 3):
@@ -299,40 +322,68 @@ def _probe_audio(buf: bytes) -> dict:
     else:
         s["container"] = "unknown"
     return s
-def inspect_bytes(data: bytes, kind: str) -> dict:
+def inspect_bytes(data: bytes, kind: str, mime: str | None = None) -> dict:
     k = kind.lower().lstrip(".")
 
-    # Try deep probe first if ffprobe is available
-    if k in IMAGE_KINDS or k in VIDEO_KINDS or k in AUDIO_KINDS:
-        probe_result = _probe_ffprobe(data, k)
-        if probe_result:
-            probe_result["probe"] = "ffprobe"
-            probe_result["_kind"] = k
-            return probe_result
-
+    # Images ALWAYS probe through Pillow. ffprobe reports an image's width and
+    # height nested under streams[], so the old "deep probe first" path made
+    # describe() print "dimensions unknown, mode=n/a" for a perfectly readable
+    # PNG whenever ffprobe happened to be installed.
     if k in IMAGE_KINDS:
         sig = _probe_image(data)
-    elif k in VIDEO_KINDS:
-        sig = _probe_video(data)
-    elif k in AUDIO_KINDS:
-        sig = _probe_audio(data)
     else:
-        sig = {"kind": "unknown"}
+        if k in VIDEO_KINDS or k in AUDIO_KINDS:
+            probe_result = _probe_ffprobe(data, k)
+            if probe_result:
+                probe_result["probe"] = "ffprobe"
+                probe_result["_kind"] = k
+                return probe_result
+        if k in VIDEO_KINDS:
+            sig = _probe_video(data)
+        elif k in AUDIO_KINDS:
+            sig = _probe_audio(data)
+        else:
+            sig = {"kind": "unknown"}
 
     sig["_kind"] = k
+    if "width" not in sig:
+        streams = sig.get("streams") or []
+        v = next((sx for sx in streams if sx.get("width")), None)
+        if v:
+            sig["width"] = v.get("width")
+            sig["height"] = v.get("height") or sig.get("height")
+            sig.setdefault("mode", v.get("pix_fmt") or "n/a")
+    if mime:
+        sig["mimeType"] = mime
+    elif "mimeType" not in sig:
+        sig["mimeType"] = _MIME_FOR_FORMAT.get(str(sig.get("format", "")).upper()) or "application/octet-stream"
+    if "fileSizeBytes" not in sig:
+        sig["fileSizeBytes"] = len(data)
     return sig
 
 
-def describe(data: bytes, kind: str) -> str:
-    sig = inspect_bytes(data, kind)
+def probe_upload(file_path: str, kind: str, mime: str | None = None) -> dict | None:
+    """Load an uploaded file and return its structured file-level signals, or
+    None when the file cannot be read (evidence unavailable — not "no
+    metadata found")."""
+    data = load_bytes(file_path)
+    if not data:
+        return None
+    return inspect_bytes(data, kind, mime)
+
+
+def describe(data: bytes, kind: str, sig: dict | None = None) -> str:
+    sig = sig or inspect_bytes(data, kind)
     if sig.get("error"):
         return f"FILE_LEVEL_SIGNALS: could not be extracted ({sig['error']})."
     if sig.get("_kind") == "unknown":
         return ""
     lines = []
-    if "format" in sig:
-        dims = f"{sig['width']}x{sig['height']}" if "width" in sig else "dimensions unknown"
+    if "format" in sig and not isinstance(sig.get("format"), dict):
+        dims = f"{sig['width']}x{sig['height']}" if sig.get("width") and sig.get("height") else "dimensions unknown"
         lines.append(f"- format={sig['format']}, {dims}, mode={sig.get('mode', 'n/a')}")
+        if "fileSizeBytes" in sig:
+            lines.append(f"- file size={sig['fileSizeBytes']} bytes, mime={sig.get('mimeType', 'n/a')}")
         if sig.get("animated"):
             lines.append(f"- animated, {sig['frames']} frames")
         if sig.get("jfif"):
@@ -341,11 +392,16 @@ def describe(data: bytes, kind: str) -> str:
             ex = sig.get("exif") or {}
             parts = [f"{k}={v}" for k, v in ex.items()]
             lines.append("- EXIF metadata present (" + ", ".join(parts) + ")" if parts else "- EXIF metadata present (no editor/camera tags)")
+            if sig.get("hasGps"):
+                lines.append("- EXIF GPS section present")
         else:
             lines.append("- no EXIF metadata found")
-        for k in ("png_software", "png_creation_time", "png_source"):
-            if k in sig:
-                lines.append(f"- PNG {k[4:].replace('_', ' ')}: {sig[k]}")
+        for k in sorted(kk for kk in sig if kk.startswith("png_")):
+            lines.append(f"- PNG {k[4:].replace('_', ' ')}: {sig[k]}")
+    elif sig.get("probe") == "ffprobe" and "format" in sig:
+        fmt = sig["format"]
+        dims = f"{sig['width']}x{sig['height']}" if sig.get("width") and sig.get("height") else "dimensions unknown"
+        lines.append(f"- format={fmt.get('format_name', 'unknown')}, {dims}, mode={sig.get('mode', 'n/a')}")
     if "container" in sig:
         lines.append(f"- container={sig['container']}, size={len(data)} bytes")
         if sig.get("probe") == "ffprobe":
@@ -388,6 +444,18 @@ if __name__ == "__main__":  # self-check: fails loudly if any parser regresses
     Image.new("RGB", (37, 23), "red").save(png, format="PNG")
     s = inspect_bytes(png.getvalue(), "image")
     assert s["format"] == "PNG" and (s["width"], s["height"]) == (37, 23), s
+    assert s["fileSizeBytes"] == len(png.getvalue()), s
+    assert s["mimeType"] == "image/png", s
+
+    # Regression: an image must never be shadowed by an ffprobe deep probe,
+    # otherwise width/height/mode are lost and reports say "dimensions unknown".
+    _orig_probe = _probe_ffprobe
+    _probe_ffprobe = lambda *a, **k: {"streams": [{"codec_type": "video", "width": 999, "height": 888}], "format": {"format_name": "png"}}
+    try:
+        s = inspect_bytes(png.getvalue(), "image")
+        assert (s["width"], s["height"], s["format"]) == (37, 23, "PNG"), s
+    finally:
+        _probe_ffprobe = _orig_probe
 
     # WAV synthesized
     rate, ch, bits = 8000, 1, 16

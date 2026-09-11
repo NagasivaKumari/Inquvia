@@ -149,6 +149,27 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     inv["findings"] = result["findings"]
     inv["limitations"] = result["limitations"]
     inv["contradictions"] = result["contradictions"]
+
+    # Question-driven document result: the answer to the user's actual question,
+    # its reasoning, the selected passages (with page provenance + nature), and
+    # explicit gaps. Only present when the analyzer produced them.
+    for key in ("answer", "assessmentReasoning", "evidenceItems",
+                "missingInformation", "additionalSourcesNeeded"):
+        if result.get(key) not in (None, "", []):
+            inv[key] = result[key]
+
+    # Deterministic evidence-relationship summary so the report (and text
+    # export) can render supporting/contradicting counts that genuinely reflect
+    # what the investigation established, not raw zero-filled defaults.
+    inv["evidenceRelationships"] = result.get("evidenceRelationships") or {
+        "supporting": len([e for e in evidence if e.get("signal") == "supporting" or e.get("supportsClaim")]),
+        "contradicting": len([e for e in evidence if e.get("signal") == "contradictory" or e.get("contradictsClaim")]),
+        "established": any(
+            e.get("signal") in ("supporting", "contradictory")
+            or e.get("supportsClaim") or e.get("contradictsClaim")
+            for e in evidence
+        ),
+    }
     inv["sourcesUsed"] = (
         result.get("sourcesUsed") if result.get("sourcesUsed") else [e.get("source") for e in evidence]
     )

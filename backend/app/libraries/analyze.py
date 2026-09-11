@@ -88,10 +88,18 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
         conclusion = "inconclusive"
 
     if evidence:
-        conclusion_text = (
-            f"Based on {len(evidence)} acquired evidence item(s), {len(supporting)} supporting "
-            f"and {len(contradicting)} contradicting, Inquvia reached the assessment below."
-        )
+        if supporting or contradicting:
+            conclusion_text = (
+                f"Based on {len(evidence)} acquired evidence item(s), {len(supporting)} "
+                f"established support and {len(contradicting)} established contradiction."
+            )
+        else:
+            conclusion_text = (
+                f"Based on {len(evidence)} acquired evidence item(s), no supporting or "
+                "contradicting evidence relationship was established. Zero counts mean no "
+                "relationship was asserted — the evidence neither supported nor disproved "
+                "the claim."
+            )
     else:
         conclusion_text = "Insufficient evidence acquired to render a supported assessment."
 
@@ -163,6 +171,11 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
         "findings": findings if findings else [f"{e.get('source','')}: {e.get('finding','')}" for e in evidence],
         "limitations": limitations,
         "contradictions": [e["finding"] for e in contradicting],
+        "evidenceRelationships": {
+            "supporting": len(supporting),
+            "contradicting": len(contradicting),
+            "established": bool(supporting or contradicting),
+        },
     }
 
 
@@ -215,6 +228,42 @@ def normalize_conclusion(raw: str | None):
         return None
     v = raw.strip().lower().replace(" ", "_")
     return v if v in VALID_CONCLUSIONS else None
+
+
+async def run_ai_ocr(data: bytes, mime: str | None, pages: list[dict]) -> dict:
+    """The app's existing OCR capability: hand the scanned attachment to the
+    configured multimodal AI and collect verbatim per-page transcriptions.
+
+    Returns {page_number: text} for the pages the model could read; {} when no
+    OCR-capable provider is configured, the attachment can't be reached, or the
+    model produced nothing. Text is the model's transcription of the rendered
+    page — OCR-derived evidence, labeled as such, never invented from nothing.
+    """
+    if not data or not pages:
+        return {}
+    try:
+        import base64
+        from ..libraries import ai as ai_lib
+        part = {"file": {"mimeType": mime or "application/octet-stream",
+                         "base64": base64.b64encode(data).decode("ascii")}}
+        prompt = (
+            "You are the OCR step of an evidence pipeline. The attached document contains pages "
+            "without a selectable text layer. Transcribe the visible content VERBATIM for every page: "
+            "exact words, numbers and dates as printed; do not summarize, interpret, or add anything "
+            "not present on the page. If a page is blank, transcribe it as an empty string. "
+            'Return ONLY JSON: {"pages": [{"page": <number>, "text": "<verbatim transcription>"}, ...]}'
+        )
+        raw = await ai_lib.call_ai_with_parts(prompt, [part])
+        payload = ai_lib.parse_ai_json(raw)
+        out = {}
+        for item in (payload or {}).get("pages") or []:
+            if isinstance(item, dict) and isinstance(item.get("page"), int) and isinstance(item.get("text"), str):
+                t = item["text"].strip()
+                if t:
+                    out[item["page"]] = t
+        return out
+    except Exception:
+        return {}
 
 
 read_stored_text = storage.read_stored_text

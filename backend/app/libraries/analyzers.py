@@ -1,5 +1,5 @@
 """Capability analyzer registry (mirrors investigation/analyzers.ts)."""
-from ..libraries import storage, ai as ai_lib, signals as signals_lib
+from ..libraries import storage, ai as ai_lib, signals as signals_lib, document_extract
 from ..libraries.analyze import (
     heuristic_analysis,
     redundant_evidence_ids,
@@ -8,6 +8,7 @@ from ..libraries.analyze import (
     VALID_RISKS,
     read_stored_text,
     read_stored_file_base64,
+    run_ai_ocr,
 )
 
 REGISTRY = {}
@@ -81,6 +82,8 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
     conclusion_text_raw = raw.get("conclusionText")
     if isinstance(conclusion_text_raw, str) and conclusion_text_raw and conclusion_text_raw != base["conclusionText"]:
         conclusion_text = conclusion_text_raw
+    elif raw.get("answer"):
+        conclusion_text = f"Answer: {raw['answer']}".strip()
     elif findings or conclusion != base["conclusion"]:
         summary = " ".join(findings[:1]) or conclusion.replace("_", " ").upper()
         conclusion_text = f"Assessment: {conclusion.replace('_', ' ').upper()}. {summary}".strip()
@@ -91,7 +94,7 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
             f"Assessment: {conclusion.replace('_', ' ').upper()}. "
             f"{' '.join(limitations) if limitations else ''}"
         ).strip()
-    return {
+    result = {
         "conclusion": conclusion,
         "conclusionText": conclusion_text,
         "confidence": confidence,
@@ -101,7 +104,23 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
         "limitations": limitations if limitations else base["limitations"],
         "uncertainty": uncertainty,
         "sourcesUsed": sources_used,
+        "evidenceRelationships": base.get("evidenceRelationships") or {
+            "supporting": 0, "contradicting": 0, "established": False,
+        },
     }
+    # Question-relevant structured document result: the answer to the user's
+    # question, the reasoning, the selected passages (with provenance), and
+    # explicit gaps. Passed through so the engine can persist them.
+    for key in (
+        "answer",
+        "assessmentReasoning",
+        "evidenceItems",
+        "missingInformation",
+        "additionalSourcesNeeded",
+    ):
+        if raw.get(key) not in (None, "", []):
+            result[key] = raw.get(key)
+    return result
 
 
 async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
@@ -238,26 +257,153 @@ async def _video_analyzer(inv, evidence):
     return await _run_analysis(inv, evidence, system_prompt, parts)
 
 
+_DOCUMENT_RULES = (
+    "The user's actual investigation question below is the PRIMARY objective of this analysis. "
+    "Answer THAT question using the provided document and acquired evidence. Do not produce a generic "
+    "document summary; every finding and the final answer must relate to the user's question. "
+    "If the document does not contain enough evidence to answer it, say so honestly (missingInformation) and "
+    "end with conclusion 'insufficient_evidence' or 'inconclusive'. Never manufacture evidence merely because "
+    "a question was asked. "
+    "Search the ENTIRE document, not just the first matching passage: for numerical, date, identity, factual, "
+    "or timeline questions, locate and compare ALL relevant occurrences and reconcile inconsistencies between "
+    "them instead of relying on the first match. "
+    "For each passage you rely on, return its exact text (quote), page number, any section/table/paragraph "
+    "available, and its provenance (source: 'text_layer' for selectable text, 'ocr' for scanned pages read "
+    "from the rendered image — never invent a source). "
+    "Classify the nature of each passage: 'stated_fact' (the document directly asserts a fact), "
+    "'document_claim' (the document itself makes/asserts a claim, distinct from established fact), "
+    "'observation' (something the document records or reports), 'interpretation' (your inference drawn from "
+    "the text), 'uncertain' (the text is ambiguous), or 'missing' (the document lacks this; see missingInformation). "
+    "Mark each passage's relationship to the question as 'supporting', 'contradictory', or 'unestablished'. "
+    "If neither supporting nor contradictory evidence is established, represent that accurately; do not force "
+    "a verdict. "
+    "For authenticity/verification questions: distinguish evidence contained in the document itself from "
+    "independent authentication — never claim authenticity merely because the document looks official. "
+    "If the question can only be answered with information the document cannot provide, identify in "
+    "additionalSourcesNeeded what other evidence/source would be required, and do not silently use another source. "
+)
+
+_DOCUMENT_JSON_SCHEMA = (
+    "{ conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+    "confidence: number 0-100, "
+    "answer: string (your final answer to the USER'S question, or an explicit insufficiency statement), "
+    "assessmentReasoning: string (explain why the available evidence supports, weakens, contradicts, or fails "
+    "to establish the user's claim), "
+    "evidenceItems: [ { quote: string, page: number|null, section: string|null, table: string|null, "
+    "paragraph: string|null, source: 'text_layer'|'ocr'|'plain_text', "
+    "nature: 'stated_fact'|'document_claim'|'observation'|'interpretation'|'uncertain'|'missing', "
+    "relationship: 'supporting'|'contradictory'|'unestablished', rationale: string } ], "
+    "contradictions: string[] (exact conflicting passages with their locations), "
+    "findings: string[], limitations: string[], "
+    "missingInformation: string[] (exactly what is absent from the document), "
+    "additionalSourcesNeeded: string[], uncertainty: string, sourcesUsed: string[], "
+    "risk: 'low'|'moderate'|'high'|'unknown' }"
+)
+
+
+def _page_text_block(pages: list[dict], max_chars: int = 150000) -> str:
+    """Render numbered pages with provenance labels, bounded for the model."""
+    # ponytail: fixed context cap; chunk/retrieve when documents routinely
+    # exceed the model context window.
+    block = []
+    total = 0
+    for p in pages:
+        label = p.get("source") or "text_layer"
+        text = p.get("text")
+        if text:
+            chunk = f"[PAGE {p['page']}] (source: {label})\n{text}"
+        else:
+            chunk = f"[PAGE {p['page']}] (source: {label})\n(no readable text recovered from this page)"
+        if total + len(chunk) > max_chars:
+            block.append(f"[PAGE {p['page']}] (source: {label})\n[text truncated for model context]")
+            break
+        block.append(chunk)
+        total += len(chunk)
+    return "\n\n".join(block)
+
+
+async def _load_document_pages(inv, input_: dict | None) -> list[dict]:
+    """Full page extraction for the analyzer: prefers the extraction cached by
+    the document_verify evidence check; falls back to fresh extraction with OCR."""
+    if input_:
+        cached = input_.get("documentExtraction") or {}
+        pages = cached.get("pages")
+        if pages:
+            return pages
+        if input_.get("filePath"):
+            data = signals_lib.load_bytes(input_["filePath"])
+            if data:
+                extracted = await document_extract.extract_document_pages_with_ocr(
+                    data, input_.get("mimeType"), run_ai_ocr
+                )
+                if extracted:
+                    input_["documentExtraction"] = extracted
+                    return extracted["pages"]
+    return []
+
+
+async def _run_document_analysis(inv, evidence, system_prompt, context_parts) -> dict:
+    """Document-specific reasoning loop: the full page structure is the primary
+    evidence body (comprehensive extraction), the user's question is the sole
+    objective, and page provenance is preserved in the model output."""
+    effective = [e for e in evidence if e["id"] not in redundant_evidence_ids(inv, evidence)]
+    if effective:
+        evidence_text = "\n".join(
+            f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
+            for i, e in enumerate(effective)
+        )
+        system_prompt += (
+            "\nFor each acquired evidence item you used, also return 'evidenceSignals': "
+            "[{'id': <evidence id>, 'signal': 'supporting'|'contradictory'|'uncertain'}]. "
+            "Classify each item honestly; items that neither support nor contradict the question are 'uncertain'."
+        )
+    elif evidence:
+        return heuristic_analysis(inv, evidence)
+    else:
+        evidence_text = "No external evidence was acquired. Analyze only the submitted document and state limitations clearly."
+    context_parts.append({
+        "text": f"INVESTIGATION_OBJECTIVE (the user's question — your sole objective): {inv.get('question')}\n\n"
+                f"ACQUIRED EVIDENCE:\n{evidence_text}"
+    })
+    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
+    raw = ai_lib.parse_ai_json(raw_text) or {}
+    result = _merge_ai_raw(inv, evidence, raw)
+    # The document's relationship summary comes from the SELECTED passages, not
+    # from counting every page record. Zero on both sides = no relationship was
+    # established, represented accurately (never forced).
+    items = [i for i in (raw.get("evidenceItems") or []) if isinstance(i, dict)]
+    supporting = [i for i in items if i.get("relationship") == "supporting"]
+    contradicting = [i for i in items if i.get("relationship") == "contradictory"]
+    if items:
+        result["evidenceRelationships"] = {
+            "supporting": len(supporting),
+            "contradicting": len(contradicting),
+            "established": bool(supporting or contradicting),
+        }
+    return result
+
+
 async def _document_analyzer(inv, evidence):
-    system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's document forensics analyst. Extract claims from the provided document, identify internal inconsistencies, and flag suspicious or "
-        "altered content, together with acquired evidence. Express confidence honestly. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
-    )
     input_ = _find_input(inv, "document")
-    parts = []
-    extracted = None
-    if input_ and input_.get("filePath"):
-        extracted = read_stored_text(input_["filePath"])
-        if not extracted:
-            f = read_stored_file_base64(input_["filePath"])
-            if f:
-                parts.append({"file": f})
-    if extracted:
-        parts.append({"text": f"DOCUMENT_TEXT:\n{extracted}"})
-    elif not any(p.get("file") for p in parts):
-        parts.append({"text": f"DOCUMENT_CONTEXT: {input_.get('content') if input_ else _first_text_input(inv) or ''}"})
-    return await _run_analysis(inv, evidence, system_prompt, parts)
+    pages = await _load_document_pages(inv, input_)
+    if not pages:
+        # No readable document content → honest insufficiency, never fabricated.
+        return heuristic_analysis(inv, evidence)
+
+    extraction_source = (input_.get("documentExtraction") or {}).get("extractionSource") or "mixed"
+    page_block = _page_text_block(pages)
+
+    system_prompt = (
+        _QUESTION_RULE +
+        _DOCUMENT_RULES +
+        "You are Inquvia's document evidence analyst. " +
+        f"Return ONLY JSON with this exact schema:\n{_DOCUMENT_JSON_SCHEMA}"
+    )
+    parts = [{"text": page_block}]
+    if input_:
+        parts.append({"text": f"DOCUMENT: {input_.get('content') or input_.get('fileName') or 'submitted document'} "
+                             f"(extraction: {extraction_source}, {len(pages)} page(s))"})
+    return await _run_document_analysis(inv, evidence, system_prompt, parts)
 
 
 async def _source_analyzer(inv, evidence):

@@ -82,6 +82,10 @@ export interface InvestigationInput {
   fileName?: string;
   mimeType?: string;
   filePath?: string;
+  /** Structured file-level signals extracted at evidence-check time (format,
+   * dimensions, mode, size, EXIF presence, PNG text tags). Only present for
+   * media inputs whose file was successfully probed. */
+  fileSignals?: Record<string, unknown>;
 }
 
 export interface Provider {
@@ -101,7 +105,7 @@ export interface CapabilityNeed {
   id: string;
   capability: string;
   reason: string;
-  estimatedCost: number;
+  estimatedCost?: number;
   expectedValue: number;
   status: "pending" | "selected" | "purchased" | "failed" | "skipped";
   providerId?: string;
@@ -124,9 +128,12 @@ export interface EvidenceItem {
   source: string;
   timestamp: string;
   finding: string;
-  confidence: number;
+  /** The backend stores `null` for items produced by internal checks. */
+  confidence?: number | null;
   status: "pending" | "collected" | "failed";
-  cost: number;
+  /** The backend does not currently write `cost` on evidence items; renderers
+   * must treat it as optional (see src/lib/report-format.ts). */
+  cost?: number;
   signal: EvidenceSignal;
   capability?: string;
   providerId?: string;
@@ -167,6 +174,53 @@ export interface StageProgress {
   id: string;
   label: string;
   status: StageStatus;
+}
+
+/** Web inspection result for URL inputs (from web_inspector.py). */
+export interface WebInspection {
+  url: string;
+  finalUrl: string;
+  hostname: string;
+  dnsRecords: string[];
+  sslValid: boolean;
+  sslIssuer: string | null;
+  sslDaysRemaining: number | null;
+  statusCode: number | null;
+  isOnline: boolean;
+  access: {
+    limited: boolean;
+    reason: string | null;
+    blocked: boolean;
+    statusCode: number | null;
+    redirects: number;
+  };
+  redirects: number;
+  httpError: string | null;
+  title: string | null;
+  metaDescription: string | null;
+  bodySnippet: string | null;
+  content: string | null;
+  fullText: string | null;
+  chunks: string[];
+  chunkCount: number;
+  totalTextLength: number;
+  renderMode: string;
+  jsDetected: boolean;
+  renderNote: string | null;
+  headings: Array<{ level: number; text: string }>;
+  paragraphs: string[];
+  lists: Array<{ ordered: boolean; items: string[] }>;
+  tables: Array<{ rows: string[][] }>;
+  metadata: Record<string, string>;
+  links: Array<{ href: string; text: string }>;
+  headingCount: number;
+  paragraphCount: number;
+  listCount: number;
+  tableCount: number;
+  linkCount: number;
+  extractionFull: boolean;
+  extractionLimited: boolean;
+  sourceUrl: string | null;
 }
 
 export interface Investigation {
@@ -216,6 +270,14 @@ export interface Investigation {
   evidenceGraph?: EvidenceGraph;
   /** Human reason a blocked/unavailable investigation could not complete. */
   blockReason?: string;
+  /** Evidence-relationship counts. */
+  evidenceRelationships?: {
+    supporting: number;
+    contradicting: number;
+    established: boolean;
+  };
+  /** Web inspection result for URL inputs. */
+  webInspection?: WebInspection;
 }
 
 export interface DashboardStats {

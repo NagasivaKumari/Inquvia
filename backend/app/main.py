@@ -608,6 +608,62 @@ async def api_investigation_file(inv_id: str, file_name: str, request: Request):
     )
 
 
+@app.get("/api/sources/{inv_id}/{source_ref:path}")
+async def api_source_file(inv_id: str, source_ref: str, request: Request):
+    """Serve an uploaded source by its storage reference (owner-only).
+
+    ``source_ref`` is the ``filePath`` stored on the investigation input
+    (e.g. ``gridfs:<ObjectId>``).  This endpoint is the generic,
+    auth-aware path for rendering original uploaded media in the UI.
+    """
+    from .libraries import storage as _storage
+    from urllib.parse import quote, unquote
+
+    user = _resolve_user(request)
+    if not user:
+        return _unauthorized()
+    if not _owns(user, inv_id):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    investigation = db.get_investigation(inv_id)
+    if not investigation:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    # source_ref may be URL-encoded by the frontend
+    decoded_ref = unquote(source_ref)
+
+    hit = next(
+        (i for i in (investigation.get("inputs") or [])
+         if i.get("filePath") and (i["filePath"] == decoded_ref or i["filePath"] == source_ref)),
+        None,
+    )
+    if not hit:
+        return JSONResponse({"error": "Source not found"}, status_code=404)
+
+    stored = db.read_upload_file(hit["filePath"])
+    buf = stored[0] if stored else None
+    mime = (stored[1] if stored else None) or hit.get("mimeType") or "application/octet-stream"
+    if buf is None:
+        p = _storage.resolve_stored_path(hit["filePath"])
+        if p:
+            try:
+                buf = p.read_bytes()
+            except OSError:
+                buf = None
+    if buf is None:
+        return JSONResponse({"error": "Source not found"}, status_code=404)
+
+    file_name = hit.get("fileName") or "source"
+    return Response(
+        content=buf,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{quote(file_name)}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 # ── Investigate portfolio ──
 @app.get("/api/investigate")
 async def api_investigate():

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { SourceViewer } from "@/components/sources/SourceViewer";
 import type {
   Investigation,
   EvidenceAcquisition,
@@ -289,49 +290,95 @@ function SubmittedSource({ inv }: { inv: Investigation }) {
   return (
     <section className={`card ${styles.section}`}>
       <h2 className="heading-sm">Uploaded source</h2>
-      {plain.length > 0 && (
-        <ul className={styles.findings}>
-          {plain.map((i, n) => (
-            <li key={n}>
+      {plain.map((i, n) => (
+        <div key={n} style={{ marginTop: 12 }}>
+          {i.type === "url" ? (
+            <UrlSourceInput input={i} inspection={inv.webInspection} />
+          ) : (
+            <div className="text-muted">
               <strong>{i.type}:</strong> {i.content}
-            </li>
-          ))}
-        </ul>
-      )}
+            </div>
+          )}
+        </div>
+      ))}
       {files.map((f, i) => {
-        const src = `${API_BASE}/api/investigations/${inv.id}/files/${encodeURIComponent(
-          f.fileName ?? "file"
-        )}`;
-        const style: React.CSSProperties = { maxWidth: "100%", marginTop: 8 };
-        const mime = (f.mimeType ?? "").toLowerCase();
+        const hasSignals = !!(
+          f.fileSignals &&
+          (f.fileSignals as { format?: string }).format
+        );
         return (
           <div key={i} style={{ marginTop: 12 }}>
             <div className="text-muted">
               {f.type}: {f.fileName} {f.mimeType ? `(${f.mimeType})` : ""}
             </div>
-            {f.type === "video" ? (
-              <video controls preload="metadata" src={src} style={style} />
-            ) : f.type === "audio" ? (
-              <audio controls preload="metadata" src={src} style={style} />
-            ) : f.type === "image" ? (
-              <img src={src} alt={f.fileName ?? "uploaded image"} style={style} />
-            ) : mime === "application/pdf" ? (
-              <iframe
-                src={src}
-                title={f.fileName ?? "uploaded pdf"}
-                style={{ width: "100%", height: 480, marginTop: 8, border: "1px solid var(--color-border-subtle)", borderRadius: "var(--radius-md)", background: "#fff" }}
-              />
-            ) : mime.startsWith("text/") || mime.includes("json") || mime.includes("csv") ? (
-              <TextFileContent src={src} />
-            ) : (
-              <a href={src} target="_blank" rel="noreferrer">
-                Open uploaded file
-              </a>
+            {hasSignals && (
+              <SignalsLine signals={f.fileSignals} />
             )}
+            <SourceViewer invId={inv.id} input={f} />
           </div>
         );
       })}
     </section>
+  );
+}
+
+/** File-level signals shown alongside a rendered source (provenance, kept
+ * separate from the rendered original). */
+function SignalsLine({ signals }: { signals?: Record<string, unknown> }) {
+  if (!signals) return null;
+  const s = signals as {
+    format?: string;
+    width?: number;
+    height?: number;
+    mode?: string;
+    exifPresent?: boolean;
+  };
+  if (!s.format) return null;
+  return (
+    <div className="text-muted" style={{ fontSize: "0.8125rem" }}>
+      {s.format}
+      {s.width && s.height ? ` · ${s.width}×${s.height}px` : ""}
+      {` · mode ${s.mode}`}
+      {` · EXIF ${s.exifPresent ? "present" : "not present"}`}
+    </div>
+  );
+}
+
+/** URL input: show the submitted URL plainly, and the content actually
+ * retrieved from it (webInspection) separately — never pretending retrieved
+ * content is the original submitted source. */
+function UrlSourceInput({
+  input,
+  inspection,
+}: {
+  input: Investigation["inputs"][number];
+  inspection?: Investigation["webInspection"];
+}) {
+  const url = input.content;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="text-muted">
+        <strong>url:</strong>{" "}
+        <a href={url} target="_blank" rel="noreferrer">{url}</a>
+      </div>
+      {inspection ? (
+        <div className="text-muted" style={{ fontSize: "0.875rem", marginTop: 8 }}>
+          {inspection.title && <p><strong>Page title:</strong> {inspection.title}</p>}
+          {inspection.bodySnippet ? (
+            <p style={{ marginTop: 4 }}>{inspection.bodySnippet}</p>
+          ) : inspection.access?.reason ? (
+            <p style={{ marginTop: 4 }}>Content unavailable: {inspection.access.reason}</p>
+          ) : null}
+          {!inspection.bodySnippet && !inspection.access?.reason && (
+            <p style={{ marginTop: 4 }}>No content was retrieved from this URL.</p>
+          )}
+        </div>
+      ) : (
+        <p className="text-muted" style={{ fontSize: "0.8125rem", marginTop: 4 }}>
+          No content retrieved yet.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -536,6 +583,13 @@ function AssessmentPanel({
             <div><strong>{acquiredCount}</strong><span>evidence acquired</span></div>
             <div><strong>${microToUsdc(costMicro)}</strong><span>cost</span></div>
           </div>
+          {supporting === 0 && contradictory === 0 && (
+            <p className="text-muted" style={{ marginTop: 8 }}>
+              No supporting or contradicting evidence relationship was established.
+              Zero counts mean no relationship was asserted — the evidence neither
+              supported nor disproved the claim.
+            </p>
+          )}
         </>
       ) : (
         <p className="text-muted">

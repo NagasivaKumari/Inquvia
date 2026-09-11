@@ -1,5 +1,6 @@
 import type { EvidenceItem } from "@/lib/types";
 import { SIGNAL_LABELS } from "@/lib/types";
+import { formatUsdc, formatConfidence, labelOr } from "@/lib/report-format";
 import styles from "./EvidenceCard.module.css";
 
 interface Props {
@@ -35,8 +36,8 @@ export function EvidenceBoard({ items, title = "Evidence collected" }: Props) {
               <p>{item.finding}</p>
             </div>
             <div className={styles.footer}>
-              <span>Confidence: {item.confidence}%</span>
-              <span>Cost: ${item.cost.toFixed(3)}</span>
+              <span>Confidence: {formatConfidence(item.confidence)}</span>
+              <span>Cost: {formatUsdc(item.cost, 3)}</span>
             </div>
           </div>
         ))}
