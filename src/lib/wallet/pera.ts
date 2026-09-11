@@ -24,24 +24,63 @@ export function getPera(): PeraWalletConnect {
 }
 
 /** Ensure the Pera WalletConnect session is initialized and connected before signing. */
-export async function ensurePeraSession(): Promise<PeraWalletConnect> {
+export async function ensurePeraSession(isForced?: boolean): Promise<PeraWalletConnect> {
+  const emit = (step: string, extra?: Record<string, unknown>) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("inquvia:pay-diagnostic", { detail: { step, ...extra } })
+      );
+    }
+  };
   const pera = getPera();
+  if (isForced) {
+      console.log("ensurePeraSession: reconnecting session (Forced)");
+      emit("pera-reconnect-start");
+      await disconnectPera().catch(() => {});
+  }
   // Always refresh the relay session first: isConnected() can stay true while
   // the WalletConnect bridge went stale, which made signTransaction hang
   // forever with no error. reconnectSession() resurrects it cheaply.
   const refreshed = await withDeadline(pera.reconnectSession(), 20000)
-    .catch(() => []);
+    .catch((err) => {
+      if (isForced) {
+        console.warn("ensurePeraSession: reconnect failed", err);
+        emit("pera-reconnect-failed", { error: err.message });
+      }
+      return [];
+    });
   if (refreshed && refreshed.length > 0) {
-    return pera;
-  }
-  try {
-    const accounts = await withDeadline(pera.connect(), 60000);
-    if (accounts && accounts.length > 0) {
+    if (pera.connector && !pera.connector.connected) {
+      console.warn("ensurePeraSession: connector exists but not connected; forcing fresh reconnect");
+      await disconnectPera().catch(() => {});
+    } else {
+      if (isForced) {
+          console.log("ensurePeraSession: session refreshed");
+          emit("pera-reconnect-success");
+      }
       return pera;
     }
-  } catch {
-    // Connect failed or no active session
   }
+  try {
+    if (isForced) {
+        console.log("ensurePeraSession: connecting");
+        emit("pera-connect-start");
+    }
+    const accounts = await withDeadline(pera.connect(), 60000);
+    if (accounts && accounts.length > 0) {
+      if (isForced) {
+        console.log("ensurePeraSession: connected");
+        emit("pera-connect-success");
+      }
+      return pera;
+    }
+  } catch (err) {
+    if (isForced) {
+        console.error("ensurePeraSession: connection failed", err);
+        emit("pera-connect-failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  if (isForced) console.error("ensurePeraSession: connection failed");
   throw new Error(
     "Pera connection was not completed. Approve the connect request shown in the Pera app " +
       "(or the QR on screen) before sending the payment."

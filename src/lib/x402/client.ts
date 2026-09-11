@@ -1,7 +1,7 @@
 import { x402Client, wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
 import { x402HTTPClient } from "@x402/core/http";
-import type { PaymentRequirements, PaymentPayloadResult } from "@x402/core/types";
+import type { PaymentRequirements, PaymentPayloadResult, PaymentPayload } from "@x402/core/types";
 import algosdk from "algosdk";
 import { API_BASE, ALGORAND_CONFIG } from "../config";
 import { createX402Signer } from "../wallet/x402Signer";
@@ -256,8 +256,8 @@ interface X402PaymentBundle {
   httpClient: x402HTTPClient;
 }
 
-function buildX402Payment(address: string): X402PaymentBundle {
-  const signer = createX402Signer(address);
+function buildX402Payment(address: string, capabilityId?: string): X402PaymentBundle {
+  const signer = createX402Signer(address, capabilityId);
   const scheme = new AlgodExactAvmScheme(signer);
   const client = new x402Client()
     .register("algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=", scheme)
@@ -319,7 +319,8 @@ export async function payForCapability(input: {
   idempotencyKey?: string;
   signal?: AbortSignal;
 }): Promise<PaidInvestigationResult> {
-  const { fetchWithPay, httpClient } = buildX402Payment(input.address);
+  const capabilityId = input.endpoint.split("/").pop();
+  const { fetchWithPay, httpClient } = buildX402Payment(input.address, capabilityId);
   const hasFiles = !!input.files && input.files.length > 0;
 
   const buildBody = (): { headers: Record<string, string>; body: BodyInit } => {
@@ -373,35 +374,45 @@ export async function payForCapability(input: {
 
   let res: Response;
   if (hasFiles) {
-    // ponytail: multipart bodies are single-use streams — wrapFetchWithPayment
-    // re-sends the same drained FormData on retry, so the paid upload arrives
-    // EMPTY. Do the 402 → sign → retry handshake by hand with a fresh body per
-    // round instead of trusting the library's clone.
-    emitPay("gate-rejected", { message: "Payment required — building approved transaction." });
+    // Multipart bodies are single-use streams — wrapFetchWithPayment re-sends
+    // the same drained FormData on retry (arrives empty). We do the
+    // 402 → sign → retry handshake manually with a fresh body each round.
+    emitPay("gate-rejected", { message: "Probing endpoint for payment requirements…" });
     res = await call(apiFetch as typeof fetchWithPay, {}, buildBody().body);
+
     if (res.status === 402) {
-      const paymentRequired = httpClient.getPaymentRequiredResponse((name) =>
-        res.headers.get(name)
-      );
-      const hookHeaders =
-        (await httpClient
-          .handlePaymentRequired(paymentRequired, endpointUrl)
-          .catch(() => null)) ?? {};
-      const payload = await httpClient.createPaymentPayload(paymentRequired);
+      emitPay("requesting-approval");
+      let payload: PaymentPayload;
+      try {
+        const paymentRequired = httpClient.getPaymentRequiredResponse((name) => res.headers.get(name));
+        payload = await httpClient.createPaymentPayload(paymentRequired);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        emitPay("error", { message: `Payment signing failed: ${message}` });
+        throw new Error(`Payment signing failed: ${message}`);
+      }
+      emitPay("request-approved");
+
+      // Retry the request with the signed payment header and a FRESH body
+      const paymentHeader = httpClient.encodePaymentSignatureHeader(payload);
       res = await call(
         apiFetch as typeof fetchWithPay,
-        { ...hookHeaders, ...httpClient.encodePaymentSignatureHeader(payload) },
-        buildBody().body
+        { ...paymentHeader },
+        buildBody().body // REBUILT FRESH
       );
+
+      // If the library says the response needs one more round-trip, retry once
       const { recovered } = await httpClient
         .processPaymentResult(payload, (name) => res.headers.get(name), res.status)
-        .catch(() => ({ recovered: false }) as { recovered: boolean });
+        .catch(() => ({ recovered: false }));
       if (recovered) {
+        emitPay("retrying-payment", { message: "Retrying after settlement recovery." });
+        const paymentRequired = httpClient.getPaymentRequiredResponse((name) => res.headers.get(name));
         const freshPayload = await httpClient.createPaymentPayload(paymentRequired);
         res = await call(
           apiFetch as typeof fetchWithPay,
           { ...httpClient.encodePaymentSignatureHeader(freshPayload) },
-          buildBody().body
+          buildBody().body // REBUILT FRESH
         );
         await httpClient.processPaymentResult(
           freshPayload,

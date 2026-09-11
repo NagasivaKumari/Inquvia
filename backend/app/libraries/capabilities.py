@@ -73,10 +73,48 @@ async def run_image_investigation(args):
 async def run_video_investigation(args):
     question = (args.get("question") or "").strip()
     reqs = await planner.plan_dynamic_requirements(question, ["video"])
-    return await run_capability(
-        "video-investigation", args, reqs,
-        "Video Investigation",
-    )
+    background_tasks = args.get("background_tasks")
+    
+    # Initialize with 'queued' status
+    inv = engine.start_capability_investigation({
+        "id": args["id"], "userId": args.get("userId"), "question": args["question"],
+        "inputs": args.get("inputs") or [], "capability": "video-investigation", "title": "Video Investigation",
+        "idempotencyKey": args.get("idempotencyKey"),
+    })
+    inv["status"] = "queued"
+    db.save_investigation(inv)
+    
+    if background_tasks:
+        background_tasks.add_task(run_video_investigation_async, inv["id"], reqs)
+    else:
+        # Fallback if no background tasks (e.g. tests)
+        await run_video_investigation_async(inv["id"], reqs)
+    
+    return inv
+
+
+async def run_video_investigation_async(inv_id: str, reqs: list):
+    try:
+        inv = db.get_investigation(inv_id)
+        if not inv:
+            return
+        
+        inv["status"] = "processing"
+        db.save_investigation(inv)
+        
+        # Original processing logic from run_capability
+        engine.plan_capability(inv, reqs)
+        
+        inv = db.get_investigation(inv_id)
+        await evidence_checks.run_evidence_checks(inv)
+        await engine.analyze_investigation(inv_id)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        inv = db.get_investigation(inv_id)
+        if inv:
+            inv["status"] = "failed"
+            inv["limitations"] = [f"Processing failed: {str(e)}"]
+            db.save_investigation(inv)
 
 
 async def run_document_investigation(args):

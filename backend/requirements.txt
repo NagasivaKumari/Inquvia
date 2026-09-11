@@ -7,6 +7,7 @@ httpx
 x402-avm[fastapi,avm]
 x402-avm[extensions]
 cryptography
+Pillow
 
 # Test dependencies
 pytest

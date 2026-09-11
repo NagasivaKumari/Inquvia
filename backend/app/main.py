@@ -10,7 +10,7 @@ import base64
 from html import escape
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.requests import ClientDisconnect
 
@@ -853,7 +853,12 @@ async def api_x402_activity(request: Request, investigation_id: str = ""):
 
 
 # ── Atomic paid capabilities ──
-async def _handle_atomic_capability(request: Request, capability_id: str):
+async def _handle_atomic_capability(
+    request: Request, capability_id: str, background_tasks: BackgroundTasks | None = None
+):
+    print(f"DEBUG: Entering _handle_atomic_capability for {capability_id}")
+    print(f"DEBUG: Headers: {request.headers}")
+    
     x402_available = _X402_MIDDLEWARE is not None
 
     # FAIL CLOSED: when x402 gating is unavailable the endpoint 402s; it never
@@ -870,18 +875,22 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
         return _unauthorized()
 
     content_type = request.headers.get("content-type") or ""
+    print(f"DEBUG: Content-Type: {content_type}")
+    
     files = []
     body = None
     idempotency_key = request.headers.get("Idempotency-Key") or None
     if "multipart/form-data" in content_type:
         try:
             form = await request.form()
+            print(f"DEBUG: Parsed form keys: {form.keys()}")
         except ClientDisconnect:
             return JSONResponse({
                 "error": "Upload interrupted: the connection closed before the file finished "
                          "uploading. Keep files under 10MB and retry.",
             }, status_code=400)
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG: Form parsing error: {e}")
             return JSONResponse({"error": "Could not read the uploaded file."}, status_code=400)
         body = {
             "question": form.get("question"),
@@ -891,21 +900,27 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
         }
         for f in form.getlist("files"):
             data = await f.read()
+            print(f"DEBUG: Processing file {f.filename}, length={len(data)}, content_type={f.content_type}")
             if data and len(data) > 0:
                 from .libraries.storage import validate_upload
                 ok, err = validate_upload(f.content_type or "", len(data))
                 if not ok:
+                    print(f"DEBUG: File validation failed for {f.filename}: {err}")
                     return JSONResponse({"error": err}, status_code=400)
                 files.append({
                     "data": data,
                     "name": f.filename or "upload.bin",
                     "mime": f.content_type or "application/octet-stream",
                 })
+        print(f"DEBUG: Successfully loaded {len(files)} files")
     else:
         body = await _json(request)
+        print(f"DEBUG: Parsed JSON body: {body}")
 
     try:
-        result = await atomic_route.handle_atomic_paid_request(capability_id, user, body, files, idempotency_key)
+        result = await atomic_route.handle_atomic_paid_request(
+            capability_id, user, body, files, idempotency_key, background_tasks=background_tasks
+        )
     except atomic_route.InputValidationError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception:
@@ -917,6 +932,8 @@ async def _handle_atomic_capability(request: Request, capability_id: str):
         headers["X-X402-Mode"] = "dev-offline"
     resp_obj = result.get("content") or {}
     return JSONResponse(resp_obj, status_code=result.get("status", 200), headers=headers)
+
+
 @app.post("/api/x402/claim-investigation")
 async def claim_investigation(request: Request):
     return await _handle_atomic_capability(request, "claim-investigation")
@@ -928,8 +945,8 @@ async def image_investigation(request: Request):
 
 
 @app.post("/api/x402/video-investigation")
-async def video_investigation(request: Request):
-    return await _handle_atomic_capability(request, "video-investigation")
+async def video_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "video-investigation", background_tasks=background_tasks)
 
 
 @app.post("/api/x402/document-investigation")

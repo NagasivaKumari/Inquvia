@@ -77,7 +77,7 @@ def _build_stored_inputs(parsed: dict, case_id: str) -> list[dict]:
     return inputs
 
 
-async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None) -> dict:
+async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None, background_tasks=None) -> dict:
     """Returns { status, content, headers }. Status 200 on success with the
     Investigation as content."""
     capability = config.get_paid_capability(capability_id)
@@ -95,9 +95,11 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     try:
         parsed = await parse_body(body, files)
     except InputValidationError as e:
+        print(f"DEBUG: InputValidationError: {e}")
         return {"status": 400, "content": {"error": str(e)}}
 
     if not (parsed.get("question") or "").strip():
+        print(f"DEBUG: Missing question in parsed body: {parsed}")
         return {"status": 400, "content": {"error": "Question is required"}}
 
     case_id = f"case_{secrets.token_urlsafe(6)[:10]}"
@@ -134,11 +136,15 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     if not run:
         return {"status": 400, "content": {"error": f"Unknown capability: {capability_id}"}}
     try:
-        result = await run({
+        run_args = {
             "id": case_id, "userId": user["id"],
             "question": (parsed.get("question") or "").strip(),
             "inputs": inputs, "idempotencyKey": idempotency_key,
-        })
+        }
+        if capability_id == "video-investigation" and background_tasks:
+            run_args["background_tasks"] = background_tasks
+
+        result = await run(run_args)
     except caps.InputError as e:
         return {"status": 400, "content": {"error": str(e)}}
 
