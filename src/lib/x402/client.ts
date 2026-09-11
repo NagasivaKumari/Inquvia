@@ -367,6 +367,9 @@ export async function payForCapability(input: {
     res = await postPaid(fetchWithPay);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // The bare 402 is the expected first round of the x402 protocol — the
+    // server asks "who pays?", then we retry with a signed payment header.
+    emitPay("gate-rejected", { message });
     // Retry ONCE only when the payment step failed before a settle could be
     // recorded: a 402 from the server or a payment-build failure means no
     // money moved, so re-running the signed flow is safe (never double-pays).

@@ -73,6 +73,7 @@ function LaunchContent() {
         "payment-params-ready": "Preparing network parameters…",
         "opt-in-required": "Your wallet isn't opted into USDC — approve the asset opt-in in Pera now…",
         "opt-in-ready": "USDC opt-in confirmed. Preparing payment…",
+        "gate-rejected": "Server requests payment — approving $0.50 in Pera now…",
         "requesting-approval": "Approve the payment in the Pera app now…",
         "request-approved": "Payment approved.",
         "retrying-payment": "Payment attempt stalled — retrying once…",
