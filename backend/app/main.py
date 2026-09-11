@@ -237,19 +237,16 @@ async def api_root(request: Request):
 
 @app.get("/logo.png", include_in_schema=False)
 async def logo():
-    here = Path(__file__).resolve().parent
-    for candidate in (
-        here / "assets" / "logo.png",
-        here.parent.parent / "public" / "logo.png",
-        here.parent / "static" / "logo.png",
-    ):
-        if candidate.is_file():
-            return Response(
-                content=candidate.read_bytes(),
-                media_type="image/png",
-                headers={"Cache-Control": "public, max-age=3600"},
-            )
-    return Response(status_code=404)
+    # Explicitly look in the project's public directory from the defined ROOT
+    candidate = config.ROOT / "public" / "logo.png"
+    if candidate.is_file():
+        return Response(
+            content=candidate.read_bytes(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail=f"Logo file not found at {candidate}")
 
 
 @app.get("/.well-known/x402", include_in_schema=False)

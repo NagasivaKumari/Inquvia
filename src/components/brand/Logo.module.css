@@ -10,6 +10,15 @@
   display: flex;
   color: var(--color-navy);
   flex-shrink: 0;
+  align-items: center;
+}
+
+.mark img {
+  display: block;
+  height: 32px;
+  width: auto;
+  max-width: 140px;
+  object-fit: contain;
 }
 
 .name {

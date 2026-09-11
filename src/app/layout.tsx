@@ -18,6 +18,14 @@ export const metadata: Metadata = {
     template: `%s | ${APP_NAME}`,
   },
   description: TAGLINE,
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/logo.png", type: "image/png" },
+    ],
+    apple: "/logo.png",
+    shortcut: "/favicon.ico",
+  },
   openGraph: {
     type: "website",
     siteName: APP_NAME,
