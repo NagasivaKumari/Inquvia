@@ -16,7 +16,7 @@ import logging
 import secrets
 from datetime import datetime, timezone
 
-from .. import db
+from .. import db, config
 from ..libraries import signals as signals_lib
 from ..libraries import web_inspector
 from ..libraries.analyze import read_stored_text
