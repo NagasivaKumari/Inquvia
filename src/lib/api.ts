@@ -45,12 +45,19 @@ export function apiFetch(url: string | URL | Request, init: RequestInit = {}): P
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const fetchPromise = fetch(url, {
+  const nextInit: RequestInit = {
     ...init,
     headers,
     credentials: "include",
     cache: (init.cache as RequestCache) ?? "no-store",
-  });
+  };
+  // wrapFetchWithPayment retries with a cloned Request whose body is a stream.
+  // Chromium requires duplex when that Request is passed with a new init.
+  if (typeof url === "object" && url !== null && "body" in url && (url as Request).body) {
+    (nextInit as RequestInit & { duplex: "half" }).duplex = "half";
+  }
+
+  const fetchPromise = fetch(url, nextInit);
 
   if (isAuthMe && !init.body) {
     _authMeInFlight = fetchPromise

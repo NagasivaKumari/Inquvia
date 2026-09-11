@@ -2,11 +2,39 @@ import { x402Client, wrapFetchWithPayment, decodePaymentResponseHeader } from "@
 import { ExactAvmScheme } from "@x402/avm/exact/client";
 import type { PaymentRequirements, PaymentPayloadResult } from "@x402/core/types";
 import algosdk from "algosdk";
-import { API_BASE, ALGORAND_NETWORK_CAIP2, ALGORAND_CONFIG } from "../config";
+import { API_BASE, ALGORAND_CONFIG } from "../config";
 import { createX402Signer } from "../wallet/x402Signer";
 import { apiFetch } from "../api";
 
 type X402Signer = ConstructorParameters<typeof ExactAvmScheme>[0];
+
+function toAtomicAmount(amount: string, extra?: Record<string, unknown>): bigint {
+  const raw = String(amount ?? "").trim();
+  if (/^\d+$/.test(raw)) return BigInt(raw);
+  const decimals = Number(extra?.decimals ?? 6);
+  const money = raw.replace(/^\$/, "").replace(/,/g, "");
+  if (!/^\d+(\.\d+)?$/.test(money)) {
+    throw new Error(`Invalid payment amount: ${amount}`);
+  }
+  const [whole, frac = ""] = money.split(".");
+  const padded = (frac + "0".repeat(decimals)).slice(0, decimals);
+  return BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(padded || "0");
+}
+
+function suggestedParamsFromAlgod(sp: AlgodTxnParams): algosdk.SuggestedParams {
+  if (!sp.genesisHash) {
+    throw new Error("Algod suggested params missing genesisHash");
+  }
+  return {
+    fee: Number(sp.fee),
+    firstValid: Number(sp.firstRound),
+    lastValid: Number(sp.lastRound),
+    genesisHash: algosdk.base64ToBytes(sp.genesisHash),
+    genesisID: sp.genesisId,
+    minFee: Number(sp.minFee || 1000),
+    flatFee: false,
+  };
+}
 
 /**
  * The published ExactAvmScheme.createPaymentPayload rebuilds each txn through
@@ -40,23 +68,27 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
     x402Version: number,
     requirements: PaymentRequirements
   ): Promise<PaymentPayloadResult> {
+    try {
+      return await this.buildPaymentPayload(x402Version, requirements);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emitPay("error", { message });
+      throw err;
+    }
+  }
+
+  private async buildPaymentPayload(
+    x402Version: number,
+    requirements: PaymentRequirements
+  ): Promise<PaymentPayloadResult> {
     const { amount, asset, payTo, extra } = requirements;
     const feePayer = (extra?.feePayer ?? undefined) as string | undefined;
+    const atomicAmount = toAtomicAmount(String(amount), extra);
     const sp = await this.fetchTransactionParams();
     emitPay("payment-params-ready", { feePayer: !!feePayer });
     const feePerByte = Number(sp.fee);
     const minFee = Number(sp.minFee || 1000);
-    const suggestedParams = {
-      fee: feePerByte,
-      firstValid: Number(sp.firstRound),
-      lastValid: Number(sp.lastRound),
-      genesisHash: sp.genesisHash
-        ? Uint8Array.from(Buffer.from(sp.genesisHash, "base64"))
-        : undefined,
-      genesisId: sp.genesisId,
-      minFee,
-      flatFee: false,
-    };
+    const suggestedParams = suggestedParamsFromAlgod(sp);
     const encodeNote = (s: string) => new TextEncoder().encode(s);
     const assetId = BigInt(
       /^\d+$/.test(asset) ? asset : ALGORAND_CONFIG.usdcAsa
@@ -68,7 +100,7 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
       algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
         sender: this.userSigner.address,
         receiver: payTo,
-        amount: BigInt(amount),
+        amount: atomicAmount,
         assetIndex: assetId,
         note: notePay,
         suggestedParams: { ...suggestedParams, fee: Number(fee), flatFee: flat },
@@ -121,7 +153,7 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
 
     const paymentGroup = encoded.map((bytes, i) => {
       const s = signed[i];
-      return Buffer.from(s ?? bytes).toString("base64");
+      return algosdk.bytesToBase64(s ?? bytes);
     });
 
     return { x402Version, payload: { paymentGroup, paymentIndex } };
@@ -199,21 +231,11 @@ async function ensureUsdcOptIn(address: string): Promise<void> {
     receiver: address,
     amount: 0,
     assetIndex: Number(ALGORAND_CONFIG.usdcAsa),
-    suggestedParams: {
-      fee: Number(sp.fee),
-      firstValid: Number(sp.firstRound),
-      lastValid: Number(sp.lastRound),
-      genesisHash: sp.genesisHash
-        ? Uint8Array.from(Buffer.from(sp.genesisHash, "base64"))
-        : undefined,
-      genesisID: sp.genesisId,
-      minFee: Number(sp.minFee || 1000),
-      flatFee: false,
-    },
+    suggestedParams: suggestedParamsFromAlgod(sp),
   });
   const pera = await ensurePeraSession();
   const signed = await pera.signTransaction([[{ txn, signers: [address] }]]);
-  const blob = Buffer.from(signed[0]).toString("base64");
+  const blob = algosdk.bytesToBase64(signed[0]);
   const broadcast = await fetch(`${API_BASE}/api/x402/broadcast`, {
     method: "POST",
     credentials: "include",
@@ -233,7 +255,10 @@ function buildPaidFetch(address: string) {
   const scheme = new AlgodExactAvmScheme(signer);
   const client = new x402Client()
     .register("algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=", scheme)
-    .register("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", scheme);
+    .register("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", scheme)
+    // @x402/core defaults to a $1 cap, which silently drops every accept
+    // before the wallet is prompted. Investigation price is server-gated.
+    .setSpendControls(false);
   return wrapFetchWithPayment(apiFetch as typeof fetch, client);
 }
 
@@ -290,33 +315,36 @@ export async function payForCapability(input: {
 }): Promise<PaidInvestigationResult> {
   const fetchWithPay = buildPaidFetch(input.address);
 
-  let headers: Record<string, string> = {};
-  let body: BodyInit;
-
-  if (input.files && input.files.length > 0) {
-    const fd = new FormData();
-    fd.append("question", input.question);
-    if (input.text) fd.append("text", input.text);
-    if (input.url) fd.append("url", input.url);
-    if (input.serviceName) fd.append("serviceName", input.serviceName);
-    for (const file of input.files) {
-      fd.append("files", file);
+  const buildBody = (): { headers: Record<string, string>; body: BodyInit } => {
+    if (input.files && input.files.length > 0) {
+      const fd = new FormData();
+      fd.append("question", input.question);
+      if (input.text) fd.append("text", input.text);
+      if (input.url) fd.append("url", input.url);
+      if (input.serviceName) fd.append("serviceName", input.serviceName);
+      for (const file of input.files) {
+        fd.append("files", file);
+      }
+      return { headers: {}, body: fd };
     }
-    body = fd;
-  } else {
-    headers = { "Content-Type": "application/json" };
-    body = JSON.stringify({
-      question: input.question,
-      serviceName: input.serviceName,
-      text: input.text,
-      url: input.url,
-    });
-  }
+    return {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: input.question,
+        serviceName: input.serviceName,
+        text: input.text,
+        url: input.url,
+      }),
+    };
+  };
 
-  const requestHeaders = new Headers(headers);
-  if (input.idempotencyKey) {
-    requestHeaders.set("Idempotency-Key", input.idempotencyKey);
-  }
+  const requestHeadersFor = (extra: Record<string, string>) => {
+    const requestHeaders = new Headers(extra);
+    if (input.idempotencyKey) {
+      requestHeaders.set("Idempotency-Key", input.idempotencyKey);
+    }
+    return requestHeaders;
+  };
 
   await ensureUsdcOptIn(input.address);
 
@@ -324,36 +352,45 @@ export async function payForCapability(input: {
     ? input.endpoint
     : `${API_BASE}${input.endpoint.startsWith("/") ? "" : "/"}${input.endpoint}`;
 
-  let res: Response;
-  try {
-    res = await fetchWithPay(endpointUrl, {
+  const postPaid = (paidFetch: typeof fetchWithPay) => {
+    const built = buildBody();
+    return paidFetch(endpointUrl, {
       method: "POST",
-      headers: requestHeaders,
-      body,
+      headers: requestHeadersFor(built.headers),
+      body: built.body,
       signal: input.signal,
     });
+  };
+
+  let res: Response;
+  try {
+    res = await postPaid(fetchWithPay);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Retry ONCE only when the payment step failed before a settle could be
     // recorded: a 402 from the server or a payment-build failure means no
     // money moved, so re-running the signed flow is safe (never double-pays).
-    const canRetry = /402|payment.required|transaction.params|failed to pay|settle/i.test(message);
+    const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle/i.test(message);
     if (!canRetry || input.signal?.aborted) {
       throw err;
     }
     emitPay("retrying-payment", { message });
     await new Promise((r) => setTimeout(r, 600));
-    const retryFetch = buildPaidFetch(input.address);
-    res = await retryFetch(endpointUrl, {
-      method: "POST",
-      headers: requestHeaders,
-      body,
-      signal: input.signal,
-    });
+    res = await postPaid(buildPaidFetch(input.address));
   }
 
   if (!res.ok) {
-    throw new Error(`Investigation endpoint returned ${res.status}`);
+    const required = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required");
+    let reason = "";
+    if (required) {
+      try {
+        const decoded = JSON.parse(atob(required)) as { error?: string };
+        reason = decoded.error ? `: ${decoded.error}` : "";
+      } catch {
+        reason = "";
+      }
+    }
+    throw new Error(`Investigation endpoint returned ${res.status}${reason}`);
   }
 
   const txId = extractSettlementTxId(res);
