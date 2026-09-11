@@ -71,6 +71,8 @@ function LaunchContent() {
       const step = d?.step ?? "";
       const map: Record<string, string> = {
         "payment-params-ready": "Preparing network parameters…",
+        "opt-in-required": "Your wallet isn't opted into USDC — approve the asset opt-in in Pera now…",
+        "opt-in-ready": "USDC opt-in confirmed. Preparing payment…",
         "requesting-approval": "Approve the payment in the Pera app now…",
         "request-approved": "Payment approved.",
         "retrying-payment": "Payment attempt stalled — retrying once…",

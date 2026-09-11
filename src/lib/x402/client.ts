@@ -146,6 +146,88 @@ function emitPay(step: string, extra?: Record<string, unknown>) {
   }
 }
 
+/** Fetch suggested params through the backend (no direct browser algod). */
+async function fetchTransactionParams(): Promise<AlgodTxnParams> {
+  const res = await fetch(`${API_BASE}/api/x402/transaction-params`, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Transaction params unavailable (HTTP ${res.status})`);
+  }
+  return (await res.json()) as AlgodTxnParams;
+}
+
+/**
+ * Make sure the paying wallet is opted into USDC before the payment is built.
+ * Opting-in is a self asset-transfer of 0, signed via Pera and broadcast
+ * through the backend (browser-direct algod calls fail silently — the bug the
+ * /api/x402 proxy endpoints exist to avoid).
+ */
+async function ensureUsdcOptIn(address: string): Promise<void> {
+  let status: { optedIn: boolean; balance: number };
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/x402/account-status?address=${encodeURIComponent(address)}`,
+      { credentials: "include", cache: "no-store" }
+    );
+    if (!res.ok) throw new Error(`account-status HTTP ${res.status}`);
+    status = await res.json();
+  } catch {
+    // Status check is best-effort; if it fails, let the payment attempt and
+    // surface the simulation error instead of hard-blocking.
+    return;
+  }
+
+  if (status.optedIn) {
+    if (status.balance <= 0) {
+      const message =
+        "Connected wallet is opted into USDC but holds 0 USDC on testnet — fund it " +
+        "(e.g. via the Pera faucet / 10 USDC from a funded account) before paying.";
+      emitPay("error", { message });
+      throw new Error(message);
+    }
+    return;
+  }
+
+  emitPay("opt-in-required", { address });
+  const { ensurePeraSession, getPera } = await import("@/lib/wallet/pera");
+  const sp = await fetchTransactionParams();
+  const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+    sender: address,
+    receiver: address,
+    amount: 0,
+    assetIndex: Number(ALGORAND_CONFIG.usdcAsa),
+    suggestedParams: {
+      fee: Number(sp.fee),
+      firstValid: Number(sp.firstRound),
+      lastValid: Number(sp.lastRound),
+      genesisHash: sp.genesisHash
+        ? Uint8Array.from(Buffer.from(sp.genesisHash, "base64"))
+        : undefined,
+      genesisID: sp.genesisId,
+      minFee: Number(sp.minFee || 1000),
+      flatFee: false,
+    },
+  });
+  const pera = await ensurePeraSession();
+  const signed = await pera.signTransaction([[{ txn, signers: [address] }]]);
+  const blob = Buffer.from(signed[0]).toString("base64");
+  const broadcast = await fetch(`${API_BASE}/api/x402/broadcast`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ signedTxn: blob }),
+  });
+  if (!broadcast.ok) {
+    throw new Error(
+      "USDC opt-in signed but broadcast failed — try again in a few seconds."
+    );
+  }
+  emitPay("opt-in-ready");
+}
+
 function buildPaidFetch(address: string) {
   const signer = createX402Signer(address);
   const scheme = new AlgodExactAvmScheme(signer);
@@ -235,6 +317,8 @@ export async function payForCapability(input: {
   if (input.idempotencyKey) {
     requestHeaders.set("Idempotency-Key", input.idempotencyKey);
   }
+
+  await ensureUsdcOptIn(input.address);
 
   const endpointUrl = input.endpoint.startsWith("http")
     ? input.endpoint

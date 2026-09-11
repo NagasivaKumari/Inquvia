@@ -211,12 +211,7 @@ async def x402_transaction_params():
     dependency (server-side algod access configured by ALGOD_SERVER/TOKEN/PORT).
     """
     try:
-        from algosdk.v2client.algod import AlgodClient
-
-        address = config.ALGOD_SERVER
-        if not address.startswith(("http://", "https://")):
-            address = f"{address}:{config.ALGOD_PORT}"
-        client = AlgodClient(config.ALGOD_TOKEN or "", address)
+        client = _algod_client()
         sp = client.suggested_params()
     except Exception as e:
         return JSONResponse(
@@ -234,6 +229,55 @@ async def x402_transaction_params():
         "genesisHash": gh.decode() if isinstance(gh, bytes) else str(gh or ""),
         "genesisId": str(sp.gen or ""),
     }, headers={"Cache-Control": "no-store"})
+
+
+def _algod_client():
+    from algosdk.v2client.algod import AlgodClient
+
+    address = config.ALGOD_SERVER
+    if not address.startswith(("http://", "https://")):
+        address = f"{address}:{config.ALGOD_PORT}"
+    return AlgodClient(config.ALGOD_TOKEN or "", address)
+
+
+@app.get("/api/x402/account-status")
+async def x402_account_status(address: str):
+    """Whether the account holds the payment asset (opt-in) and its balance."""
+    try:
+        account = _algod_client().account_info(address)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    asset_id = int(config.ALGORAND_USDC_ASA)
+    opted_in = False
+    balance = 0
+    for holding in account.get("assets", []):
+        if int(holding["asset-id"]) == asset_id:
+            opted_in = True
+            balance = int(holding["amount"])
+            break
+    return {
+        "address": address,
+        "assetId": asset_id,
+        "optedIn": opted_in,
+        "balance": balance,
+    }
+
+
+@app.post("/api/x402/broadcast", include_in_schema=False)
+async def x402_broadcast(payload: dict):
+    """Broadcast a signed (opt-in) transaction and wait for confirmation."""
+    from algosdk import transaction
+
+    stxn = payload.get("signedTxn")
+    if not stxn:
+        return JSONResponse({"error": "signedTxn (base64) required"}, status_code=400)
+    try:
+        txid = _algod_client().send_transaction(stxn)
+        transaction.wait_for_confirmation(_algod_client(), txid, 4)
+        return {"txid": txid}
+    except Exception as e:
+        return JSONResponse({"error": f"Broadcast failed: {e}"}, status_code=502)
 
 
 @app.get("/api/health/debug")
