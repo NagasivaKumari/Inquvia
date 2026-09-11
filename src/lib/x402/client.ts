@@ -18,7 +18,7 @@ function toAtomicAmount(amount: string, extra?: Record<string, unknown>): bigint
   }
   const [whole, frac = ""] = money.split(".");
   const padded = (frac + "0".repeat(decimals)).slice(0, decimals);
-  return BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(padded || "0");
+  return BigInt(whole) * (BigInt(10) ** BigInt(decimals)) + BigInt(padded || "0");
 }
 
 function suggestedParamsFromAlgod(sp: AlgodTxnParams): algosdk.SuggestedParams {
