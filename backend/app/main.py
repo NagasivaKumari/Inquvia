@@ -196,6 +196,51 @@ async def x402_middleware(request: Request, call_next):
 
 
 # ── Health / root ──
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "inquvia-backend"}
+
+
+@app.get("/api/x402/transaction-params", include_in_schema=False)
+async def x402_transaction_params():
+    """Algod suggested parameters proxied through the backend.
+
+    The browser payment path used to call testnet-api.algonode.cloud directly;
+    free-tier rate limits / CORS / blockers made that hop fail silently, so the
+    wallet was never prompted. Serving the params ourselves removes that
+    dependency (server-side algod access configured by ALGOD_SERVER/TOKEN/PORT).
+    """
+    try:
+        from algosdk.v2client.algod import AlgodClient
+
+        address = config.ALGOD_SERVER
+        if not address.startswith(("http://", "https://")):
+            address = f"{address}:{config.ALGOD_PORT}"
+        client = AlgodClient(config.ALGOD_TOKEN or "", address)
+        sp = client.suggested_params()
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Algod suggested params unavailable: {e}"},
+            status_code=502,
+        )
+
+    gh = sp.gh
+    return JSONResponse({
+        "flatFee": bool(getattr(sp, "flat_fee", False)),
+        "fee": int(sp.fee or 0),
+        "minFee": int(getattr(sp, "min_fee", 0) or 0),
+        "firstRound": int(sp.first or 0),
+        "lastRound": int(sp.last or 0),
+        "genesisHash": gh.decode() if isinstance(gh, bytes) else str(gh or ""),
+        "genesisId": str(sp.gen or ""),
+    }, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/health/debug")
+async def health_debug():
+    return {"allowed_origins": _ALLOWED_ORIGINS}
+
+
 @app.get("/")
 async def api_root(request: Request):
     accepts = request.headers.get("accept", "").lower()

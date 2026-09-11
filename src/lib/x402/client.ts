@@ -24,20 +24,39 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
     this.userSigner = signer;
   }
 
+  private async fetchTransactionParams(): Promise<AlgodTxnParams> {
+    const res = await fetch(`${API_BASE}/api/x402/transaction-params`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new Error(`Transaction params unavailable (HTTP ${res.status})`);
+    }
+    return (await res.json()) as AlgodTxnParams;
+  }
+
   override async createPaymentPayload(
     x402Version: number,
     requirements: PaymentRequirements
   ): Promise<PaymentPayloadResult> {
     const { amount, asset, payTo, extra } = requirements;
     const feePayer = (extra?.feePayer ?? undefined) as string | undefined;
-    const algod = new algosdk.Algodv2(
-      ALGORAND_CONFIG.algodToken,
-      ALGORAND_CONFIG.algodServer,
-      ALGORAND_CONFIG.algodPort
-    );
-    const sp = await algod.getTransactionParams().do();
+    const sp = await this.fetchTransactionParams();
+    emitPay("payment-params-ready", { feePayer: !!feePayer });
     const feePerByte = Number(sp.fee);
-    const minFee = Number(sp.minFee);
+    const minFee = Number(sp.minFee || 1000);
+    const suggestedParams = {
+      fee: feePerByte,
+      firstValid: Number(sp.firstRound),
+      lastValid: Number(sp.lastRound),
+      genesisHash: sp.genesisHash
+        ? Uint8Array.from(Buffer.from(sp.genesisHash, "base64"))
+        : undefined,
+      genesisId: sp.genesisId,
+      minFee,
+      flatFee: false,
+    };
     const encodeNote = (s: string) => new TextEncoder().encode(s);
     const assetId = BigInt(
       /^\d+$/.test(asset) ? asset : ALGORAND_CONFIG.usdcAsa
@@ -52,7 +71,7 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
         amount: BigInt(amount),
         assetIndex: assetId,
         note: notePay,
-        suggestedParams: { ...sp, fee: Number(fee), flatFee: flat },
+        suggestedParams: { ...suggestedParams, fee: Number(fee), flatFee: flat },
       });
 
     let transactions: algosdk.Transaction[];
@@ -64,7 +83,7 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
           receiver: feePayer,
           amount: BigInt(0),
           note: encodeNote(`x402-fee-payer-${now}`),
-          suggestedParams: { ...sp, fee: Number(fee), flatFee: true },
+          suggestedParams: { ...suggestedParams, fee: Number(fee), flatFee: true },
         });
       const preliminary = [
         makePayer(BigInt(minFee)),
@@ -106,6 +125,24 @@ class AlgodExactAvmScheme extends ExactAvmScheme {
     });
 
     return { x402Version, payload: { paymentGroup, paymentIndex } };
+  }
+}
+
+interface AlgodTxnParams {
+  fee: number;
+  minFee: number;
+  firstRound: number;
+  lastRound: number;
+  genesisHash?: string;
+  genesisId?: string;
+}
+
+/** Dispatch a diagnostic event so pages can surface the exact payment step. */
+function emitPay(step: string, extra?: Record<string, unknown>) {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("inquvia:pay-diagnostic", { detail: { step, ...extra } })
+    );
   }
 }
 
@@ -203,12 +240,33 @@ export async function payForCapability(input: {
     ? input.endpoint
     : `${API_BASE}${input.endpoint.startsWith("/") ? "" : "/"}${input.endpoint}`;
 
-  const res = await fetchWithPay(endpointUrl, {
-    method: "POST",
-    headers: requestHeaders,
-    body,
-    signal: input.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetchWithPay(endpointUrl, {
+      method: "POST",
+      headers: requestHeaders,
+      body,
+      signal: input.signal,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Retry ONCE only when the payment step failed before a settle could be
+    // recorded: a 402 from the server or a payment-build failure means no
+    // money moved, so re-running the signed flow is safe (never double-pays).
+    const canRetry = /402|payment.required|transaction.params|failed to pay|settle/i.test(message);
+    if (!canRetry || input.signal?.aborted) {
+      throw err;
+    }
+    emitPay("retrying-payment", { message });
+    await new Promise((r) => setTimeout(r, 600));
+    const retryFetch = buildPaidFetch(input.address);
+    res = await retryFetch(endpointUrl, {
+      method: "POST",
+      headers: requestHeaders,
+      body,
+      signal: input.signal,
+    });
+  }
 
   if (!res.ok) {
     throw new Error(`Investigation endpoint returned ${res.status}`);

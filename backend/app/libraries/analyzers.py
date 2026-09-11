@@ -38,7 +38,26 @@ def _to_str_array(v) -> list[str]:
     return [s[:500] for s in v if isinstance(s, str)]
 
 
+def _apply_evidence_signals(evidence: list[dict], signals) -> None:
+    """Stamp per-evidence signals returned by the model onto the evidence
+    items (in place), so supporting/contradictory tallies and the evidence
+    graph reflect the analysis verdict instead of staying 'uncertain'."""
+    if not signals:
+        return
+    by_id = {
+        s.get("id"): s.get("signal")
+        for s in signals
+        if isinstance(s, dict) and isinstance(s.get("id"), str)
+    }
+    valid = {"supporting", "contradictory", "uncertain"}
+    for e in evidence:
+        sig = by_id.get(e.get("id"))
+        if sig in valid:
+            e["signal"] = sig
+
+
 def _merge_ai_raw(inv, evidence, raw) -> dict:
+    _apply_evidence_signals(evidence, (raw or {}).get("evidenceSignals"))
     base = heuristic_analysis(inv, evidence)
     if not raw:
         return base
@@ -94,6 +113,11 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
         evidence_text = "\n".join(
             f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
             for i, e in enumerate(effective)
+        )
+        system_prompt += (
+            "\nFor each acquired evidence item you used, also return 'evidenceSignals': "
+            "[{'id': <evidence id>, 'signal': 'supporting'|'contradictory'|'uncertain'}]. "
+            "Classify each item honestly; items that neither support nor contradict the claim are 'uncertain'."
         )
     elif evidence:
         # Do not let a model manufacture a conclusion from copied or dependent

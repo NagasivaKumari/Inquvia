@@ -89,8 +89,11 @@ function InvestigateForm() {
       const map: Record<string, string> = {
         "preparing-session": "Connecting to Pera wallet (reconnect session)…",
         "session-ready": "Pera session ready.",
+        "payment-params-ready": "Preparing network parameters…",
         "requesting-approval": "Opening Pera — approve the $0.50 USDC payment in the wallet now…",
         "request-approved": "Payment approved.",
+        "retrying-payment": "Payment attempt stalled — retrying once…",
+        "payment-build-error": "Preparing the payment failed — retrying…",
       };
       if (map[step]) setPaymentStatus(map[step]);
       console.info("[inquvia:pay]", e as CustomEvent);
@@ -141,6 +144,7 @@ function InvestigateForm() {
       const hasRequiredFile = files.some((file) => {
         if (requiredType === "data") return file.type.includes("json") || file.type.includes("csv");
         if (requiredType === "document") return file.type === "application/pdf" || file.type.startsWith("text/");
+        if (requiredType === "video") return file.type.startsWith("video/") || /\.(mp4|mov|avi|wmv)$/i.test(file.name);
         return file.type.startsWith(`${requiredType}/`);
       });
       if (!hasRequiredFile) {

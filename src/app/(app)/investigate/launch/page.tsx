@@ -62,6 +62,29 @@ function LaunchContent() {
       .catch(() => {});
   }, [endpoint]);
 
+  useEffect(() => {
+    const onWalletSigning = () => {
+      setStatus("Approve the payment in the Pera app when prompted…");
+    };
+    const onDiagnostic = (e: Event) => {
+      const d = (e as CustomEvent<{ step: string; message?: string }>)?.detail;
+      const step = d?.step ?? "";
+      const map: Record<string, string> = {
+        "payment-params-ready": "Preparing network parameters…",
+        "requesting-approval": "Approve the payment in the Pera app now…",
+        "request-approved": "Payment approved.",
+        "retrying-payment": "Payment attempt stalled — retrying once…",
+      };
+      if (map[step]) setStatus(map[step]);
+    };
+    window.addEventListener("inquvia:wallet-signing", onWalletSigning);
+    window.addEventListener("inquvia:pay-diagnostic", onDiagnostic);
+    return () => {
+      window.removeEventListener("inquvia:wallet-signing", onWalletSigning);
+      window.removeEventListener("inquvia:pay-diagnostic", onDiagnostic);
+    };
+  }, []);
+
   const connectAndPay = async () => {
     setError("");
     setStatus("Connecting wallet…");

@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api";
 import type {
   Investigation,
   EvidenceAcquisition,
+  EvidenceItem,
   ActivityEvent,
   EvidenceGraph,
   DiscoveredService,
@@ -203,6 +204,7 @@ export default function InvestigationPage() {
             confidence={inv.confidence}
             risk={inv.risk}
             acquisitions={acqs}
+            evidence={inv.evidence}
             limitations={inv.limitations}
             findings={inv.findings}
           />
@@ -243,6 +245,40 @@ export default function InvestigationPage() {
   );
 }
 
+function TextFileContent({ src }: { src: string }) {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(src)
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((t) => {
+        if (!cancelled) setText(t.slice(0, 4000));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+  if (!text) return null;
+  return (
+    <pre
+      style={{
+        maxWidth: "100%",
+        marginTop: 8,
+        padding: 12,
+        background: "var(--color-surface-subtle, #fafafa)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "0.85rem",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+      }}
+    >
+      {text}
+    </pre>
+  );
+}
+
 function SubmittedSource({ inv }: { inv: Investigation }) {
   const files = (inv.inputs ?? []).filter((i) => i.filePath);
   const plain = (inv.inputs ?? []).filter((i) => i.type === "text" || i.type === "url");
@@ -264,6 +300,7 @@ function SubmittedSource({ inv }: { inv: Investigation }) {
           f.fileName ?? "file"
         )}`;
         const style: React.CSSProperties = { maxWidth: "100%", marginTop: 8 };
+        const mime = (f.mimeType ?? "").toLowerCase();
         return (
           <div key={i} style={{ marginTop: 12 }}>
             <div className="text-muted">
@@ -275,6 +312,14 @@ function SubmittedSource({ inv }: { inv: Investigation }) {
               <audio controls preload="metadata" src={src} style={style} />
             ) : f.type === "image" ? (
               <img src={src} alt={f.fileName ?? "uploaded image"} style={style} />
+            ) : mime === "application/pdf" ? (
+              <iframe
+                src={src}
+                title={f.fileName ?? "uploaded pdf"}
+                style={{ width: "100%", height: 480, marginTop: 8, border: "1px solid var(--color-border-subtle)", borderRadius: "var(--radius-md)", background: "#fff" }}
+              />
+            ) : mime.startsWith("text/") || mime.includes("json") || mime.includes("csv") ? (
+              <TextFileContent src={src} />
             ) : (
               <a href={src} target="_blank" rel="noreferrer">
                 Open uploaded file
@@ -434,6 +479,7 @@ function AssessmentPanel({
   confidence,
   risk,
   acquisitions,
+  evidence,
   limitations,
   findings,
 }: {
@@ -443,17 +489,19 @@ function AssessmentPanel({
   confidence: number;
   risk: RiskLevel;
   acquisitions: EvidenceAcquisition[];
+  evidence: EvidenceItem[];
   limitations: string[];
   findings: string[];
 }) {
   const acquired = acquisitions.filter(
     (a) => a.paymentState === "evidence_received"
   );
-  const supporting = acquired.filter(
-    (a) => a.evidence?.signal === "supporting" || a.evidence?.supportsClaim
+  const evItems = (evidence ?? []) as EvidenceItem[];
+  const supporting = evItems.filter(
+    (e) => e.signal === "supporting" || e.supportsClaim
   ).length;
-  const contradictory = acquired.filter(
-    (a) => a.evidence?.signal === "contradictory" || a.evidence?.contradictsClaim
+  const contradictory = evItems.filter(
+    (e) => e.signal === "contradictory" || e.contradictsClaim
   ).length;
   const costMicro = acquired.reduce((s, a) => s + (a.amountMicro ?? 0), 0);
 
