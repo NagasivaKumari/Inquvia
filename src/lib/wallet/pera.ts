@@ -26,25 +26,38 @@ export function getPera(): PeraWalletConnect {
 /** Ensure the Pera WalletConnect session is initialized and connected before signing. */
 export async function ensurePeraSession(): Promise<PeraWalletConnect> {
   const pera = getPera();
-  if (pera.isConnected) {
+  // Always refresh the relay session first: isConnected() can stay true while
+  // the WalletConnect bridge went stale, which made signTransaction hang
+  // forever with no error. reconnectSession() resurrects it cheaply.
+  const refreshed = await withDeadline(pera.reconnectSession(), 20000)
+    .catch(() => []);
+  if (refreshed && refreshed.length > 0) {
     return pera;
   }
   try {
-    const accounts = await pera.reconnectSession();
+    const accounts = await withDeadline(pera.connect(), 60000);
     if (accounts && accounts.length > 0) {
       return pera;
     }
   } catch {
-    // Reconnect failed or no active session
-  }
-  const accounts = await pera.connect();
-  if (accounts && accounts.length > 0) {
-    return pera;
+    // Connect failed or no active session
   }
   throw new Error(
     "Pera connection was not completed. Approve the connect request shown in the Pera app " +
       "(or the QR on screen) before sending the payment."
   );
+}
+
+function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Pera did not respond — reconnect the wallet and retry.")),
+        ms
+      )
+    ),
+  ]);
 }
 
 function getAlgod(): algosdk.Algodv2 {

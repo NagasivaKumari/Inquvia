@@ -20,6 +20,17 @@ export function createX402Signer(address: string): ClientAvmSigner {
       );
     }
   };
+  const withDeadline = <T,>(
+    promise: Promise<T>,
+    ms: number,
+    message: string
+  ): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(message)), ms)
+      ),
+    ]);
   return {
     address,
     async signTransactions(txns, indexesToSign) {
@@ -44,7 +55,11 @@ export function createX402Signer(address: string): ClientAvmSigner {
           window.dispatchEvent(new CustomEvent("inquvia:wallet-signing"));
         }
         emit("requesting-approval", { txCount: signerTxns.length });
-        const signed = await pera.signTransaction([signerTxns]);
+        const signed = await withDeadline(
+          pera.signTransaction([signerTxns]),
+          120000,
+          "Signing timed out — reopen the app and retry."
+        );
         emit("request-approved");
 
         // Pera filters out nulls and returns only the signed transactions for the toSign entries in order.
