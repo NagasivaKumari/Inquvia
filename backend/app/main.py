@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.requests import ClientDisconnect
 
 from . import config, db
 from .auth import (

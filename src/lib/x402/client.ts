@@ -1,5 +1,6 @@
 import { x402Client, wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
+import { x402HTTPClient } from "@x402/core/http";
 import type { PaymentRequirements, PaymentPayloadResult } from "@x402/core/types";
 import algosdk from "algosdk";
 import { API_BASE, ALGORAND_CONFIG } from "../config";
@@ -250,7 +251,12 @@ async function ensureUsdcOptIn(address: string): Promise<void> {
   emitPay("opt-in-ready");
 }
 
-function buildPaidFetch(address: string) {
+interface X402PaymentBundle {
+  fetchWithPay: ReturnType<typeof wrapFetchWithPayment>;
+  httpClient: x402HTTPClient;
+}
+
+function buildX402Payment(address: string): X402PaymentBundle {
   const signer = createX402Signer(address);
   const scheme = new AlgodExactAvmScheme(signer);
   const client = new x402Client()
@@ -259,7 +265,7 @@ function buildPaidFetch(address: string) {
     // @x402/core defaults to a $1 cap, which silently drops every accept
     // before the wallet is prompted. Investigation price is server-gated.
     .setSpendControls(false);
-  return wrapFetchWithPayment(apiFetch as typeof fetch, client);
+  return { fetchWithPay: wrapFetchWithPayment(apiFetch as typeof fetch, client), httpClient: new x402HTTPClient(client) };
 }
 
 export const SETTLEMENT_HEADER_NAMES = [
@@ -313,16 +319,17 @@ export async function payForCapability(input: {
   idempotencyKey?: string;
   signal?: AbortSignal;
 }): Promise<PaidInvestigationResult> {
-  const fetchWithPay = buildPaidFetch(input.address);
+  const { fetchWithPay, httpClient } = buildX402Payment(input.address);
+  const hasFiles = !!input.files && input.files.length > 0;
 
   const buildBody = (): { headers: Record<string, string>; body: BodyInit } => {
-    if (input.files && input.files.length > 0) {
+    if (hasFiles) {
       const fd = new FormData();
       fd.append("question", input.question);
       if (input.text) fd.append("text", input.text);
       if (input.url) fd.append("url", input.url);
       if (input.serviceName) fd.append("serviceName", input.serviceName);
-      for (const file of input.files) {
+      for (const file of input.files ?? []) {
         fd.append("files", file);
       }
       return { headers: {}, body: fd };
@@ -352,34 +359,76 @@ export async function payForCapability(input: {
     ? input.endpoint
     : `${API_BASE}${input.endpoint.startsWith("/") ? "" : "/"}${input.endpoint}`;
 
-  const postPaid = (paidFetch: typeof fetchWithPay) => {
-    const built = buildBody();
-    return paidFetch(endpointUrl, {
+  const call = (
+    f: typeof fetchWithPay,
+    headers: Record<string, string>,
+    body: BodyInit
+  ) =>
+    f(endpointUrl, {
       method: "POST",
-      headers: requestHeadersFor(built.headers),
-      body: built.body,
+      headers: requestHeadersFor(headers),
+      body,
       signal: input.signal,
     });
-  };
 
   let res: Response;
-  try {
-    res = await postPaid(fetchWithPay);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    // The bare 402 is the expected first round of the x402 protocol — the
-    // server asks "who pays?", then we retry with a signed payment header.
-    emitPay("gate-rejected", { message });
-    // Retry ONCE only when the payment step failed before a settle could be
-    // recorded: a 402 from the server or a payment-build failure means no
-    // money moved, so re-running the signed flow is safe (never double-pays).
-    const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle/i.test(message);
-    if (!canRetry || input.signal?.aborted) {
-      throw err;
+  if (hasFiles) {
+    // ponytail: multipart bodies are single-use streams — wrapFetchWithPayment
+    // re-sends the same drained FormData on retry, so the paid upload arrives
+    // EMPTY. Do the 402 → sign → retry handshake by hand with a fresh body per
+    // round instead of trusting the library's clone.
+    emitPay("gate-rejected", { message: "Payment required — building approved transaction." });
+    res = await call(apiFetch as typeof fetchWithPay, {}, buildBody().body);
+    if (res.status === 402) {
+      const paymentRequired = httpClient.getPaymentRequiredResponse((name) =>
+        res.headers.get(name)
+      );
+      const hookHeaders =
+        (await httpClient
+          .handlePaymentRequired(paymentRequired, endpointUrl)
+          .catch(() => null)) ?? {};
+      const payload = await httpClient.createPaymentPayload(paymentRequired);
+      res = await call(
+        apiFetch as typeof fetchWithPay,
+        { ...hookHeaders, ...httpClient.encodePaymentSignatureHeader(payload) },
+        buildBody().body
+      );
+      const { recovered } = await httpClient
+        .processPaymentResult(payload, (name) => res.headers.get(name), res.status)
+        .catch(() => ({ recovered: false }) as { recovered: boolean });
+      if (recovered) {
+        const freshPayload = await httpClient.createPaymentPayload(paymentRequired);
+        res = await call(
+          apiFetch as typeof fetchWithPay,
+          { ...httpClient.encodePaymentSignatureHeader(freshPayload) },
+          buildBody().body
+        );
+        await httpClient.processPaymentResult(
+          freshPayload,
+          (name) => res.headers.get(name),
+          res.status
+        );
+      }
     }
-    emitPay("retrying-payment", { message });
-    await new Promise((r) => setTimeout(r, 600));
-    res = await postPaid(buildPaidFetch(input.address));
+  } else {
+    try {
+      res = await call(fetchWithPay, {}, buildBody().body);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // The bare 402 is the expected first round of the x402 protocol — the
+      // server asks "who pays?", then we retry with a signed payment header.
+      emitPay("gate-rejected", { message });
+      // Retry ONCE only when the payment step failed before a settle could be
+      // recorded: a 402 from the server or a payment-build failure means no
+      // money moved, so re-running the signed flow is safe (never double-pays).
+      const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle/i.test(message);
+      if (!canRetry || input.signal?.aborted) {
+        throw err;
+      }
+      emitPay("retrying-payment", { message });
+      await new Promise((r) => setTimeout(r, 600));
+      res = await call(buildX402Payment(input.address).fetchWithPay, {}, buildBody().body);
+    }
   }
 
   if (!res.ok) {
@@ -423,7 +472,7 @@ export async function payForInvestigation(input: {
   text?: string;
   url?: string;
 }): Promise<PaidInvestigationResult> {
-  const fetchWithPay = buildPaidFetch(input.address);
+  const fetchWithPay = buildX402Payment(input.address).fetchWithPay;
 
   const res = await fetchWithPay("/api/investigate", {
     method: "POST",

@@ -207,6 +207,9 @@ export default function InvestigationPage() {
             evidence={inv.evidence}
             limitations={inv.limitations}
             findings={inv.findings}
+            paidMicro={Math.round(
+              (inv.capabilityPriceUsdc ?? inv.economicSummary?.totalSpend ?? 0) * 1e6
+            )}
           />
         </div>
       </div>
@@ -482,6 +485,7 @@ function AssessmentPanel({
   evidence,
   limitations,
   findings,
+  paidMicro,
 }: {
   status: Investigation["status"];
   conclusion: AssessmentLabel;
@@ -492,10 +496,15 @@ function AssessmentPanel({
   evidence: EvidenceItem[];
   limitations: string[];
   findings: string[];
+  paidMicro?: number;
 }) {
-  const acquired = acquisitions.filter(
-    (a) => a.paymentState === "evidence_received"
-  );
+  const acquiredCount = (evidence ?? []).filter(
+    (e) => (e.status ?? "collected") === "collected"
+  ).length;
+  const legacyCostMicro = acquisitions
+    .filter((a) => a.paymentState === "evidence_received")
+    .reduce((s, a) => s + (a.amountMicro ?? 0), 0);
+  const costMicro = paidMicro ?? legacyCostMicro;
   const evItems = (evidence ?? []) as EvidenceItem[];
   const supporting = evItems.filter(
     (e) => e.signal === "supporting" || e.supportsClaim
@@ -503,7 +512,6 @@ function AssessmentPanel({
   const contradictory = evItems.filter(
     (e) => e.signal === "contradictory" || e.contradictsClaim
   ).length;
-  const costMicro = acquired.reduce((s, a) => s + (a.amountMicro ?? 0), 0);
 
   return (
     <section className={`card ${styles.assessment}`}>
@@ -525,7 +533,7 @@ function AssessmentPanel({
           <div className={styles.stats}>
             <div><strong>{supporting}</strong><span>supporting</span></div>
             <div><strong>{contradictory}</strong><span>contradictory</span></div>
-            <div><strong>{acquired.length}</strong><span>evidence acquired</span></div>
+            <div><strong>{acquiredCount}</strong><span>evidence acquired</span></div>
             <div><strong>${microToUsdc(costMicro)}</strong><span>cost</span></div>
           </div>
         </>

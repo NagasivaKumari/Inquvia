@@ -2,9 +2,10 @@
 
 import { useState, useCallback, useRef, Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { API_BASE, capabilityTitle } from "@/lib/config";
-import { apiFetch } from "@/lib/api";
+import { API_BASE, ALGORAND_CONFIG, capabilityTitle } from "@/lib/config";
+import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { payForCapability, detectCapabilityEndpoint } from "@/lib/x402/client";
+import { connectPera, signChallenge } from "@/lib/wallet/pera";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
 import styles from "./page.module.css";
 
@@ -13,6 +14,12 @@ interface UploadedFile {
   type: string;
   preview?: string;
   file: File;
+}
+
+function base64(u8: Uint8Array): string {
+  let bin = "";
+  u8.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
 }
 
 function InvestigateForm() {
@@ -137,9 +144,44 @@ function InvestigateForm() {
       setError("Please enter a question for your investigation.");
       return;
     }
-    if (!walletAddress) {
-      setError("Connect your Pera wallet to pay the investigation fee.");
-      return;
+    setIsSubmitting(true);
+    setError("");
+
+    let address = walletAddress;
+    if (!address) {
+      // ponytail: connect + authorize inline (same flow as WalletBadge) so the
+      // pay click works in one go instead of just showing a "connect your wallet" error.
+      try {
+        setPaymentStatus("Connecting Pera wallet…");
+        const w = await connectPera();
+        const message = `Sign to verify control of ${w.address} in ${ALGORAND_CONFIG.network} at ${Date.now()}`;
+        const { signature, authenticatorData, message: signedMessage } = await signChallenge(
+          w.address,
+          message,
+          window.location.origin
+        );
+        const res = await apiFetch(`${API_BASE}/api/wallet/connect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerId: "pera",
+            address: w.address,
+            message: signedMessage,
+            authenticatorData: base64(authenticatorData),
+            signatureB64: base64(signature),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Connection failed");
+        invalidateAuthCache();
+        setWalletAddress(data.wallet.address);
+        address = data.wallet.address;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Wallet connection failed");
+        setPaymentStatus("");
+        setIsSubmitting(false);
+        return;
+      }
     }
 
     const requiredType = capabilityHint.match(/\/api\/x402\/(image|video|document|audio|data)-investigation$/)?.[1];
@@ -152,12 +194,11 @@ function InvestigateForm() {
       });
       if (!hasRequiredFile) {
         setError(`Please upload a ${requiredType} file before starting this investigation.`);
+        setIsSubmitting(false);
         return;
       }
     }
 
-    setIsSubmitting(true);
-    setError("");
     setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");
 
     try {
@@ -172,7 +213,7 @@ function InvestigateForm() {
       try {
         setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");
         paid = await payForCapability({
-          address: walletAddress,
+          address,
           endpoint,
           question: question.trim(),
           serviceName: selectedService || undefined,
