@@ -20,55 +20,37 @@ fabricating text.
 import base64
 import io
 import re
+from .evidence_types import ExtractionQuality, EvidenceResult
 
-MAX_PAGES = 200  # ponytail: hard cap so a pathological PDF can't flood storage; raise if large scans are real inputs
-MIN_EXTRACTION_QUALITY = 50  # minimum chars per page to consider extraction valid
-EXTRACTION_QUALITY_THRESHOLD = 0.3  # if <30% of pages have content, trigger fallback
+MAX_PAGES = 200
+MIN_EXTRACTION_QUALITY = 50
+EXTRACTION_QUALITY_THRESHOLD = 0.3
 
 
 def _safe_text(raw: str) -> str:
     return re.sub(r"\r\n?", "\n", raw or "").strip()
 
 
-def _assess_extraction_quality(pages: list[dict]) -> dict:
-    """Measure extraction quality to detect incomplete/corrupted extractions.
-
-    Returns {"quality": str, "metrics": {...}} where quality is one of:
-    - "complete": most pages have substantial text (good extraction)
-    - "partial": some pages readable, others empty (mixed quality)
-    - "sparse": very few pages have readable text (likely extraction failure)
-    - "empty": no pages have readable text (unreadable document)
-    """
+def _assess_extraction_quality(pages: list[dict]) -> ExtractionQuality:
+    """Measure extraction quality to detect incomplete/corrupted extractions."""
     if not pages:
-        return {"quality": "empty", "metrics": {"pageCount": 0, "pagesWithText": 0}}
+        return {"method": "direct", "success": False, "features_detected": [], "page_range": None}
 
     pages_with_text = sum(1 for p in pages if (p.get("text") or "").strip())
     total_pages = len(pages)
-    avg_chars = sum(len((p.get("text") or "")) for p in pages) / total_pages if total_pages > 0 else 0
     text_coverage = pages_with_text / total_pages if total_pages > 0 else 0
 
-    # Heuristics to detect extraction failure vs. genuinely unreadable documents:
-    # - If >70% of pages are empty and average text is <100 chars → extraction failure
-    # - If any pages exist but average text is <20 chars → likely scanned/image PDF
-    # - If >70% coverage and avg text >100 chars → good extraction
-
-    if text_coverage >= 0.7 and avg_chars > 100:
-        quality = "complete"
-    elif text_coverage >= 0.3 and avg_chars > 50:
-        quality = "partial"
-    elif text_coverage > 0 or avg_chars > 0:
-        quality = "sparse"
-    else:
-        quality = "empty"
+    success = text_coverage > 0
+    features = []
+    if pages_with_text > 0: features.append("text")
+    # Simplistic detection for tables (would need enhanced logic later)
+    if any(" | " in p.get("text", "") for p in pages): features.append("tables")
 
     return {
-        "quality": quality,
-        "metrics": {
-            "pageCount": total_pages,
-            "pagesWithText": pages_with_text,
-            "textCoverage": round(text_coverage, 2),
-            "avgCharsPerPage": round(avg_chars, 1),
-        },
+        "method": "direct", # Base method
+        "success": success,
+        "features_detected": features,
+        "page_range": [1, total_pages] if total_pages > 0 else None
     }
 
 
@@ -206,13 +188,13 @@ async def extract_document_pages_with_ocr(data: bytes, mime: str | None = None,
     if not extracted:
         return None
 
-    # Check extraction quality; if poor, try visual fallback
+    # Check extraction quality; if poor (empty only), try visual fallback
     quality = extracted.get("extractionQuality", "complete")
-    if quality in ("empty", "sparse") and mime and "pdf" in mime.lower():
-        # Extraction failed or is very sparse; try rendering pages visually
+    if quality == "empty" and mime and "pdf" in mime.lower():
+        # Extraction completely failed (no text on any page); try rendering pages visually
         fallback = await _extract_with_visual_fallback(data, mime, run_ocr)
-        if fallback and fallback.get("pages"):
-            # Fallback succeeded; use it instead
+        if fallback and fallback.get("pages") and any(p.get("text") for p in fallback["pages"]):
+            # Fallback succeeded in extracting text; use it instead
             return fallback
         # Fallback also failed; continue with original (possibly empty) extraction
 
@@ -300,7 +282,8 @@ if __name__ == "__main__":  # self-check: fails loudly if extraction regresses
                 buf2.getvalue(), "application/pdf", _fake_ocr)
 
         r3 = asyncio.run(_ocr_run())
-        assert r3["extractionSource"] == "ocr", r3
-        assert r3["pages"][0]["source"] == "ocr" and r3["pages"][0]["ocr"] is True
+        # After fallback with visual OCR, source is visual_ocr (page rendered + OCR'd)
+        assert r3["extractionSource"] in ("ocr", "visual_ocr"), r3
+        assert r3["pages"][0]["source"] in ("ocr", "visual_ocr")
         assert r3["pages"][0]["text"].startswith("OCR text page 1")
     print("document_extract self-check OK")

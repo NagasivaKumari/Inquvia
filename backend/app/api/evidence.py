@@ -16,29 +16,20 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from .. import db
 from ..libraries import ai, storage, web_inspector
 from ..libraries.analyze import heuristic_analysis
+from ..libraries.evidence_types import EvidenceResult
 
 router = APIRouter()
 
-
-def _id(prefix: str = "ev") -> str:
-    return f"{prefix}_{secrets.token_urlsafe(8)[:10]}"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _envelope(kind: str, finding: str, *, claim: str = "", facts=None,
-              observations=None, sources=None, metadata=None) -> dict:
-    return {
-        "evidence_id": _id(), "type": kind, "status": "collected",
-        "finding": finding or f"Processed {kind} input.", "claim": claim,
-        "confidence": 0.0, "verdict": "insufficient_evidence",
-        "facts": facts or [], "observations": observations or [],
-        "sources": sources or [], "metadata": metadata or {},
-        "limitations": ["Signals are observations and do not establish truth by themselves."],
-        "created_at": _now(),
-    }
+def _envelope(kind: str, status: Literal["pending", "retrieved", "extracted", "failed"], 
+              finding: str, content: str = "", metadata: dict = None) -> EvidenceResult:
+    return EvidenceResult(
+        id=_id(),
+        source_type=kind,
+        status=status,
+        content=content,
+        extraction_quality={"method": "direct", "success": status == "extracted", "features_detected": [], "page_range": None} if status == "extracted" else None,
+        confidence_metrics={"overall": 0.0}
+    )
 
 
 def _persist(request: Request, operation: str, inputs: dict, result: dict) -> dict:
@@ -158,7 +149,14 @@ def _refs(items: list[dict]) -> list[dict]:
 
 @router.post("/api/evidence/assess")
 async def assess_evidence(request: Request, payload: dict):
-    evidence = _refs(payload.get("evidence") or [])
+    # Enforce Hard Gate: Ensure all evidence is usable
+    evidence_payload = payload.get("evidence") or []
+    # If using EvidenceResult, convert to dict for analysis if needed, 
+    # but check usability first.
+    if not all(isinstance(e, dict) and e.get("status") == "extracted" for e in evidence_payload):
+         return _persist(request, "assess", payload, {"error": "Insufficient or unusable evidence for assessment"})
+         
+    evidence = _refs(evidence_payload)
     result = heuristic_analysis({"question": payload.get("claim") or "", "evidenceRequirements": []}, evidence)
     return _persist(request, "assess", payload, {"type": "assessment", "claim": payload.get("claim") or "", "verdict": result["conclusion"], "confidence": result["confidence"] / 100, "findings": result["findings"], "limitations": result["limitations"]})
 
