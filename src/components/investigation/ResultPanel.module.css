@@ -69,6 +69,10 @@
   border-left: 4px solid var(--color-uncertain);
 }
 
+.answered {
+  border-left: 4px solid var(--color-accent);
+}
+
 .findings {
   margin-bottom: var(--space-6);
 }

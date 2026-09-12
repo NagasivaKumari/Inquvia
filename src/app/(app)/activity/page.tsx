@@ -23,6 +23,8 @@ interface AuditRow {
   status: string;
   updatedAt: string;
   blockReason?: string;
+  capabilityPriceUsdc?: number;
+  economicSummaryTotalSpend?: number;
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -50,6 +52,7 @@ function microToUsdc(micro: number): string {
 export default function ActivityPage() {
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -65,6 +68,7 @@ export default function ActivityPage() {
           }
           allEvents.push(...(inv.activity ?? []));
         }
+        setInvestigations(investigations);
         setRows(
           audit.sort(
             (a, b) =>
@@ -99,8 +103,13 @@ export default function ActivityPage() {
     );
   }
 
-  const settled = rows.filter((r) => r.status === "evidence_received" || r.status === "settled");
-  const totalSpend = settled.reduce((s, r) => s + r.amountMicro, 0);
+  const totalSpendMicro = investigations.reduce((s: number, inv: Investigation) => {
+    const ecoSpend = Number(inv.economicSummary?.totalSpend);
+    const spend = Number.isFinite(ecoSpend) && ecoSpend > 0
+      ? ecoSpend
+      : (inv.capabilityPriceUsdc ?? 0);
+    return s + Math.round(spend * 1e6);
+  }, 0);
   const gateways = new Set(rows.map((r) => r.serviceName).filter(Boolean));
 
   return (
@@ -114,13 +123,13 @@ export default function ActivityPage() {
 
       <div className={styles.summary}>
         <div className={`card ${styles.summaryCard}`}>
-          <span className={styles.summaryLabel}>Total spend</span>
+          <span className={styles.summaryLabel}>User payment</span>
           <span className={styles.summaryValue}>
-            ${microToUsdc(totalSpend)} USDC
+            ${microToUsdc(totalSpendMicro)} USDC
           </span>
         </div>
         <div className={`card ${styles.summaryCard}`}>
-          <span className={styles.summaryLabel}>Evidence checks</span>
+          <span className={styles.summaryLabel}>Evidence checks performed</span>
           <span className={styles.summaryValue}>{rows.length}</span>
         </div>
         <div className={`card ${styles.summaryCard}`}>
@@ -151,16 +160,18 @@ export default function ActivityPage() {
                     {formatCapability(p.capability)}
                   </p>
                 </div>
-                <div className={styles.amount}>
-                  <span className={styles.amountValue}>
-                    ${microToUsdc(p.amountMicro)} USDC
-                  </span>
-                  <span
-                    className={`badge ${isSettled ? "badge-success" : p.blockReason ? "badge-danger" : "badge-info"}`}
-                  >
-                    {STATE_LABEL[p.status] ?? p.status.replaceAll("_", " ")}
-                  </span>
-                </div>
+<div className={styles.amount}>
+              <span className={styles.amountValue}>
+                {p.txId
+                  ? `${microToUsdc(p.amountMicro)} USDC`
+                  : "internal check — included in user payment"}
+              </span>
+              <span
+                className={`badge ${isSettled ? "badge-success" : p.blockReason ? "badge-danger" : "badge-info"}`}
+              >
+                {STATE_LABEL[p.status] ?? p.status.replaceAll("_", " ")}
+              </span>
+            </div>
               </div>
               <div className={styles.details}>
                 <span>Network: {p.network}</span>
@@ -179,7 +190,7 @@ export default function ActivityPage() {
   );
 }
 
-function toRow(inv: Investigation, acq: EvidenceAcquisition): AuditRow {
+const toRow = (inv: Investigation, acq: EvidenceAcquisition): AuditRow => {
   return {
     key: acq.id,
     investigationId: inv.id,
@@ -192,8 +203,10 @@ function toRow(inv: Investigation, acq: EvidenceAcquisition): AuditRow {
     status: acq.paymentState,
     updatedAt: acq.updatedAt,
     blockReason: acq.blockReason,
+    capabilityPriceUsdc: inv.capabilityPriceUsdc,
+    economicSummaryTotalSpend: inv.economicSummary?.totalSpend,
   };
-}
+};
 
 function formatCapability(cap: string): string {
   return cap.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");

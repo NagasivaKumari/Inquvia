@@ -29,7 +29,7 @@ def validate_upload(mime: str, size: int) -> tuple[bool, str | None]:
     if size <= 0:
         return False, "File is empty"
     if size > config.MAX_UPLOAD_SIZE:
-        return False, "File exceeds the 10MB upload limit"
+        return False, f"File exceeds the {config.MAX_UPLOAD_SIZE_MB}MB upload limit"
     if mime not in config.ALLOWED_MIME:
         return False, "File type not supported"
     return True, None

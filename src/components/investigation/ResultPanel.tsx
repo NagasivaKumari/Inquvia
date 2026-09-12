@@ -21,6 +21,7 @@ export function ResultPanel({ investigation }: Props) {
     suspicious: styles.suspicious,
     insufficient_evidence: styles.insufficient,
     inconclusive: styles.inconclusive,
+    answered: styles.answered,
   }[investigation.conclusion];
 
   return (

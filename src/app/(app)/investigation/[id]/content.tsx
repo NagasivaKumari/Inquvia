@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { economicSummary } from "@/lib/report-export";
 import { SourceViewer } from "@/components/sources/SourceViewer";
 import type {
   Investigation,
@@ -208,13 +209,10 @@ export default function InvestigationPage() {
             conclusionText={inv.conclusionText}
             confidence={inv.confidence}
             risk={inv.risk}
-            acquisitions={acqs}
             evidence={inv.evidence}
             limitations={inv.limitations}
             findings={inv.findings}
-            paidMicro={Math.round(
-              (inv.capabilityPriceUsdc ?? inv.economicSummary?.totalSpend ?? 0) * 1e6
-            )}
+            paidMicro={Math.round(economicSummary(inv).spend * 1e6)}
           />
         </div>
       </div>
@@ -532,7 +530,6 @@ function AssessmentPanel({
   conclusionText,
   confidence,
   risk,
-  acquisitions,
   evidence,
   limitations,
   findings,
@@ -543,7 +540,6 @@ function AssessmentPanel({
   conclusionText: string;
   confidence: number;
   risk: RiskLevel;
-  acquisitions: EvidenceAcquisition[];
   evidence: EvidenceItem[];
   limitations: string[];
   findings: string[];
@@ -552,10 +548,7 @@ function AssessmentPanel({
   const acquiredCount = (evidence ?? []).filter(
     (e) => (e.status ?? "collected") === "collected"
   ).length;
-  const legacyCostMicro = acquisitions
-    .filter((a) => a.paymentState === "evidence_received")
-    .reduce((s, a) => s + (a.amountMicro ?? 0), 0);
-  const costMicro = paidMicro ?? legacyCostMicro;
+  const costMicro = paidMicro ?? 0;
   const evItems = (evidence ?? []) as EvidenceItem[];
   const supporting = evItems.filter(
     (e) => e.signal === "supporting" || e.supportsClaim
@@ -585,7 +578,7 @@ function AssessmentPanel({
             <div><strong>{supporting}</strong><span>supporting</span></div>
             <div><strong>{contradictory}</strong><span>contradictory</span></div>
             <div><strong>{acquiredCount}</strong><span>evidence acquired</span></div>
-            <div><strong>${microToUsdc(costMicro)}</strong><span>cost</span></div>
+            <div><strong>${microToUsdc(costMicro)}</strong><span>user payment</span></div>
           </div>
           {supporting === 0 && contradictory === 0 && (
             <p className="text-muted" style={{ marginTop: 8 }}>
@@ -634,8 +627,10 @@ function AcquisitionRow({ acq }: { acq: EvidenceAcquisition }) {
         <div>
           <strong>{acq.capability.replaceAll("_", " ")}</strong>
           <div className="text-muted">
-            {acq.serviceName ?? "No service configured"} · $
-            {microToUsdc(acq.amountMicro)} USDC
+            {acq.serviceName ?? "No service configured"} ·{" "}
+            {acq.txId
+              ? `${microToUsdc(acq.amountMicro)} USDC`
+              : "internal check — included in user payment"}
           </div>
         </div>
         <span className={`${styles.stateChip} ${tone}`}>

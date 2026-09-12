@@ -19,6 +19,11 @@ def _env_num(name: str) -> float:
 
 
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
+TAGLINE = os.getenv("TAGLINE", "Investigate before you decide.")
+SUBHEADLINE = os.getenv(
+    "SUBHEADLINE",
+    "Something looks suspicious, confusing, or too good to be true? Give it to Inquvia and get an evidence-backed assessment instead of a guess."
+)
 PUBLIC_APP_URL = (
     os.getenv("PUBLIC_APP_URL", "").strip()
     or os.getenv("NEXT_PUBLIC_SITE_URL", "").strip()
@@ -35,11 +40,12 @@ X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.go
 X402_CHALLENGE_TAG = os.getenv("X402_CHALLENGE_TAG", "x402-global-challenge")
 # Canonical public origin served in every 402 PAYMENT-REQUIRED so settles
 # attribute to the deployed resource host (bazaar/challenge dashboard), even
-# when requests arrive via localhost. Synced with PUBLIC_APP_URL by default.
-X402_PUBLIC_BASE_URL = (
-    os.getenv("X402_PUBLIC_BASE_URL", "").strip()
-    or PUBLIC_APP_URL
-).rstrip("/")
+# when requests arrive via localhost. MUST be set to the actual public HTTPS
+# deployment URL in production (e.g. https://inquvia.ai). No localhost fallback.
+X402_PUBLIC_BASE_URL = os.getenv("X402_PUBLIC_BASE_URL", "").strip().rstrip("/")
+if not X402_PUBLIC_BASE_URL:
+    # Fallback to PUBLIC_APP_URL for local dev only; production MUST set this explicitly.
+    X402_PUBLIC_BASE_URL = PUBLIC_APP_URL.rstrip("/") if PUBLIC_APP_URL else ""
 INQUVIA_PAYTO_ADDRESS = os.getenv("INQUVIA_PAYTO_ADDRESS", "").strip()
 
 # x402 payment gating is FAIL-CLOSED: when the middleware is unavailable the
@@ -65,7 +71,22 @@ ALGORAND_NETWORK_CAIP2 = (
 )
 
 STORAGE_PATH = Path(os.getenv("STORAGE_PATH", str(ROOT / "backend" / "data" / "uploads")))
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+# ── Video evidence pipeline bounds (see libraries/video_processor.py) ──
+# ffmpeg/ffprobe discovery: FFPROBE_PATH/FFMPEG_PATH override PATH lookup; on
+# deployment the binaries must be installed (README/backend apt.txt).
+VIDEO_MAX_FRAMES = int(os.getenv("VIDEO_MAX_FRAMES", "16"))
+VIDEO_FFPROBE_TIMEOUT = float(os.getenv("VIDEO_FFPROBE_TIMEOUT", "30"))
+VIDEO_FFMPEG_TIMEOUT = float(os.getenv("VIDEO_FFMPEG_TIMEOUT", "120"))
+# Videos longer than this are degraded (metadata only, no frames/audio) so a
+# single large upload can never pin CPU decoding for minutes on end.
+VIDEO_MAX_DURATION_SECONDS = float(os.getenv("VIDEO_MAX_DURATION_SECONDS", "14400"))
+# Transcription never feeds more than this many seconds of audio to the model.
+AUDIO_TRANSCRIPT_WINDOW_SECONDS = int(os.getenv("AUDIO_TRANSCRIPT_WINDOW_SECONDS", "240"))
+# Extracted frames are downscaled to this width before any AI call.
+VIDEO_FRAME_MAX_WIDTH = int(os.getenv("VIDEO_FRAME_MAX_WIDTH", "640"))
 
 ALLOWED_MIME = [
     "image/jpeg", "image/png", "image/webp", "image/gif",
@@ -78,6 +99,14 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or ""
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
+EXPLABS_API_KEY = os.getenv("EXPLABS_API_KEY") or ""
+
+# Model IDs - override via env if needed; defaults are free-tier models
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
+EXPLABS_MODEL = os.getenv("EXPLABS_MODEL", "deepseek-v4.1-flash")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 ALGORAND_USDC_DECIMALS = 1_000_000  # 6 decimals
 

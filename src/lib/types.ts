@@ -22,7 +22,8 @@ export type AssessmentLabel =
   | "likely_misleading"
   | "suspicious"
   | "insufficient_evidence"
-  | "inconclusive";
+  | "inconclusive"
+  | "answered";
 
 export interface User {
   id: string;
@@ -308,6 +309,7 @@ export const ASSESSMENT_LABELS: Record<AssessmentLabel, string> = {
   suspicious: "Suspicious",
   insufficient_evidence: "Insufficient Evidence",
   inconclusive: "Inconclusive",
+  answered: "Answered",
 };
 
 export const RISK_LABELS: Record<RiskLevel, string> = {

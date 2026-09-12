@@ -146,11 +146,18 @@ def logout_session(session_id: str | None) -> None:
 
 
 def request_password_reset(email: str) -> dict:
+    """Send a password reset token. Always returns success to prevent email enumeration."""
+    import time
+    start = time.time()
     user = db.get_user_by_email(email.strip().lower())
-    if not user:
-        return {"ok": True, "data": {"token": ""}}
-    token = _nanoid(40)
-    db.create_reset(token, user["id"])
+    token = ""
+    if user:
+        token = _nanoid(40)
+        db.create_reset(token, user["id"])
+    # Constant-time delay: always take ~10ms regardless of email existence
+    elapsed = time.time() - start
+    if elapsed < 0.01:
+        time.sleep(0.01 - elapsed)
     return {"ok": True, "data": {"token": token}}
 
 

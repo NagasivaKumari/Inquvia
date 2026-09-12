@@ -1,5 +1,12 @@
 """Capability analyzer registry (mirrors investigation/analyzers.ts)."""
+import base64
+
 from ..libraries import storage, ai as ai_lib, signals as signals_lib, document_extract
+from ..libraries.video_processor import (
+    VideoProcessor,
+    frame_payload_bytes,
+    prepare_video,
+)
 from ..libraries.analyze import (
     heuristic_analysis,
     redundant_evidence_ids,
@@ -14,14 +21,30 @@ from ..libraries.analyze import (
 REGISTRY = {}
 
 
+# Shared question-driven reasoning rule -- the user's exact question is the PRIMARY objective.
+# If the question asks to EXTRACT, TRANSCRIBE, DESCRIBE, SUMMARIZE, or LIST content:
+#   - Provide a direct answer in the 'answer' field.
+#   - Use conclusion 'answered' if fully answered, 'inconclusive' if partial,
+#     'insufficient_evidence' if the content cannot answer it.
+# If the question asks whether content is GENUINE, MANIPULATED, FAKE, AI-GENERATED, or RISKY:
+#   - Issue a forensic verdict ONLY when observable signals support it.
+#   - Use conclusion 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'.
+# If the question asks WHETHER A CLAIM IS SUPPORTED: assess the claim against the evidence.
+# In ALL cases: cite evidence, state limitations, express confidence honestly (0-100).
 _QUESTION_RULE = (
-    "Match your conclusion to the user's actual question. If the question is to extract, list, summarize, "
-    "transcribe, or describe content, DO NOT issue an authenticity/manipulation verdict: report the extracted "
-    "content in findings and use conclusion 'inconclusive' with confidence reflecting the reliability of the "
-    "facts you extracted. If the question asks whether content is genuine, manipulated, fake, or risky, issue a "
-    "verdict ONLY when observable file-level or extracted signals support it; never allege manipulation without "
-    "evidence, and state the evidence and limitations each time. Set confidence relative to the question actually "
-    "being answered, and be explicit about uncertainty. "
+    "The user's exact question is the PRIMARY objective. "
+    "If the question asks to EXTRACT, TRANSCRIBE, DESCRIBE, SUMMARIZE, or LIST content: "
+    "provide a direct answer in the 'answer' field. Use conclusion 'answered' if the question "
+    "is fully answered, 'inconclusive' if only partially answered, or 'insufficient_evidence' "
+    "if the content cannot answer it. "
+    "If the question asks whether content is GENUINE, MANIPULATED, FAKE, AI-GENERATED, or RISKY: "
+    "issue a forensic verdict ONLY when observable signals support it. "
+    "Use conclusion 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'. "
+    "If the question asks WHETHER A CLAIM IS SUPPORTED: assess the claim against the evidence. "
+    "In ALL cases: cite evidence, state limitations, express confidence honestly (0-100). "
+    "Return an 'answer' field for extraction/description questions; 'assessmentReasoning' for verification questions. "
+    "Valid conclusions: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive'. "
+    "Express uncertainty explicitly. "
 )
 
 
@@ -63,15 +86,18 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
     if not raw:
         return base
     conclusion = normalize_conclusion(raw.get("conclusion")) or base["conclusion"]
-    confidence = base["confidence"]
     raw_conf = raw.get("confidence")
+    conf_value = None
     if isinstance(raw_conf, (int, float)) and not isinstance(raw_conf, bool):
-        confidence = clamp_confidence(raw_conf)
+        conf_value = float(raw_conf)
     elif isinstance(raw_conf, str):
         try:
-            confidence = clamp_confidence(float(raw_conf))
+            conf_value = float(raw_conf)
         except ValueError:
             pass
+    confidence = base["confidence"]
+    if conf_value is not None:
+        confidence = clamp_confidence(conf_value)
     risk = raw.get("risk") if raw.get("risk") in VALID_RISKS else base["risk"]
     ai_findings = _to_str_array(raw.get("findings"))
     findings = ai_findings if ai_findings else base["findings"]
@@ -123,7 +149,7 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
     return result
 
 
-async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
+async def _run_analysis(inv, evidence, system_prompt, context_parts, text_fallback: bool = True) -> dict:
     # Reason only over non-redundant evidence: duplicate/dependent copies
     # (provider-flagged) stay in the trail but must not be fed as if they were
     # extra independent confirmations.
@@ -147,7 +173,7 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts) -> dict:
         # submitted input without buying evidence from another service.
         evidence_text = "No external evidence was acquired. Analyze only the submitted input and state limitations clearly."
     context_parts.append({"text": f"QUESTION: {inv.get('question')}\n\nACQUIRED EVIDENCE:\n{evidence_text}"})
-    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
+    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts, text_fallback=text_fallback)
     raw = ai_lib.parse_ai_json(raw_text)
     return _merge_ai_raw(inv, evidence, raw)
 
@@ -173,9 +199,17 @@ def _find_input(inv, input_type):
 
 async def _claim_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's claim verification analyst. Assess whether the submitted claim is supported, contradicted, or unresolved, "
-        "using the submitted input and any acquired evidence. Do not use internal knowledge to fill evidence gaps. Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "You are Inquvia's claim analyst. Assess whether the submitted claim is supported, contradicted, or unresolved, "
+        "using the submitted input and any acquired evidence. Do not use internal knowledge to fill evidence gaps. "
+        "Be explicit about uncertainty. Do not claim a conclusion you cannot support. "
+        "If the question asks to extract, summarize, or describe the claim: provide the extracted content in 'answer' "
+        "and use conclusion 'answered'. If the question asks whether the claim is true/supported: issue a forensic "
+        "verdict ONLY when observable signals support it. "
+        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+        "confidence: number 0-100, answer: string, assessmentReasoning: string, "
+        "findings: string[], contradictions: string[], limitations: string[], uncertainty: string, "
+        "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
     )
     claim = _first_text_input(inv) or inv.get("question")
     parts = [{"text": f"CLAIM: {claim}"}]
@@ -191,70 +225,158 @@ async def _claim_analyzer(inv, evidence):
                 f = read_stored_file_base64(inp["filePath"])
                 if f:
                     parts.append({"file": f})
-    return await _run_analysis(inv, evidence, system_prompt, parts)
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
 async def _image_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's image forensics analyst. Inspect the provided image(s) for signs of manipulation, "
-        "generative-AI artifacts, or provenance inconsistencies, together with the acquired evidence and the "
-        "extracted FILE_LEVEL_SIGNALS (metadata, format, dimensions, editor tags). "
-        "When multiple images are provided, compare them against each other for provenance and editing differences. "
-        "Do not claim verified authenticity. Base every conclusion on observable, defensible signals; do not "
-        "claim metadata or file-level facts beyond what FILE_LEVEL_SIGNALS states. State evidence and limitations explicitly. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "You are Inquvia's image analyst. Your primary goal is to answer the user's question by analyzing the provided image(s). "
+        "Observe the image content directly for objects, text, timestamps, people, settings, and other visual details relevant to the question. "
+        "Include any signs of manipulation, generative-AI artifacts, or provenance inconsistencies if relevant to the question. "
+        "Distinguish clearly between direct visual observations and inferences. Cite specific visual elements to support your answer. "
+        "If the user asks for text extraction, description, or listing of visual elements, provide the answer directly in the 'answer' field and use conclusion 'answered'. "
+        "If you cannot answer the question using the image or available evidence, explicitly state what information is missing. "
+        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, answer: string, assessmentReasoning: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
     )
     images = [i for i in (inv.get("inputs") or []) if i.get("type") == "image"]
     parts = []
+    missing_images = []
     for input_ in images:
         if input_.get("filePath"):
             f = read_stored_file_base64(input_["filePath"])
             if f:
-                parts.append({"file": f})
+                parts.append({"file": {"mimeType": f.get("mimeType") or input_.get("mimeType") or "image/jpeg", "base64": f.get("base64")}})
                 label = input_.get("content") or input_.get("fileName") or "image"
                 parts.append({"text": f"IMAGE_CONTEXT: {label}"})
                 sig_text = signals_lib.inspect_text(input_["filePath"], "image")
                 if sig_text:
                     parts.append({"text": sig_text})
+            else:
+                missing_images.append(input_.get("fileName") or input_.get("content") or "image")
+    if missing_images:
+        # If any image file cannot be retrieved, we cannot perform visual analysis.
+        # Return an honest insufficiency result rather than falling back to text-only.
+        return {
+            "conclusion": "insufficient_evidence",
+            "confidence": 0,
+            "answer": f"Unable to analyze image content: the following image file(s) could not be accessed from storage: {', '.join(missing_images)}",
+            "assessmentReasoning": "Visual analysis requires direct access to the submitted image bytes. File retrieval from storage failed, so no visual observations could be made.",
+            "findings": [],
+            "contradictions": [],
+            "limitations": [f"Image file retrieval failed for: {', '.join(missing_images)} — visual evidence unavailable"],
+            "uncertainty": "No image content was analyzed due to storage access failure.",
+            "sourcesUsed": [],
+            "risk": "unknown",
+            "evidenceSignals": [],
+        }
     if not any(p.get("file") for p in parts):
-        context = _first_text_input(inv) or ""
-        if context:
-            parts.append({"text": f"IMAGE_CONTEXT: {context}"})
-    if len(images) > 1:
-        parts.append({"text": f"NOTE: {len(images)} images were submitted — compare them against each other."})
-    return await _run_analysis(inv, evidence, system_prompt, parts)
+        # No image inputs at all - honest insufficiency
+        return {
+            "conclusion": "insufficient_evidence",
+            "confidence": 0,
+            "answer": "No image was submitted for analysis.",
+            "assessmentReasoning": "The investigation requires an image input, but none was provided.",
+            "findings": [],
+            "contradictions": [],
+            "limitations": ["No image input provided"],
+            "uncertainty": "Cannot analyze without image content.",
+            "sourcesUsed": [],
+            "risk": "unknown",
+            "evidenceSignals": [],
+        }
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
 async def _video_analyzer(inv, evidence):
-    system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's video forensics analyst. Assess the submitted video(s) using the extracted "
-        "FILE_LEVEL_SIGNALS (container, brands, track dimensions, duration) and the visible frame content, "
-        "together with the acquired evidence. Identify only defensible forensic or file-level signals such as "
-        "metadata, recompression, frame inconsistencies, encoding anomalies, or other observable irregularities. "
-        "Do not claim that the video is AI-generated, manipulated, or authentic unless the evidence supports that "
-        "conclusion; clearly state the evidence and limitations. When multiple videos are provided, compare them against each other. "
-        "Express confidence honestly; explicit uncertainty is expected. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+    system_prompt = (
+        "You are Inquvia's video analyst. Your job is to answer the user's question "
+        "using ONLY the provided evidence (file-level signals, timestamped frames with "
+        "visual observations, audio transcript with segment timestamps, and any acquired "
+        "evidence). Do not use internal knowledge to fill gaps.\n\n"
+        "Read the user's question carefully and determine what kind of answer is needed:\n"
+        "- If the question asks to EXTRACT, TRANSCRIBE, DESCRIBE, SUMMARIZE, or LIST "
+        "content: provide a direct answer from the evidence. Use conclusion 'answered' "
+        "if fully answered, 'inconclusive' if partial. Return an 'answer' field.\n"
+        "- If the question asks whether content is GENUINE, MANIPULATED, FAKE, AI-GENERATED, "
+        "or RISKY: issue a forensic verdict ONLY when observable signals support it. "
+        "Use conclusion 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'.\n"
+        "- If the question asks WHETHER A CLAIM IS SUPPORTED: assess the claim against "
+        "the evidence. Use appropriate conclusion.\n"
+        "- In ALL cases: distinguish spoken words (from transcript + timestamps) from "
+        "visual observations (from frames + timestamps) from inference. Cite timestamps.\n"
+        "- If evidence only partially answers the question, explicitly state what IS "
+        "answered and what is NOT. Use 'insufficient_evidence' or 'inconclusive' honestly.\n"
+        "- State limitations explicitly. Express confidence honestly (0-100).\n\n"
+        "Return ONLY JSON with this exact schema:\n"
+        "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+        "confidence: number 0-100, "
+        "answer: string (your direct answer to the user's question, or explicit statement that evidence cannot answer it), "
+        "assessmentReasoning: string (explain how the evidence supports your answer, distinguishing spoken words from visual observations from inference), "
+        "findings: string[], contradictions: string[], limitations: string[], "
+        "uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }"
     )
     videos = [i for i in (inv.get("inputs") or []) if i.get("type") == "video"]
     parts = []
     for input_ in videos:
-        if input_.get("filePath"):
-            f = read_stored_file_base64(input_["filePath"])
-            if f:
-                parts.append({"file": f})
-                label = input_.get("content") or input_.get("fileName") or "video"
-                parts.append({"text": f"VIDEO_CONTEXT: {label}"})
-                sig_text = signals_lib.inspect_text(input_["filePath"], "video")
-                if sig_text:
-                    parts.append({"text": sig_text})
+        label = input_.get("content") or input_.get("fileName") or "video"
+        parts.append({"text": f"VIDEO_CONTEXT: {label}"})
+        extract = prepare_video(input_)  # cached from the evidence checks
+        processor = VideoProcessor()
+        if extract.get("inspection"):
+            parts.append({"text": processor.describe(extract["inspection"], label)})
+        elif extract.get("fallbackSignals"):
+            parts.append({"text": extract["fallbackSignals"]})
+        frames = extract.get("frames") or []
+        if frames:
+            from ..libraries import evidence_checks as checks_lib
+            observations = checks_lib.frame_observations_by_time(extract)
+            if extract.get("frameObservations") is None and extract.get("state") == "ok":
+                await checks_lib._observe_frames(input_, label, extract)
+                observations = checks_lib.frame_observations_by_time(extract)
+            for frame in frames:
+                raw = frame_payload_bytes(frame)
+                if raw:
+                    parts.append({
+                        "file": {
+                            "mimeType": "image/jpeg",
+                            "base64": base64.b64encode(raw).decode("ascii"),
+                        }
+                    })
+                    parts.append({"text": f"FRAME at t={frame['timestamp']:.2f}s"})
+                obs = observations.get(round(frame["timestamp"], 2))
+                if obs and obs.get("visibleContent"):
+                    parts.append({
+                        "text": f"Directly visible at t={frame['timestamp']:.2f}s: {obs['visibleContent']}"
+                    })
+        transcript = extract.get("transcript")
+        if transcript:
+            window = extract.get("transcriptWindowSeconds")
+            label_w = ""
+            if window:
+                label_w = f" (transcribed window: first {window:.0f}s)"
+            parts.append({"text": f"AUDIO_TRANSCRIPT{label_w}:\n{transcript[:6000]}"})
+            if extract.get("transcriptSegments"):
+                seg_text = "\n".join(
+                    f"[{s['start']:.2f}s-{s['end']:.2f}s] {s['text']}"
+                    for s in extract["transcriptSegments"]
+                )
+                parts.append({"text": f"AUDIO_TRANSCRIPT_SEGMENTS:\n{seg_text[:4000]}"})
+        limitations = extract.get("limitations") or []
+        if not frames and not limitations:
+            limitations.append("Frame extraction produced no frames; visual evidence is unavailable.")
+        if extract.get("audio") and not transcript:
+            limitations.append("Audio stream present but no transcript available; audio evidence is unavailable.")
+        if limitations:
+            parts.append({"text": "VIDEO_PROCESSING_LIMITATIONS: " + "; ".join(limitations)})
     if not any(p.get("file") for p in parts):
         context = _first_text_input(inv) or ""
         if context:
             parts.append({"text": f"VIDEO_CONTEXT: {context}"})
     if len(videos) > 1:
-        parts.append({"text": f"NOTE: {len(videos)} videos were submitted — compare them against each other."})
-    return await _run_analysis(inv, evidence, system_prompt, parts)
+        parts.append({"text": f"NOTE: {len(videos)} videos were submitted -- compare them against each other."})
+    parts.append({"text": f"USER_QUESTION: {inv.get('question')}"})
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
 _DOCUMENT_RULES = (
@@ -269,7 +391,7 @@ _DOCUMENT_RULES = (
     "them instead of relying on the first match. "
     "For each passage you rely on, return its exact text (quote), page number, any section/table/paragraph "
     "available, and its provenance (source: 'text_layer' for selectable text, 'ocr' for scanned pages read "
-    "from the rendered image — never invent a source). "
+    "from the rendered image -- never invent a source). "
     "Classify the nature of each passage: 'stated_fact' (the document directly asserts a fact), "
     "'document_claim' (the document itself makes/asserts a claim, distinct from established fact), "
     "'observation' (something the document records or reports), 'interpretation' (your inference drawn from "
@@ -278,13 +400,13 @@ _DOCUMENT_RULES = (
     "If neither supporting nor contradictory evidence is established, represent that accurately; do not force "
     "a verdict. "
     "For authenticity/verification questions: distinguish evidence contained in the document itself from "
-    "independent authentication — never claim authenticity merely because the document looks official. "
+    "independent authentication -- never claim authenticity merely because the document looks official. "
     "If the question can only be answered with information the document cannot provide, identify in "
     "additionalSourcesNeeded what other evidence/source would be required, and do not silently use another source. "
 )
 
 _DOCUMENT_JSON_SCHEMA = (
-    "{ conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+    "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
     "confidence: number 0-100, "
     "answer: string (your final answer to the USER'S question, or an explicit insufficiency statement), "
     "assessmentReasoning: string (explain why the available evidence supports, weakens, contradicts, or fails "
@@ -362,7 +484,7 @@ async def _run_document_analysis(inv, evidence, system_prompt, context_parts) ->
     else:
         evidence_text = "No external evidence was acquired. Analyze only the submitted document and state limitations clearly."
     context_parts.append({
-        "text": f"INVESTIGATION_OBJECTIVE (the user's question — your sole objective): {inv.get('question')}\n\n"
+        "text": f"INVESTIGATION_OBJECTIVE (the user's question -- your sole objective): {inv.get('question')}\n\n"
                 f"ACQUIRED EVIDENCE:\n{evidence_text}"
     })
     raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
@@ -408,9 +530,16 @@ async def _document_analyzer(inv, evidence):
 
 async def _source_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's web source credibility analyst. Evaluate the submitted URL using the live web inspection data (DNS, SSL, HTTP, content snippet) "
+        "You are Inquvia's web source analyst. Evaluate the submitted URL using the live web inspection data (DNS, SSL, HTTP, content snippet) "
         "and the acquired evidence. Assess credibility signals, not absolute verification. Express confidence honestly. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "If the question asks to extract, summarize, or describe the page content: provide the extracted content in 'answer' "
+        "and use conclusion 'answered'. If the question asks whether the source is credible/legitimate/risky: "
+        "issue a credibility assessment ONLY when observable signals support it. "
+        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+        "confidence: number 0-100, answer: string, assessmentReasoning: string, "
+        "findings: string[], contradictions: string[], limitations: string[], uncertainty: string, "
+        "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
     )
     url_input = _find_input(inv, "url")
     inspection = inv.get("webInspection")
@@ -425,7 +554,14 @@ async def _data_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
         "You are Inquvia's structured-data analyst. Inspect the submitted CSV/JSON dataset for anomalies, inconsistencies, missing values, or suspicious patterns, "
         "together with acquired evidence. Express confidence honestly. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "If the question asks to extract, summarize, or list data: provide the extracted content in 'answer' "
+        "and use conclusion 'answered'. If the question asks whether the data is anomalous/consistent/suspicious: "
+        "issue an assessment ONLY when observable signals support it. "
+        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
+        "confidence: number 0-100, answer: string, assessmentReasoning: string, "
+        "findings: string[], contradictions: string[], limitations: string[], uncertainty: string, "
+        "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
     )
     input_ = _find_input(inv, "data") or _find_input(inv, "text")
     content = None
@@ -437,10 +573,10 @@ async def _data_analyzer(inv, evidence):
 
 async def _audio_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's audio forensics analyst. PRIORITIZE extracting a full transcript if possible from the provided content, or at least a detailed summary of spoken content. Assess the submitted audio recording(s) using the extracted FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration) and any audible content, together with the acquired evidence. Base conclusions only on defensible, observable signals; do not claim splicing, cloning, or manipulation unless the evidence supports it. State evidence and limitations explicitly. "
+        "You are Inquvia's audio analyst. Assess the submitted audio recording(s) using the extracted FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration), the audio transcript with segment timestamps, and any acquired evidence. Do not use internal knowledge to fill gaps. If the question asks to transcribe, extract, describe, or summarize the audio: provide the transcript/content in 'answer' and use conclusion 'answered' if fully answered, 'inconclusive' if partial. If the question asks whether the audio is genuine/manipulated/AI-generated/risky: issue a forensic verdict ONLY when observable signals support it. In ALL cases: distinguish spoken words (from transcript + timestamps) from inference. Cite timestamps. If evidence only partially answers the question, explicitly state what IS answered and what is NOT. Use 'insufficient_evidence' or 'inconclusive' honestly. State limitations explicitly. Express confidence honestly (0-100). "
         "When multiple recordings are provided, compare them against each other. "
         "Express confidence honestly; explicit uncertainty is expected. "
-        "Return ONLY JSON: { conclusion: 'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, transcript: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown' }."
+        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, answer: string, assessmentReasoning: string, transcript: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
     )
     audios = [i for i in (inv.get("inputs") or []) if i.get("type") == "audio"]
     parts = []
@@ -458,9 +594,27 @@ async def _audio_analyzer(inv, evidence):
         context = _first_text_input(inv) or ""
         if context:
             parts.append({"text": f"AUDIO_CONTEXT: {context}"})
+        # Include transcript evidence from evidence checks (cached on mediaExtraction)
+    from ..libraries import evidence_checks as checks_lib
+    for input_ in audios:
+        extract = input_.get("mediaExtraction") or {}
+        transcript = extract.get("transcript")
+        if transcript:
+            window = extract.get("transcriptWindowSeconds")
+            label_w = f" (transcribed window: first {window:.0f}s)" if window else ""
+            parts.append({"text": f"AUDIO_TRANSCRIPT{label_w}:\n{transcript[:6000]}"})
+            segments = extract.get("transcriptSegments")
+            if segments:
+                seg_text = "\n".join(f"[{s['start']:.2f}s?{s['end']:.2f}s] {s['text']}" for s in segments)
+                parts.append({"text": f"AUDIO_TRANSCRIPT_SEGMENTS:\n{seg_text[:4000]}"})
+    if not any(p.get("file") for p in parts):
+        context = _first_text_input(inv) or ""
+        if context:
+            parts.append({"text": f"AUDIO_CONTEXT: {context}"})
     if len(audios) > 1:
-        parts.append({"text": f"NOTE: {len(audios)} audio recordings were submitted — compare them against each other."})
-    return await _run_analysis(inv, evidence, system_prompt, parts)
+        parts.append({"text": f"NOTE: {len(audios)} audio recordings were submitted -- compare them against each other."})
+    parts.append({"text": f"USER_QUESTION: {inv.get('question')}"})
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
 def json_dumps(obj):

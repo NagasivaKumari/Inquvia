@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { API_BASE } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { isImage, isVideo, isAudio, isPdf, isStructured, isText } from "@/lib/source-mime";
 import styles from "./SourceViewer.module.css";
 
 export interface SourceInput {
@@ -15,30 +16,6 @@ export interface SourceInput {
 function sourceUrl(invId: string, filePath?: string): string {
   if (!filePath) return "";
   return `${API_BASE}/api/sources/${invId}/${encodeURIComponent(filePath)}`;
-}
-
-function isImage(m: string): boolean {
-  return m.startsWith("image/");
-}
-function isVideo(m: string): boolean {
-  return m.startsWith("video/");
-}
-function isAudio(m: string): boolean {
-  return m.startsWith("audio/");
-}
-function isPdf(m: string): boolean {
-  return m === "application/pdf";
-}
-function isStructured(m: string): boolean {
-  return (
-    m.includes("json") ||
-    m.includes("csv") ||
-    m === "text/tab-separated-values" ||
-    m.startsWith("application/x-ndjson")
-  );
-}
-function isText(m: string): boolean {
-  return m.startsWith("text/");
 }
 
 /** Load a source through the authenticated fetch path and hand back a blob URL

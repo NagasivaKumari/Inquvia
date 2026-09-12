@@ -9,17 +9,27 @@ search engines, transcription) are skipped and simply are not counted.
 ponytail: no model calls here — these are reproducible observations; the
 analyzer later reasons over them and gives the verdict.
 """
+import base64
 import csv
 import io
 import json
 import logging
 import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .. import db, config
 from ..libraries import signals as signals_lib
 from ..libraries import web_inspector
 from ..libraries import document_extract
+from ..libraries import ai as ai_lib
+from ..libraries.video_processor import (
+    VideoProcessor,
+    artifacts_dir,
+    frame_payload_bytes,
+    materialize_source,
+    prepare_video,
+)
 from ..libraries.analyze import read_stored_text, run_ai_ocr
 
 logger = logging.getLogger(__name__)
@@ -39,9 +49,6 @@ CHECK_LABELS = {
 KIND_FOR_CAP = {
     "image_provenance": "image",
     "image_metadata": "image",
-    "video_analysis": "video",
-    "frame_evidence": "video",
-    "audio_transcription": "audio",
 }
 
 
@@ -57,16 +64,8 @@ def _inputs_of(inv: dict, input_type: str) -> list[dict]:
     return [i for i in (inv.get("inputs") or []) if i.get("type") == input_type]
 
 
-def _media_findings(inv: dict, kind: str) -> list[dict]:
-    """Observed file-level evidence, as structured records.
-
-    Each record carries the human finding plus structured provenance
-    (format, dimensions, mode, size, MIME, EXIF/PNG tags) and a flag for the
-    "could not be read / could not be probed" state, which is distinct from
-    "no metadata found". The same signals are written back onto the input
-    record so the report renders provenance separately from semantic
-    visual evidence.
-    """
+async def _media_findings(inv: dict, kind: str) -> list[dict]:
+    """Observed file-level evidence, as structured records."""
     records = []
     for inp in _inputs_of(inv, kind):
         path = inp.get("filePath")
@@ -87,6 +86,27 @@ def _media_findings(inv: dict, kind: str) -> list[dict]:
             continue
         sig = signals_lib.inspect_bytes(data, kind, inp.get("mimeType"))
         desc = signals_lib.describe(data, kind, sig)
+        
+        # ADDED: Perform visual analysis
+        if kind == "image":
+            # Call analyzer directly or trigger it?
+            # We can use the multimodal capability to analyze the image now.
+            try:
+                system_prompt = "You are a forensic image analyst. Describe all visible text and labels in the image."
+                parts = [
+                    {"text": "Analyze this image and list all visible text and labels."},
+                    {"file": {"mimeType": inp.get("mimeType") or "image/jpeg", "base64": base64.b64encode(data).decode("ascii")}}
+                ]
+                # We need to call the AI here. We can use ai_lib.call_ai_with_parts
+                # But that requires passing parts.
+                # Assuming ai_lib is available.
+                visual_text = await ai_lib.call_ai_with_parts(system_prompt, parts, text_fallback=False)
+                if visual_text:
+                    desc += f"\n\nDirectly observable visual content: {visual_text}"
+            except Exception as e:
+                logger.error(f"Visual analysis failed: {e}")
+                desc += "\n\nVisual content analysis could not be performed."
+
         meta = {
             "fileName": inp.get("fileName"),
             "mimeType": inp.get("mimeType") or sig.get("mimeType"),
@@ -96,6 +116,7 @@ def _media_findings(inv: dict, kind: str) -> list[dict]:
         if sig.get("error"):
             meta["probeError"] = True
         inp["fileSignals"] = dict(meta["fileSignals"])
+        
         records.append({
             "finding": desc or f"{kind.capitalize()} check ({label}): no observable file-level metadata extracted.",
             "metadata": meta,
@@ -108,6 +129,407 @@ SOURCE_LABELS = {
     "ocr": "scanned page (no text layer — read via OCR)",
     "plain_text": "plain text",
 }
+
+
+async def _transcribe_wav(wav_path: str) -> tuple[str | None, list[dict]]:
+    """Real speech-to-text for one extracted WAV track (16kHz mono PCM).
+
+    Gemini's multimodal model is tried first (it can hear inline audio). When
+    that yields nothing, Groq's Whisper endpoint transcribes the actual audio
+    bytes and returns per-segment timestamps. Chat-only text providers are
+    never used (text_fallback=False) because they cannot hear the file and a
+    made-up transcript would be fabricated evidence. Returns
+    (transcript, segments) or (None, []) — never a fabricated string.
+    """
+    try:
+        data = Path(wav_path).read_bytes()
+        if not data:
+            return None, []
+    except OSError:
+        return None, []
+    if config.GEMINI_API_KEY:
+        text = await _gemini_multimodal_transcribe(data)
+        if text:
+            return text, []
+    if config.GROQ_API_KEY:
+        return await _groq_whisper_transcribe(data, wav_path)
+    return None, []
+
+
+async def _gemini_multimodal_transcribe(data: bytes) -> str | None:
+    """Gemini audio transcription (inline WAV). Returns the verbatim text or
+    None on any failure; never falls through to a text-only provider."""
+    system = (
+        "You are a forensic audio transcription engine. Transcribe "
+        "verbatim the speech in the attached audio. JSON: {\"transcript\":\"...\"}."
+    )
+    try:
+        raw = await ai_lib.call_ai_with_parts(system, [
+            {"text": "Transcribe this audio track verbatim."},
+            {"file": {"mimeType": "audio/wav", "base64": base64.b64encode(data).decode("ascii")}},
+        ], temperature=0.2, text_fallback=False)
+        obj = ai_lib.parse_ai_json(raw) or {}
+        text = (obj.get("transcript") or "").strip()
+        return text or None
+    except Exception:
+        logger.exception("Gemini audio transcription failed")
+        return None
+
+
+async def _groq_whisper_transcribe(data: bytes, wav_path: str) -> tuple[str | None, list[dict]]:
+    """Groq Whisper transcription of the actual WAV bytes, with per-segment
+    timestamps where the provider supports them. Never called without audio."""
+    import io as _io
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=90.0) as client:
+            with _io.BytesIO(data) as buf:
+                res = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
+                    files={"file": ("audio.wav", buf, "audio/wav")},
+                    data={
+                        "model": "whisper-large-v3",
+                        "response_format": "verbose_json",
+                        "temperature": "0.0",
+                        "timestamp_granularities[]": "segment",
+                    },
+                )
+        if res.status_code != 200:
+            return None, []
+        payload = res.json()
+        text = (payload.get("text") or "").strip()
+        segments = []
+        for seg in payload.get("segments") or []:
+            if not isinstance(seg, dict) or not seg.get("text"):
+                continue
+            segments.append({
+                "start": round(float(seg.get("start", 0.0)), 3),
+                "end": round(float(seg.get("end", 0.0)), 3),
+                "text": str(seg["text"]).strip(),
+            })
+        return (text or None), segments
+    except Exception:
+        logger.exception("Groq whisper transcription failed for %s", wav_path)
+        return None, []
+
+
+def _frame_record(inp: dict, label: str, frame: dict, total: int, observation: dict | None = None) -> dict:
+    """One timestamped evidence record per extracted visual frame.
+
+    The record always carries the reproducible capture metadata (frame index +
+    capture timestamp). When the multimodal AI produced a direct visual
+    observation for this exact timestamp, that observation is added to the
+    finding and structured metadata so the stored evidence reflects what is
+    actually visible in the frame — never only "frame N/M at t=X".
+    """
+    size = None
+    try:
+        p = Path(frame.get("path") or "")
+        size = p.stat().st_size if p.is_file() else None
+    except OSError:
+        size = None
+    finding = (
+        f"Video frame evidence ({label}): frame {frame['index'] + 1}/{total} "
+        f"captured at t={frame['timestamp']:.2f}s."
+    )
+    meta = {
+        "fileName": inp.get("fileName"),
+        "mimeType": inp.get("mimeType"),
+        "filePath": inp.get("filePath"),
+        "frameIndex": frame["index"],
+        "timestampSeconds": frame["timestamp"],
+        "frameBytes": size,
+        "evidenceAvailable": True,
+        "kind": "frame",
+    }
+    if observation and observation.get("visibleContent"):
+        finding += f" Directly visible: {observation['visibleContent']}"
+        if observation.get("unclear"):
+            finding += " The frame was unclear; no content was invented."
+        meta["visualObservation"] = observation["visibleContent"]
+        meta["visualObservationUnclear"] = bool(observation.get("unclear"))
+        meta["visualObservationSource"] = "multimodal_ai"
+    return {
+        "finding": finding,
+        "metadata": meta,
+    }
+
+
+_FRAME_OBSERVE_PROMPT = (
+    "You are a forensic frame-observation step for a video investigation. For each attached frame, captioned "
+    "'FRAME at t=X.XXs', describe ONLY what is directly visible in that single frame: objects, people, setting, "
+    "colors, readable text, lighting, motion blur. The timestamp caption is the capture time to echo back; "
+    "nothing else. Do not infer events before or after the frame, do not guess the video's story, and do not "
+    "reason from the user's investigation question. If a frame is too dark, blurry, or otherwise unreadable to "
+    "identify content, set 'unclear': true and describe only what can reliably be seen (possibly nothing); "
+    "never invent content that is not visible. "
+    'Return ONLY JSON: {"frames": [{"timestamp": <number>, "visibleContent": <string>, "unclear": <boolean>}]}.'
+)
+
+
+def frame_observations_by_time(extract: dict) -> dict:
+    """Map capture timestamp → visual observation.
+
+    Cached observations are stored as a BSON-safe list of records (the input
+    record is persisted to MongoDB, which rejects non-string dict keys);
+    this helper returns the same per-timestamp view used in memory.
+    """
+    cached = extract.get("frameObservations")
+    out = {}
+    if isinstance(cached, dict):
+        for ts, obs in cached.items():
+            if isinstance(obs, dict) and obs.get("visibleContent"):
+                out[round(float(ts), 2)] = obs
+    elif isinstance(cached, list):
+        for o in cached:
+            if isinstance(o, dict) and o.get("visibleContent"):
+                out[round(float(o.get("timestamp", 0)), 2)] = {
+                    "visibleContent": o["visibleContent"],
+                    "unclear": bool(o.get("unclear")),
+                }
+    return out
+
+
+async def _observe_frames(inp: dict, label: str, extract: dict) -> dict:
+    """Direct visual observation of each extracted frame, keyed by timestamp.
+
+    The multimodal AI is asked what is directly visible in each frame
+    (question-independent, one batch per video, one result per timestamp).
+    Observations are cached on the extraction record so the evidence checks,
+    the analyzer and repeated runs reuse the same result. Uses the multimodal
+    path (Gemini → Experiential); without a working multimodal provider no
+    observation is invented and frame records degrade to honest timestamp
+    metadata (see _frame_record).
+    """
+    frames = extract.get("frames") or []
+    if not frames:
+        return {}
+    if extract.get("frameObservations"):
+        return frame_observations_by_time(extract)
+    # No multimodal provider available → honest empty result, no fabrication
+    if not config.GEMINI_API_KEY and not config.EXPLABS_API_KEY and not config.OPENROUTER_API_KEY:
+        return {}
+    parts = []
+    for f in frames:
+        raw = frame_payload_bytes(f)
+        if raw:
+            parts.append({
+                "file": {"mimeType": "image/jpeg", "base64": base64.b64encode(raw).decode("ascii")},
+            })
+            parts.append({"text": f"FRAME at t={f['timestamp']:.2f}s"})
+    observations = {}
+    if parts:
+        text = await ai_lib.call_ai_with_parts(_FRAME_OBSERVE_PROMPT, parts, text_fallback=False)
+        payload = ai_lib.parse_ai_json(text)
+        for item in (payload or {}).get("frames") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("timestamp"), (int, float)):
+                continue
+            content = item.get("visibleContent")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            observations[round(float(item["timestamp"]), 2)] = {
+                "visibleContent": content.strip(),
+                "unclear": bool(item.get("unclear")),
+            }
+    extract["frameObservations"] = [
+        {"timestamp": ts, "visibleContent": obs["visibleContent"], "unclear": obs["unclear"]}
+        for ts, obs in sorted(observations.items())
+    ]
+    return observations
+
+
+def _video_analysis_record(inp: dict, label: str, extract: dict) -> dict | None:
+    inspection = extract.get("inspection")
+    if inspection:
+        finding = VideoProcessor().describe(inspection, label).strip()
+    elif extract.get("fallbackSignals"):
+        finding = extract["fallbackSignals"].strip()
+    else:
+        finding = None
+    if not finding:
+        return None
+    limitations = extract.get("limitations") or []
+    if limitations:
+        finding = finding + " | " + "; ".join(limitations)
+    return {
+        "finding": finding[:2000],
+        "metadata": {
+            "fileName": inp.get("fileName"),
+            "mimeType": inp.get("mimeType"),
+            "filePath": inp.get("filePath"),
+            "mediaProbe": inspection or None,
+            "mediaExtractionState": extract.get("state"),
+            "limitations": limitations,
+            "evidenceAvailable": True,
+            "kind": "inspection",
+        },
+    }
+
+
+async def _transcription_record(inp: dict, label: str, extract: dict) -> dict | None:
+    """Transcribe the extracted audio track of a video/audio input (once,
+    cached on the input). Never invents text on failure."""
+    wav = extract.get("audio")
+    if not wav:
+        return None
+    if extract.get("transcript") is None:
+        text, segments = await _transcribe_wav(wav)
+        extract["transcript"] = text
+        extract["transcriptSegments"] = segments
+    text = extract.get("transcript")
+    if not text:
+        return None
+    meta = {
+        "fileName": inp.get("fileName"),
+        "mimeType": inp.get("mimeType"),
+        "filePath": inp.get("filePath"),
+        "audioTrackTranscript": text,
+        "transcriptWindowSeconds": extract.get("transcriptWindowSeconds"),
+        "evidenceAvailable": True,
+        "kind": "transcription",
+    }
+    if extract.get("transcriptSegments"):
+        meta["transcriptSegments"] = extract["transcriptSegments"]
+    return {
+        "finding": f"Audio transcription ({label}): {text[:12000]}",
+        "metadata": meta,
+    }
+
+
+async def _audio_input_record(inp: dict, label: str) -> dict | None:
+    path = inp.get("filePath")
+    if not path:
+        return None
+    proc = VideoProcessor()
+    if not proc.is_available():
+        data = signals_lib.load_bytes(path)
+        if not data:
+            return None
+        sig = signals_lib.inspect_bytes(data, "audio", inp.get("mimeType"))
+        desc = signals_lib.describe(data, "audio", sig)
+        finding = (desc or f"Audio check ({label}): no readable metadata.") + (
+            " | Limitation: ffmpeg/ffprobe are not installed on this server; no transcription available."
+        )
+        return {
+            "finding": finding[:2000],
+            "metadata": {
+                "fileName": inp.get("fileName"),
+                "mimeType": inp.get("mimeType"),
+                "filePath": path,
+                "evidenceAvailable": True,
+                "kind": "inspection",
+            },
+        }
+    cached = inp.get("mediaExtraction")
+    if isinstance(cached, dict) and cached.get("prepared"):
+        extract = cached
+    else:
+        try:
+            source = materialize_source(path)
+        except Exception as e:
+            return {
+                "finding": f"Audio check ({label}): file could not be read — evidence unavailable ({e}).",
+                "metadata": {"fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                             "filePath": path, "evidenceUnavailable": True},
+            }
+        wav = proc.extract_audio(
+            source,
+            str(artifacts_dir(path) / "audio.wav"),
+            max_seconds=config.AUDIO_TRANSCRIPT_WINDOW_SECONDS,
+        )
+        extract = {"prepared": True, "audio": wav, "transcript": None,
+                   "transcriptWindowSeconds": config.AUDIO_TRANSCRIPT_WINDOW_SECONDS}
+        inp["mediaExtraction"] = extract
+    if extract.get("audio") and extract.get("transcript") is None:
+        text, segments = await _transcribe_wav(extract["audio"])
+        extract["transcript"] = text
+        extract["transcriptSegments"] = segments
+    text = extract.get("transcript")
+    if text:
+        meta = {
+            "fileName": inp.get("fileName"),
+            "mimeType": inp.get("mimeType"),
+            "filePath": path,
+            "audioTrackTranscript": text,
+            "transcriptWindowSeconds": extract.get("transcriptWindowSeconds"),
+            "evidenceAvailable": True,
+            "kind": "transcription",
+        }
+        if extract.get("transcriptSegments"):
+            meta["transcriptSegments"] = extract["transcriptSegments"]
+        return {
+            "finding": f"Audio transcription ({label}): {text[:12000]}",
+            "metadata": meta,
+        }
+    return {
+        "finding": f"Audio check ({label}): no speech could be transcribed.",
+        "metadata": {"fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                     "filePath": path, "evidenceUnavailable": True,
+                     "reason": "no decodable audio / transcription failed"},
+    }
+
+
+async def _video_findings(inv: dict, cap: str) -> list[dict]:
+    """Timestamped media evidence for the video/audio capabilities.
+
+    One cached ffprobe pass gives container/stream metadata; frames are
+    extracted and time-stamped in a single ffmpeg pass; a video's audio track
+    (or a standalone audio input) is transcribed up to
+    AUDIO_TRANSCRIPT_WINDOW_SECONDS via the multimodal provider. Nothing is
+    fabricated: any unavailable extraction becomes an honest limitation.
+    capability mapping: video_analysis → inspection records,
+    frame_evidence → frame records + transcription, audio_transcription →
+    transcription records (also for the audio track inside a video).
+    """
+    records = []
+
+    def _labelled(inp):
+        return inp.get("content") or inp.get("fileName") or inp.get("type") or "media"
+
+    if cap == "video_analysis":
+        for inp in _inputs_of(inv, "video"):
+            rec = _video_analysis_record(inp, _labelled(inp), prepare_video(inp))
+            if rec:
+                records.append(rec)
+        return records
+
+    if cap == "frame_evidence":
+        for inp in _inputs_of(inv, "video"):
+            extract = prepare_video(inp)
+            observations = await _observe_frames(inp, _labelled(inp), extract)
+            frames = extract.get("frames") or []
+            for frame in frames:
+                records.append(_frame_record(
+                    inp, _labelled(inp), frame, len(frames),
+                    observations.get(round(frame["timestamp"], 2)),
+                ))
+            rec = await _transcription_record(inp, _labelled(inp), extract)
+            if rec and not any(e.get("metadata", {}).get("kind") == "transcription"
+                               for e in records):
+                records.append(rec)
+            lims = extract.get("limitations") or []
+            if not frames and lims:
+                records.append({
+                    "finding": f"Video frame evidence ({_labelled(inp)}): {'; '.join(lims)}",
+                    "metadata": {"fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                                 "filePath": inp.get("filePath"), "evidenceAvailable": False,
+                                 "kind": "frame", "limitations": lims},
+                })
+        return records
+
+    if cap == "audio_transcription":
+        for inp in _inputs_of(inv, "audio"):
+            rec = await _audio_input_record(inp, _labelled(inp))
+            if rec:
+                records.append(rec)
+        for inp in _inputs_of(inv, "video"):
+            rec = await _transcription_record(inp, _labelled(inp), prepare_video(inp))
+            if rec:
+                records.append(rec)
+        return records
+
+    return records
 
 
 async def _document_findings(inv: dict) -> list[dict]:
@@ -258,8 +680,10 @@ async def _url_findings(inv: dict) -> list[str]:
 async def _execute_check(inv: dict, cap: str):
     """Runnable checks return a mix of plain finding strings (text checks) and
     structured records {finding, metadata} (media checks)."""
+    if cap in ("video_analysis", "frame_evidence", "audio_transcription"):
+        return await _video_findings(inv, cap)
     if cap in KIND_FOR_CAP:
-        return _media_findings(inv, KIND_FOR_CAP[cap])
+        return await _media_findings(inv, KIND_FOR_CAP[cap])
     if cap == "document_verify":
         return await _document_findings(inv)
     if cap == "data_consistency":
@@ -325,7 +749,10 @@ async def run_evidence_checks(inv: dict) -> dict:
                 "investigationId": inv["id"],
                 "capability": cap,
                 "serviceName": CHECK_LABELS[cap],
-                "amountMicro": round(config.INVESTIGATION_PRICE_USDC * 1_000_000),
+                # Internal evidence-service records are not individual monetary
+                # charges: the one capability payment the user settled is the
+                # whole cost, tracked in `payments` (engine.economicSummary).
+                "amountMicro": 0,
                 "paymentState": "evidence_received",
                 "network": "internal",
                 "evidence": {"signal": "uncertain", "finding": finding[0:300], "source": ev["source"]},

@@ -175,20 +175,19 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     )
     if not inv.get("evidenceGraph") or not (inv["evidenceGraph"].get("nodes") or inv["evidenceGraph"].get("edges")):
         inv["evidenceGraph"] = build_evidence_graph(inv, evidence)
-    inv_payments = db.get_payments_for_investigation(inv["id"])
-    capability_fee = sum(
-        float(p.get("amount") or 0)
-        for p in inv_payments if p.get("status") == "settled" and p.get("capability") == inv.get("capability")
-    )
+    # economicSummary is intentionally left absent here: the payment record is
+    # written by the x402 middleware AFTER this function returns (after the
+    # route handler completes). Reading payments now would always return []
+    # for the just-settled capability fee. The summary is computed on-demand
+    # in get_investigation_with_payments() called by the GET endpoint instead.
     inv["economicSummary"] = {
-        "totalSpend": round(capability_fee, 6),
-        "capabilityFeeUsdc": round(capability_fee, 6),
+        "totalSpend": None,
+        "capabilityFeeUsdc": None,
         "checksPurchased": len([a for a in acqs if a.get("evidence")]),
         "providerCategories": list(dict.fromkeys(a.get("capability") for a in acqs if a.get("evidence"))),
-        "settlementStatus": "Settled",
+        "settlementStatus": "Pending",
         "algorandRef": next((a.get("txId") for a in acqs if a.get("txId")), None),
-        "paymentReferences": [p.get("settlementRef") for p in inv_payments
-                              if p.get("status") == "settled" and p.get("settlementRef")],
+        "paymentReferences": [],
     }
 
     # Evidence reasoning: classify roles, duplicates, stale, independent,

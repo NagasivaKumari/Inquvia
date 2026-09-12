@@ -5,9 +5,10 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { Investigation, EvidenceAcquisition, InvestigationInput } from "@/lib/types";
 import { ASSESSMENT_LABELS, RISK_LABELS, SIGNAL_LABELS } from "@/lib/types";
-import { formatUsdc, formatConfidence, formatDate, labelOr, evidenceMetaLine } from "@/lib/report-format";
+import { formatUsdc, formatConfidence, labelOr, evidenceMetaLine } from "@/lib/report-format";
 import { API_BASE, APP_NAME } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { generateReportHtml, sourceUrl, economicSummary, type ReportEmbed } from "@/lib/report-export";
 import { SourceViewer } from "@/components/sources/SourceViewer";
 import styles from "./page.module.css";
 
@@ -30,14 +31,43 @@ export default function ReportDetailPage() {
       .catch(() => setError("Report could not be loaded."));
   }, [id]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!investigation) return;
-    const report = generateReportText(investigation);
-    const blob = new Blob([report], { type: "text/plain" });
+    // Pump inline-able source content through the same authenticated fetch
+    // path SourceViewer uses. Anything that fails to load falls back to the
+    // labeled "open original" link in the export.
+    const embeds: Record<string, ReportEmbed> = {};
+    for (const input of investigation.inputs ?? []) {
+      if (!input.filePath) continue;
+      const mime = (input.mimeType ?? "").toLowerCase();
+      const inlineable =
+        mime.startsWith("image/") || mime.startsWith("text/") || mime.includes("json") || mime.includes("csv");
+      if (!inlineable) continue;
+      try {
+        const r = await apiFetch(sourceUrl(investigation.id, input.filePath));
+        if (!r.ok) continue;
+        if (mime.startsWith("image/")) {
+          const blob = await r.blob();
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(new Error("blob read failed"));
+            reader.readAsDataURL(blob);
+          });
+          embeds[input.filePath] = { imageDataUrl: dataUrl };
+        } else {
+          embeds[input.filePath] = { text: (await r.text()).slice(0, 8000) };
+        }
+      } catch {
+        // Leave unembedded → export renders the secure open-original link.
+      }
+    }
+    const report = generateReportHtml(investigation, embeds);
+    const blob = new Blob([report], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `report-${investigation.id}.txt`;
+    a.download = `report-${investigation.id}.html`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -68,6 +98,8 @@ export default function ReportDetailPage() {
     }
     return <p className="text-muted animate-pulse">Loading report…</p>;
   }
+
+  const eco = economicSummary(investigation);
 
   return (
     <div className={styles.page}>
@@ -168,14 +200,17 @@ export default function ReportDetailPage() {
 
       <ReportSection title="Economic trail">
         <div className={styles.economic}>
-          <div><strong>Checks purchased:</strong> {economicSummary(investigation).checks}</div>
-          <div><strong>Total spend:</strong> ${economicSummary(investigation).spend.toFixed(4)} USDC</div>
+          <div><strong>User payment:</strong> ${eco.spend.toFixed(4)} USDC</div>
+          <div><strong>Evidence checks performed:</strong> {eco.checks}</div>
+          <div><strong>Downstream provider spend:</strong> ${eco.downstreamSpend.toFixed(4)} USDC</div>
         </div>
         {(investigation.acquisitions ?? []).map((a) => (
           <div key={a.id} className={styles.paymentRow}>
-            <strong>{a.capability}</strong> — {a.serviceName ?? "No service"} · $
-            {((a.amountMicro ?? 0) / 1e6).toFixed(4)}{" "}
-            USDC — {a.paymentState}{" "}
+            <strong>{a.capability}</strong> — {a.serviceName ?? "No service"} ·{" "}
+            {a.txId
+              ? `$${((a.amountMicro ?? 0) / 1e6).toFixed(4)} USDC`
+              : "internal check — included in user payment"}{" "}
+            — {a.paymentState}{" "}
             {a.txId && <span className={styles.ref}>Tx: {a.txId}</span>}
           </div>
         ))}
@@ -205,16 +240,11 @@ function fileUrl(inv: Investigation, fileName: string): string {
   )}`;
 }
 
-function sourceUrl(inv: Investigation, filePath?: string): string {
-  if (!filePath) return "";
-  return `${API_BASE}/api/sources/${inv.id}/${encodeURIComponent(filePath)}`;
-}
-
 /** Inline reference for an uploaded file input (opens the actual file). */
 function FileReference({ input, invId }: { input: InvestigationInput; invId: string }) {
   if (!input.fileName) return <>{input.content}</>;
   const name = input.fileName;
-  const src = input.filePath ? sourceUrl({ id: invId } as Investigation, input.filePath) : `${API_BASE}/api/investigations/${invId}/files/${encodeURIComponent(name)}`;
+  const src = input.filePath ? sourceUrl(invId, input.filePath) : `${API_BASE}/api/investigations/${invId}/files/${encodeURIComponent(name)}`;
   return (
     <>
       {name}
@@ -456,75 +486,4 @@ function EvidenceOriginTag({ item }: { item: { metadata?: Record<string, unknown
     return <span className={`text-xs ${styles.originTag}`}>user submission</span>;
   }
   return <span className={`text-xs ${styles.originTag}`}>analysis finding</span>;
-}
-
-function generateReportText(inv: Investigation): string {
-  const acqs = inv.acquisitions ?? [];
-  const eco = economicSummary(inv);
-  const files = (inv.inputs ?? []).filter((i) => i.filePath);
-  const provLines: string[] = [];
-  for (const f of files) {
-    const sig = (f.fileSignals ?? {}) as Record<string, unknown>;
-    provLines.push(`- ${f.type}: ${f.fileName ?? f.content}`);
-    if (sig.error) {
-      provLines.push(`  metadata: could not be extracted (${sig.error})`);
-    } else if (sig.format) {
-      provLines.push(
-        `  format=${sig.format}, ${sig.width}x${sig.height}, mode=${sig.mode}, ` +
-        `size=${sig.fileSizeBytes} bytes, mime=${sig.mimeType ?? f.mimeType}, ` +
-        `exif=${sig.exifPresent ? "present" : "not present"}`
-      );
-    }
-  }
-  const rel = inv.evidenceRelationships;
-  const relationshipLines =
-    rel && !rel.established
-      ? [
-          "Evidence relationships: no supporting or contradicting relationship was established " +
-            "(zero counts do not indicate the claim was disproved).",
-        ]
-      : [`Evidence relationships: ${rel?.supporting ?? 0} supporting, ${rel?.contradicting ?? 0} contradicting.`];
-  const lines = [
-    `${APP_NAME} Investigation Report`,
-    `Case: ${inv.id}`,
-    `Date: ${formatDate(inv.createdAt)}`,
-    "",
-    "CASE",
-    inv.question,
-    "",
-    "UPLOADED SOURCE / PROVENANCE",
-    ...(provLines.length ? provLines : ["no uploaded files"]),
-    "",
-    "CONCLUSION",
-    labelOr(ASSESSMENT_LABELS, inv.conclusion),
-    inv.conclusionText,
-    ...relationshipLines,
-    `Confidence: ${formatConfidence(inv.confidence)}`,
-    `Risk: ${labelOr(RISK_LABELS, inv.risk)}`,
-    "",
-    "FINDINGS",
-    ...(inv.findings ?? []).map((f) => `- ${f}`),
-    "",
-    "LIMITATIONS",
-    ...(inv.limitations ?? []).map((l) => `- ${l}`),
-    "",
-    "ECONOMIC TRAIL",
-    `Total spend: $${eco.spend.toFixed(4)} USDC`,
-    `Checks: ${eco.checks}`,
-    ...acqs.map(
-      (a) =>
-        `- ${a.capability} (${a.serviceName ?? "no service"}): $${(a.amountMicro ?? 0) / 1e6} USDC — ${a.paymentState}${a.txId ? ` (Tx: ${a.txId})` : ""}`
-    ),
-  ];
-  return lines.join("\n");
-}
-
-function economicSummary(inv: Investigation): { spend: number; checks: number } {
-  const acqs = inv.acquisitions ?? [];
-  return {
-    spend: acqs
-      .filter((a) => a.paymentState === "evidence_received" || a.paymentState === "settled")
-      .reduce((s, a) => s + (a.amountMicro ?? 0), 0) / 1e6,
-    checks: acqs.length,
-  };
 }

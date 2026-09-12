@@ -34,6 +34,29 @@ from .libraries import engine, capabilities, atomic_route
 from .api import evidence as evidence_api
 from .x402.gate import build_x402_middleware, extract_settlement_tx_id_from_response_headers
 
+
+import time
+from collections import defaultdict
+
+class _RateLimiter:
+    """Simple rate limiter for auth endpoints (prevent brute force)."""
+    def __init__(self, max_attempts: int, window_seconds: int):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self.attempts = defaultdict(list)
+    
+    def is_allowed(self, key: str) -> bool:
+        """Check if request is within rate limit. key = IP or user identifier."""
+        now = time.time()
+        # Clean old attempts
+        self.attempts[key] = [t for t in self.attempts[key] if now - t < self.window_seconds]
+        if len(self.attempts[key]) >= self.max_attempts:
+            return False
+        self.attempts[key].append(now)
+        return True
+
+_auth_limiter = _RateLimiter(max_attempts=5, window_seconds=900)  # 5 attempts per 15 min
+
 app = FastAPI(title="Inquvia Backend API")
 app.include_router(evidence_api.router)
 
@@ -281,11 +304,6 @@ async def x402_broadcast(payload: dict):
         return JSONResponse({"error": f"Broadcast failed: {e}"}, status_code=502)
 
 
-@app.get("/api/health/debug")
-async def health_debug():
-    return {"allowed_origins": _ALLOWED_ORIGINS}
-
-
 @app.get("/")
 async def api_root(request: Request):
     accepts = request.headers.get("accept", "").lower()
@@ -369,14 +387,12 @@ async def health():
     return {"status": "ok", "service": "inquvia-backend"}
 
 
-@app.get("/api/health/debug")
-async def health_debug():
-    return {"allowed_origins": _ALLOWED_ORIGINS}
-
-
 # ── Auth ──
 @app.post("/api/auth/signup")
 async def api_signup(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _auth_limiter.is_allowed(f"signup:{client_ip}"):
+        return JSONResponse({"error": "Too many signup attempts. Please try again later."}, status_code=429)
     body = await _json(request)
     if body is None:
         return JSONResponse({"error": "Invalid request"}, status_code=400)
@@ -395,7 +411,7 @@ async def api_signup(request: Request):
             session["id"],
             httponly=True,
             samesite="lax",
-            secure=False,
+            secure=True,
             max_age=int(SESSION_DURATION_MS / 1000),
             path="/",
         )
@@ -406,6 +422,9 @@ async def api_signup(request: Request):
 
 @app.post("/api/auth/login")
 async def api_login(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _auth_limiter.is_allowed(f"login:{client_ip}"):
+        return JSONResponse({"error": "Too many login attempts. Please try again later."}, status_code=429)
     body = await _json(request)
     if body is None:
         return JSONResponse({"error": "Invalid request"}, status_code=400)
@@ -425,7 +444,7 @@ async def api_login(request: Request):
         session["id"],
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=True,
         max_age=max_age,
         path="/",
     )
@@ -553,7 +572,7 @@ async def api_investigation_get(inv_id: str, request: Request):
         return _unauthorized()
     if not _owns(user, inv_id):
         return JSONResponse({"error": "Investigation not found"}, status_code=404)
-    investigation = db.get_investigation(inv_id)
+    investigation = db.get_investigation_with_payments(inv_id)
     return JSONResponse(investigation)
 
 
@@ -931,6 +950,8 @@ async def _handle_atomic_capability(
     if not x402_available:
         headers["X-X402-Mode"] = "dev-offline"
     resp_obj = result.get("content") or {}
+    request.state.investigation_id = resp_obj.get("id")
+    request.state.capability = resp_obj.get("capability")
     return JSONResponse(resp_obj, status_code=result.get("status", 200), headers=headers)
 
 
@@ -977,3 +998,5 @@ async def _json(request: Request):
         return await request.json()
     except Exception:
         return None
+
+

@@ -3,7 +3,7 @@ from ..libraries import storage
 
 VALID_CONCLUSIONS = [
     "likely_genuine", "likely_misleading", "suspicious",
-    "insufficient_evidence", "inconclusive",
+    "insufficient_evidence", "inconclusive", "answered",
 ]
 VALID_RISKS = ["low", "moderate", "high", "unknown"]
 VALID_SIGNALS = ["supporting", "contradictory", "uncertain"]
@@ -148,7 +148,7 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     elif len(evidence) == 0:
         limitations.append("No external evidence was acquired")
     elif not limitations:
-        limitations.append("Assessment is limited to the external evidence services that were configured and settled")
+        limitations.append("Assessment is based on the evidence services that were configured and settled")
 
     if redundant:
         limitations.append(

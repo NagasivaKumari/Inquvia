@@ -1,4 +1,7 @@
 """Capability orchestration + run handlers (mirrors investigation/capabilities/*)."""
+import secrets
+from datetime import datetime, timezone
+
 from .. import db
 from ..libraries import engine
 from ..libraries import web_inspector
@@ -8,6 +11,66 @@ from ..libraries import planner
 
 class InputError(Exception):
     pass
+
+
+def _emit_and_save(inv: dict, kind: str, label: str, detail=None) -> None:
+    inv.setdefault("activity", []).append({
+        "id": f"evt_{secrets.token_urlsafe(6)[:8]}",
+        "investigationId": inv["id"],
+        "userId": inv.get("userId"),
+        "kind": kind,
+        "label": label,
+        "detail": detail,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    })
+    db.save_investigation(inv)
+
+
+def _touch(inv: dict) -> dict:
+    return db.get_investigation(inv["id"]) or inv
+
+
+def _emit_extraction_outcome(inv: dict) -> None:
+    """Activity event reflecting what frame/audio extraction actually produced:
+    'audio transcript assembled' is only claimed when a real transcript exists
+    on the extraction record; otherwise an honest limitation event."""
+    media = [i.get("mediaExtraction") or {} for i in (inv.get("inputs") or [])
+             if i.get("type") in ("video", "audio")]
+    frame_count = sum(len((m.get("frames") or [])) for m in media)
+    transcript_count = sum(1 for m in media if m.get("transcript"))
+    if frame_count and transcript_count:
+        _emit_and_save(
+            inv, "forensic_analysis",
+            "Running video forensics analysis",
+            detail=f"{frame_count} timestamped frames and audio transcript assembled",
+        )
+        return
+    if transcript_count:
+        _emit_and_save(
+            inv, "forensic_analysis",
+            "Audio transcription assembled",
+            detail=f"{transcript_count} audio track(s) transcribed",
+        )
+        return
+    if frame_count:
+        _emit_and_save(
+            inv, "media_limitation",
+            "Audio transcription unavailable",
+            detail="Frames were extracted but no speech transcript could be produced.",
+        )
+        return
+    limitations = []
+    for m in media:
+        for lim in m.get("limitations") or []:
+            if lim not in limitations:
+                limitations.append(lim)
+    reason = (limitations[0][:300] if limitations
+              else "no timestamped frames could be extracted")
+    _emit_and_save(
+        inv, "media_limitation",
+        "Frame extraction unavailable",
+        detail=reason,
+    )
 
 
 def _req_type(capability_or_reason):
@@ -104,9 +167,20 @@ async def run_video_investigation_async(inv_id: str, reqs: list):
         
         # Original processing logic from run_capability
         engine.plan_capability(inv, reqs)
-        
-        inv = db.get_investigation(inv_id)
+
+        n_media = sum(1 for i in (inv.get("inputs") or [])
+                      if i.get("type") in ("video", "audio"))
+        inv = _touch(inv)
+        _emit_and_save(
+            inv, "media_inspection",
+            "Inspecting media container & encoding",
+            detail=f"{n_media} media file(s) queued for ffmpeg/ffprobe inspection",
+        )
+
+        inv = _touch(inv)
         await evidence_checks.run_evidence_checks(inv)
+        inv = _touch(inv)
+        _emit_extraction_outcome(inv)
         await engine.analyze_investigation(inv_id)
     except Exception as e:
         import traceback; traceback.print_exc()

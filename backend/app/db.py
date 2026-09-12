@@ -200,6 +200,32 @@ def get_investigation(inv_id: str) -> dict | None:
     return doc
 
 
+def get_investigation_with_payments(inv_id: str) -> dict | None:
+    """Return the investigation with economicSummary computed from settled payments.
+
+    The x402 middleware saves the payment record after the route handler
+    returns, so economicSummary cannot be computed during finalization.
+    This function is called by the GET endpoint where the payment is already
+    persisted.
+    """
+    inv = get_investigation(inv_id)
+    if not inv:
+        return None
+    payments = get_payments_for_investigation(inv_id)
+    settled = [p for p in payments if p.get("status") == "settled"]
+    capability_fee = sum(float(p.get("amount") or 0) for p in settled)
+    existing = inv.get("economicSummary") or {}
+    inv["economicSummary"] = {
+        **existing,
+        "totalSpend": round(capability_fee, 6),
+        "capabilityFeeUsdc": round(capability_fee, 6),
+        "settlementStatus": "Settled" if capability_fee > 0 else "Pending",
+        "paymentReferences": [p.get("settlementRef") for p in settled if p.get("settlementRef")],
+    }
+    return inv
+
+
+
 def list_investigations(limit: int = 50, user_id: str | None = None) -> list[dict]:
     if not user_id:
         return []

@@ -11,6 +11,7 @@ orchestrator.
 """
 import base64
 import json
+import logging
 
 from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
 from x402.http.middleware.fastapi import payment_middleware
@@ -25,6 +26,8 @@ from x402.mechanisms.avm.exact import ExactAvmServerScheme
 from x402.server import x402ResourceServer
 
 from .. import config
+
+logger = logging.getLogger(__name__)
 
 # Bazaar discovery extension (optional metadata for facilitator cataloging).
 # Imported defensively: discovery must never take down payment gating, so if
@@ -215,21 +218,15 @@ async def _record_paid_request(request, response) -> None:
 
     tx_id = extract_settlement_tx_id_from_response_headers(dict(response.headers)) or ""
 
-    # Attribute the capability payment to the investigation returned by the
-    # atomic endpoint (the middlewares settles after the route produced it).
-    investigation_id = None
-    capability = None
-    try:
-        raw_body = getattr(response, "body", b"")
-        if callable(raw_body):
-            import inspect
-            raw_body = await raw_body() if inspect.iscoroutinefunction(raw_body) else raw_body()
-        import json as _json
-        data = _json.loads(raw_body)
-        investigation_id = data.get("id")
-        capability = data.get("capability")
-    except Exception:
-        pass
+    # Attribute the capability payment to the investigation. The route handler
+    # stores these on request.state before returning, so we never need to
+    # re-read the already-streamed response body.
+    investigation_id = getattr(request.state, "investigation_id", None)
+    capability = getattr(request.state, "capability", None)
+    if not investigation_id:
+        logger.warning("x402: Payment settlement missing investigation_id on request.state")
+    else:
+        logger.info(f"x402: Payment recorded for investigation {investigation_id}, capability {capability}, amount {amount_usdc} USDC")
 
     db.save_payment({
         "userId": user["id"],
