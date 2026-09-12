@@ -36,6 +36,7 @@ const ASSESSMENT: Record<AssessmentLabel, string> = {
   suspicious: "Suspicious",
   insufficient_evidence: "Insufficient Evidence",
   inconclusive: "Inconclusive",
+  answered: "Answered",
 };
 
 const RISK: Record<RiskLevel, string> = {
