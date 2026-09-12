@@ -86,27 +86,6 @@ async def _media_findings(inv: dict, kind: str) -> list[dict]:
             continue
         sig = signals_lib.inspect_bytes(data, kind, inp.get("mimeType"))
         desc = signals_lib.describe(data, kind, sig)
-        
-        # ADDED: Perform visual analysis
-        if kind == "image":
-            # Call analyzer directly or trigger it?
-            # We can use the multimodal capability to analyze the image now.
-            try:
-                system_prompt = "You are a forensic image analyst. Describe all visible text and labels in the image."
-                parts = [
-                    {"text": "Analyze this image and list all visible text and labels."},
-                    {"file": {"mimeType": inp.get("mimeType") or "image/jpeg", "base64": base64.b64encode(data).decode("ascii")}}
-                ]
-                # We need to call the AI here. We can use ai_lib.call_ai_with_parts
-                # But that requires passing parts.
-                # Assuming ai_lib is available.
-                visual_text = await ai_lib.call_ai_with_parts(system_prompt, parts, text_fallback=False)
-                if visual_text:
-                    desc += f"\n\nDirectly observable visual content: {visual_text}"
-            except Exception as e:
-                logger.error(f"Visual analysis failed: {e}")
-                desc += "\n\nVisual content analysis could not be performed."
-
         meta = {
             "fileName": inp.get("fileName"),
             "mimeType": inp.get("mimeType") or sig.get("mimeType"),
@@ -128,6 +107,8 @@ SOURCE_LABELS = {
     "text_layer": "selectable text layer",
     "ocr": "scanned page (no text layer — read via OCR)",
     "plain_text": "plain text",
+    "visual": "rendered page (no text layer — visual extraction attempted)",
+    "visual_ocr": "rendered page (no text layer — read via OCR of visual render)",
 }
 
 
@@ -540,9 +521,12 @@ async def _document_findings(inv: dict) -> list[dict]:
     record carrying page number, text-layer/OCR label and the investigation
     objective, so page-level provenance survives extraction, reasoning and
     the final report. Pages with no selectable text are passed to the app's
-    OCR capability; the resulting text (if any) is labeled 'ocr' with page
-    provenance. Pages OCR cannot read stay in the trail labeled as unread,
+    OCR capability; the resulting text (if any) is labeled 'ocr' or 'visual_ocr'
+    with page provenance. Pages OCR cannot read stay in the trail labeled as unread,
     with an honest reason — never dropped or fabricated.
+    
+    When normal text extraction fails or is sparse, attempts visual/OCR fallback
+    (rendering PDF pages to images and extracting text visually).
     """
     records = []
     for inp in _inputs_of(inv, "document"):
@@ -573,6 +557,8 @@ async def _document_findings(inv: dict) -> list[dict]:
                     "mimeType": inp.get("mimeType"),
                     "filePath": path,
                     "evidenceUnavailable": True,
+                    "extractionQuality": extracted.get("extractionQuality") if extracted else None,
+                    "qualityMetrics": extracted.get("qualityMetrics") if extracted else None,
                 },
             })
             continue
@@ -603,6 +589,7 @@ async def _document_findings(inv: dict) -> list[dict]:
                     "extractionSource": page["source"],
                     "documentLabel": label,
                     "objective": (inv.get("question") or "").strip(),
+                    "extractionQuality": extracted.get("extractionQuality"),
                 },
             })
     return records
@@ -653,28 +640,88 @@ def _data_findings(inv: dict) -> list[str]:
     return findings
 
 
-async def _url_findings(inv: dict) -> list[str]:
-    findings = []
+async def _url_findings(inv: dict) -> list[dict]:
+    """Structured URL evidence records.
+
+    Each record carries:
+    - finding: human-readable retrieval summary (status, title, SSL)
+    - metadata: full web inspection including extracted page content so the
+      analyzer can ground answers in the actual source text.
+
+    The evidence signal is set to 'supporting' when the page was successfully
+    retrieved (HTTP 2xx + content extracted) so the evidence-relationship
+    tally reflects a real retrieval success, not generic uncertainty.
+    """
+    records = []
     for inp in _inputs_of(inv, "url"):
         url = inp.get("content")
         if not url:
             continue
         inspection = inv.get("webInspection") or await web_inspector.inspect_live_url(url)
         if not inspection:
-            findings.append(f"URL check ({url}): could not be inspected.")
+            records.append({
+                "finding": f"URL check ({url}): could not be inspected — network or DNS failure.",
+                "signal": "uncertain",
+                "metadata": {"url": url, "evidenceAvailable": False},
+            })
             continue
-        bits = [
-            f"URL check ({url}): HTTP {inspection.get('statusCode') or 'n/a'}",
-            f"online={bool(inspection.get('isOnline'))}",
-        ]
+        # Cache the full inspection on the investigation so the analyzer can
+        # access the complete extracted page text without re-fetching.
+        if not inv.get("webInspection"):
+            inv["webInspection"] = inspection
+        status = inspection.get("statusCode")
+        is_online = bool(inspection.get("isOnline"))
+        has_content = bool(inspection.get("fullText") or inspection.get("content"))
+        access = inspection.get("access") or {}
+        blocked = access.get("blocked", False)
+
+        bits = [f"URL check ({url}): HTTP {status or 'n/a'}"]
+        bits.append(f"online={is_online}")
         if inspection.get("title"):
             bits.append(f"title={inspection['title'][:120]}")
         if inspection.get("sslValid") is not None:
             bits.append(f"sslValid={inspection['sslValid']}")
         if inspection.get("dnsRecords"):
             bits.append(f"dnsIPs={len(inspection['dnsRecords'])}")
-        findings.append(", ".join(bits))
-    return findings
+        if has_content:
+            bits.append(f"contentLength={inspection.get('totalTextLength', 0)}chars")
+        if blocked:
+            bits.append(f"blocked={access.get('reason', 'access denied')[:80]}")
+        if inspection.get("renderNote"):
+            bits.append(f"renderNote={inspection['renderNote'][:120]}")
+
+        # A successful retrieval (2xx + content present) is supporting evidence
+        # for any question about the page. Blocked/failed retrievals stay uncertain.
+        if is_online and has_content and not blocked:
+            signal = "supporting"
+        elif blocked or not is_online:
+            signal = "uncertain"
+        else:
+            signal = "uncertain"
+
+        records.append({
+            "finding": ", ".join(bits),
+            "signal": signal,
+            "metadata": {
+                "url": url,
+                "statusCode": status,
+                "isOnline": is_online,
+                "sslValid": inspection.get("sslValid"),
+                "title": inspection.get("title"),
+                "contentLength": inspection.get("totalTextLength", 0),
+                "hasContent": has_content,
+                "blocked": blocked,
+                "evidenceAvailable": is_online and not blocked,
+                # Full extracted text so the analyzer can quote exact values.
+                "fullText": (inspection.get("fullText") or "")[:60000],
+                "bodySnippet": inspection.get("bodySnippet") or "",
+                "headings": inspection.get("headings") or [],
+                "paragraphs": (inspection.get("paragraphs") or [])[:100],
+                "tables": inspection.get("tables") or [],
+                "metaDescription": inspection.get("metaDescription") or "",
+            },
+        })
+    return records
 
 
 async def _execute_check(inv: dict, cap: str):
@@ -699,6 +746,7 @@ def _normalize_records(records) -> list[dict]:
         if isinstance(rec, str):
             out.append({"finding": rec, "metadata": {}})
         else:
+            # Preserve signal if the check set one; do not strip it.
             out.append(rec)
     return out
 
@@ -728,12 +776,15 @@ async def run_evidence_checks(inv: dict) -> dict:
             finding = finding[:limit]
             now = _now_iso()
             ev_id = _nanoid("ev")
+            # Use the per-record signal when the check produced one (e.g. URL
+            # retrieval success → 'supporting'); fall back to 'uncertain'.
+            ev_signal = rec.get("signal") or "uncertain"
             ev = {
                 "id": ev_id,
                 "type": req.get("type") or "evidence",
                 "source": f"Inquvia check: {CHECK_LABELS[cap]}",
                 "finding": finding,
-                "signal": "uncertain",
+                "signal": ev_signal,
                 "status": "collected",
                 "confidence": None,
                 "timestamp": now,
@@ -755,7 +806,7 @@ async def run_evidence_checks(inv: dict) -> dict:
                 "amountMicro": 0,
                 "paymentState": "evidence_received",
                 "network": "internal",
-                "evidence": {"signal": "uncertain", "finding": finding[0:300], "source": ev["source"]},
+                "evidence": {"signal": ev_signal, "finding": finding[0:300], "source": ev["source"]},
                 "createdAt": now,
             })
 

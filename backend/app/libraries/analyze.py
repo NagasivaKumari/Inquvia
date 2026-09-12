@@ -180,10 +180,31 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
 
 
 def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
+    """Build a claim→sub-objective→evidence→conclusion graph.
+
+    Every important final claim is explicitly connected to the evidence that
+    supports or contradicts it. Sub-objectives (when present) are intermediate
+    nodes between the top-level claim and the evidence items.
+    """
     nodes = []
     edges = []
     claim_id = "node_claim"
     nodes.append({"id": claim_id, "kind": "claim", "label": (inv.get("question") or "")[:80]})
+
+    # Sub-objective nodes (produced by the image analyzer's decomposition step)
+    sub_objectives = inv.get("subObjectives") or []
+    sub_node_ids = {}
+    for i, sub in enumerate(sub_objectives):
+        if not isinstance(sub, dict):
+            continue
+        sid = f"node_sub_{i}"
+        sub_node_ids[i] = sid
+        status = sub.get("status") or "inconclusive"
+        nodes.append({"id": sid, "kind": "sub_objective",
+                      "label": sub.get("objective") or f"Sub-objective {i + 1}",
+                      "status": status,
+                      "evidenceLevel": sub.get("evidenceLevel") or "unknown"})
+        edges.append({"from": claim_id, "to": sid, "relation": "requires"})
 
     for e in evidence:
         eid = e.get("id")
@@ -192,6 +213,7 @@ def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
         nodes.append({"id": source_id, "kind": "source", "label": e.get("source")})
         nodes.append({"id": ev_id, "kind": "evidence", "label": e.get("type"), "evidenceId": eid})
         edges.append({"from": ev_id, "to": source_id, "relation": "derived_from"})
+
         signal = e.get("signal")
         if signal == "supporting" or e.get("supportsClaim"):
             relation = "supports"
@@ -199,16 +221,33 @@ def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
             relation = "contradicts"
         else:
             relation = "related_to"
-        edges.append({"from": ev_id, "to": claim_id, "relation": relation})
 
-    finding_id = "node_finding"
-    findings = inv.get("findings") or []
-    nodes.append({"id": finding_id, "kind": "finding", "label": findings[0] if findings else "Analysis result"})
-    edges.append({"from": finding_id, "to": claim_id, "relation": "verified_by"})
+        # Connect evidence to sub-objective nodes when present, else to claim
+        if sub_node_ids:
+            # Attach to the first sub-objective whose evidenceLevel matches the
+            # evidence type, or fall back to the claim node.
+            cap = (e.get("metadata") or {}).get("checkCapability") or ""
+            matched = False
+            for i, sub in enumerate(sub_objectives):
+                if not isinstance(sub, dict):
+                    continue
+                level = sub.get("evidenceLevel") or ""
+                # image metadata/provenance → observed/inferred sub-objectives
+                if cap in ("image_provenance", "image_metadata") and level in ("observed", "inferred"):
+                    edges.append({"from": ev_id, "to": sub_node_ids[i], "relation": relation})
+                    matched = True
+                    break
+            if not matched:
+                edges.append({"from": ev_id, "to": claim_id, "relation": relation})
+        else:
+            edges.append({"from": ev_id, "to": claim_id, "relation": relation})
 
-    nodes.append({"id": "node_assessment", "kind": "assessment", "label": inv.get("conclusion")})
-    top_ev = f"node_ev_{evidence[0]['id']}" if evidence else finding_id
-    edges.append({"from": top_ev, "to": "node_assessment", "relation": "related_to"})
+    # Assessment node connected to the conclusion
+    conclusion = inv.get("conclusion") or "unknown"
+    assessment_id = "node_assessment"
+    nodes.append({"id": assessment_id, "kind": "assessment", "label": conclusion})
+    # Connect assessment to claim (not to a random evidence item)
+    edges.append({"from": assessment_id, "to": claim_id, "relation": "concludes"})
 
     return {"nodes": nodes, "edges": edges}
 

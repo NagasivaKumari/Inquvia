@@ -2,22 +2,129 @@
 
 Extraction is comprehensive and question-agnostic by design: every page is
 retained with its page number and a label describing where its text came from
-— a selectable text layer ("text_layer") or the rendered page ("ocr",
-i.e. no selectable text, so anything read off it is OCR-derived). Choosing
-which pages or passages are relevant to the user's question happens LATER, in
-analysis; nothing in this module reads the question.
+— a selectable text layer ("text_layer"), rendered page ("visual"),
+or OCR-derived ("ocr"). Choosing which pages or passages are relevant to the
+user's question happens LATER, in analysis; nothing in this module reads the
+question.
+
+When normal text extraction fails, is incomplete, or corrupted, the module
+automatically attempts fallback extraction: rendering PDF pages to images and
+extracting text visually. This ensures genuine unreadable documents are
+distinguished from extraction failures.
 
 PDFs are read with PyMuPDF (fitz) when installed. When no extractor is
-installed or a document yields no readable content, extraction returns None —
-evidence unavailable — rather than fabricating text.
+installed or a document yields no readable content after all fallback
+attempts, extraction returns None — evidence unavailable — rather than
+fabricating text.
 """
+import base64
+import io
 import re
 
 MAX_PAGES = 200  # ponytail: hard cap so a pathological PDF can't flood storage; raise if large scans are real inputs
+MIN_EXTRACTION_QUALITY = 50  # minimum chars per page to consider extraction valid
+EXTRACTION_QUALITY_THRESHOLD = 0.3  # if <30% of pages have content, trigger fallback
 
 
 def _safe_text(raw: str) -> str:
     return re.sub(r"\r\n?", "\n", raw or "").strip()
+
+
+def _assess_extraction_quality(pages: list[dict]) -> dict:
+    """Measure extraction quality to detect incomplete/corrupted extractions.
+
+    Returns {"quality": str, "metrics": {...}} where quality is one of:
+    - "complete": most pages have substantial text (good extraction)
+    - "partial": some pages readable, others empty (mixed quality)
+    - "sparse": very few pages have readable text (likely extraction failure)
+    - "empty": no pages have readable text (unreadable document)
+    """
+    if not pages:
+        return {"quality": "empty", "metrics": {"pageCount": 0, "pagesWithText": 0}}
+
+    pages_with_text = sum(1 for p in pages if (p.get("text") or "").strip())
+    total_pages = len(pages)
+    avg_chars = sum(len((p.get("text") or "")) for p in pages) / total_pages if total_pages > 0 else 0
+    text_coverage = pages_with_text / total_pages if total_pages > 0 else 0
+
+    # Heuristics to detect extraction failure vs. genuinely unreadable documents:
+    # - If >70% of pages are empty and average text is <100 chars → extraction failure
+    # - If any pages exist but average text is <20 chars → likely scanned/image PDF
+    # - If >70% coverage and avg text >100 chars → good extraction
+
+    if text_coverage >= 0.7 and avg_chars > 100:
+        quality = "complete"
+    elif text_coverage >= 0.3 and avg_chars > 50:
+        quality = "partial"
+    elif text_coverage > 0 or avg_chars > 0:
+        quality = "sparse"
+    else:
+        quality = "empty"
+
+    return {
+        "quality": quality,
+        "metrics": {
+            "pageCount": total_pages,
+            "pagesWithText": pages_with_text,
+            "textCoverage": round(text_coverage, 2),
+            "avgCharsPerPage": round(avg_chars, 1),
+        },
+    }
+
+
+async def _extract_with_visual_fallback(data: bytes, mime: str | None = None,
+                                         run_ocr=None) -> dict | None:
+    """Attempt visual/OCR extraction when text extraction is empty/sparse.
+
+    Returns rendered page images (as base64) with visual text extraction if
+    available. Used as a fallback when normal text extraction fails.
+    """
+    try:
+        import fitz
+    except Exception:
+        return None
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception:
+        return None
+
+    pages = []
+    try:
+        for i, page in enumerate(doc):
+            if i >= MAX_PAGES:
+                break
+            # Render the page to an image (PNG) for visual extraction
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+            img_data = pix.tobytes(output="png")
+            img_b64 = base64.b64encode(img_data).decode("ascii")
+            pages.append({
+                "page": i + 1,
+                "text": "",  # Will be filled by OCR if available
+                "image": img_b64,
+                "source": "visual",
+            })
+    finally:
+        doc.close()
+
+    if pages and run_ocr:
+        try:
+            texts = await run_ocr(data, mime, pages)
+        except Exception:
+            texts = {}
+        for p in pages:
+            t = (texts or {}).get(p["page"])
+            if t and t.strip():
+                p["text"] = _safe_text(t)
+                p["source"] = "visual_ocr"
+
+    return {
+        "pageCount": len(pages),
+        "extractionSource": "visual_ocr" if any(p.get("text") for p in pages) else "visual",
+        "textLayerPages": 0,
+        "ocrPages": sum(1 for p in pages if p.get("source") == "visual_ocr"),
+        "pages": pages,
+    }
 
 
 def extract_pdf_pages(data: bytes) -> dict | None:
@@ -45,7 +152,12 @@ def extract_pdf_pages(data: bytes) -> dict | None:
     if not pages:
         return None
     stats = _extraction_stats(pages)
-    return {**stats, "pages": pages}
+    result = {**stats, "pages": pages}
+    # Assess quality to flag potential extraction failures for later fallback
+    quality_assessment = _assess_extraction_quality(pages)
+    result["extractionQuality"] = quality_assessment["quality"]
+    result["qualityMetrics"] = quality_assessment["metrics"]
+    return result
 
 
 def _extraction_stats(pages: list[dict]) -> dict:
@@ -78,19 +190,34 @@ def _extraction_stats(pages: list[dict]) -> dict:
 
 async def extract_document_pages_with_ocr(data: bytes, mime: str | None = None,
                                           run_ocr=None) -> dict | None:
-    """Page extraction plus OCR for pages without a text layer.
+    """Page extraction plus OCR for pages without a text layer, with fallback.
 
     run_ocr(data, mime, pages) is the app's OCR capability: it reads the
     attachment and returns {page_number: verbatim text} for the pages it could
-    read. OCR-derived pages stay labeled source='ocr' with their page number;
-    pages OCR could not read remain empty — labeled, honest, never fabricated.
-    Question-agnostic: every page is transcribed; relevance selection happens
-    later in analysis.
+    read. OCR-derived pages stay labeled source='ocr'/'visual_ocr' with their
+    page number; pages OCR could not read remain empty — labeled, honest, never
+    fabricated. Question-agnostic: every page is transcribed; relevance
+    selection happens later in analysis.
+
+    If normal text extraction fails or is of poor quality (sparse/empty),
+    triggers visual/OCR fallback to attempt page image extraction.
     """
     extracted = extract_document_pages(data, mime)
     if not extracted:
         return None
-    ocr_pages = [p for p in extracted["pages"] if p.get("source") == "ocr"]
+
+    # Check extraction quality; if poor, try visual fallback
+    quality = extracted.get("extractionQuality", "complete")
+    if quality in ("empty", "sparse") and mime and "pdf" in mime.lower():
+        # Extraction failed or is very sparse; try rendering pages visually
+        fallback = await _extract_with_visual_fallback(data, mime, run_ocr)
+        if fallback and fallback.get("pages"):
+            # Fallback succeeded; use it instead
+            return fallback
+        # Fallback also failed; continue with original (possibly empty) extraction
+
+    # Process pages with OCR for those missing text
+    ocr_pages = [p for p in extracted["pages"] if p.get("source") in ("ocr", "visual")]
     if ocr_pages:
         texts = {}
         if run_ocr:

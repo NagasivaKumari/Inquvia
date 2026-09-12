@@ -65,7 +65,13 @@ def _to_str_array(v) -> list[str]:
 def _apply_evidence_signals(evidence: list[dict], signals) -> None:
     """Stamp per-evidence signals returned by the model onto the evidence
     items (in place), so supporting/contradictory tallies and the evidence
-    graph reflect the analysis verdict instead of staying 'uncertain'."""
+    graph reflect the analysis verdict instead of staying 'uncertain'.
+
+    A 'supporting' signal set by a deterministic check (e.g. successful URL
+    retrieval) is the floor: the AI can upgrade uncertain→supporting or
+    uncertain→contradictory, but must not downgrade supporting→uncertain.
+    This prevents the AI from mislabeling a successful retrieval as uncertain
+    merely because the answer to the question is uncertain."""
     if not signals:
         return
     by_id = {
@@ -76,8 +82,15 @@ def _apply_evidence_signals(evidence: list[dict], signals) -> None:
     valid = {"supporting", "contradictory", "uncertain"}
     for e in evidence:
         sig = by_id.get(e.get("id"))
-        if sig in valid:
-            e["signal"] = sig
+        if sig not in valid:
+            continue
+        current = e.get("signal")
+        # Never downgrade a deterministic 'supporting' signal to 'uncertain'.
+        # The check set 'supporting' because retrieval succeeded; that fact
+        # does not change based on whether the AI can answer the question.
+        if current == "supporting" and sig == "uncertain":
+            continue
+        e["signal"] = sig
 
 
 def _merge_ai_raw(inv, evidence, raw) -> dict:
@@ -120,6 +133,11 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
             f"Assessment: {conclusion.replace('_', ' ').upper()}. "
             f"{' '.join(limitations) if limitations else ''}"
         ).strip()
+    # evidenceRelationships is recomputed from the post-signal-update heuristic
+    # so it reflects any signal changes applied by _apply_evidence_signals above.
+    ev_rel = base.get("evidenceRelationships") or {
+        "supporting": 0, "contradicting": 0, "established": False,
+    }
     result = {
         "conclusion": conclusion,
         "conclusionText": conclusion_text,
@@ -130,9 +148,7 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
         "limitations": limitations if limitations else base["limitations"],
         "uncertainty": uncertainty,
         "sourcesUsed": sources_used,
-        "evidenceRelationships": base.get("evidenceRelationships") or {
-            "supporting": 0, "contradicting": 0, "established": False,
-        },
+        "evidenceRelationships": ev_rel,
     }
     # Question-relevant structured document result: the answer to the user's
     # question, the reasoning, the selected passages (with provenance), and
@@ -156,13 +172,17 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts, text_fallba
     effective = [e for e in evidence if e["id"] not in redundant_evidence_ids(inv, evidence)]
     if effective:
         evidence_text = "\n".join(
-            f"{i + 1}. [{e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
+            f"{i + 1}. [id={e.get('id')} signal={e.get('signal')}] source={e.get('source')} finding={e.get('finding')} confidence={e.get('confidence')}"
             for i, e in enumerate(effective)
         )
         system_prompt += (
             "\nFor each acquired evidence item you used, also return 'evidenceSignals': "
             "[{'id': <evidence id>, 'signal': 'supporting'|'contradictory'|'uncertain'}]. "
-            "Classify each item honestly; items that neither support nor contradict the claim are 'uncertain'."
+            "Use the exact id values shown in the ACQUIRED EVIDENCE list. "
+            "Classify each item honestly: 'supporting' if it contains content that answers "
+            "or supports the claim, 'contradictory' if it conflicts, 'uncertain' only if it "
+            "genuinely neither supports nor contradicts. "
+            "A successful page retrieval containing the answer MUST be 'supporting'."
         )
     elif evidence:
         # Do not let a model manufacture a conclusion from copied or dependent
@@ -228,15 +248,88 @@ async def _claim_analyzer(inv, evidence):
     return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
+# Evidence grounding rules for image investigations — generic, question-independent.
+_IMAGE_EVIDENCE_RULES = (
+    "EVIDENCE GROUNDING RULES:\n"
+    "1. OBSERVATION vs INFERENCE vs EXTERNAL REQUIREMENT:\n"
+    "   - Directly observable (high confidence): color, shape, visible objects, readable text, "
+    "apparent texture, visible composition, spatial relationships, visible labels/markings.\n"
+    "   - Inferred (moderate confidence, must be labeled 'appears to' / 'suggests'): "
+    "material composition, manufacturing technique, approximate age, emotional state.\n"
+    "   - Requires external evidence (low/no confidence from image alone): brand identity, "
+    "designer attribution, originality, copyright ownership, provenance, identity of persons, "
+    "authenticity, prior publication history.\n"
+    "2. EVIDENCE HIERARCHY: Use only levels 1-3 as factual conclusions:\n"
+    "   Level 1 = directly observed. Level 2 = extracted (metadata). "
+    "Level 3 = evidence-supported inference. Level 4 = unverified hypothesis (label explicitly). "
+    "Level 5 = unsupported claim (do NOT present as answer).\n"
+    "3. NO INVENTED FACTS: Do not convert visual resemblance into factual identity. "
+    "Do not convert appearance into material composition. "
+    "Do not convert similarity into originality/copying. "
+    "Do not infer provenance without provenance evidence. "
+    "Do not infer a person's identity without appropriate evidence.\n"
+    "4. METADATA SEMANTICS: File-level metadata (format, dimensions, EXIF) is separate from "
+    "visual evidence. Metadata presence does not establish originality or authenticity.\n"
+    "5. EVIDENCE SIGNALS: Assign 'supporting' to evidence that directly supports a claim in "
+    "your answer. Assign 'contradictory' if it conflicts. Assign 'uncertain' ONLY if it "
+    "genuinely neither supports nor contradicts. File-level metadata confirming observable "
+    "properties MUST be 'supporting', not 'uncertain'.\n"
+    "6. CONFIDENCE CALIBRATION:\n"
+    "   - 80-95: directly observable facts with clear visual evidence.\n"
+    "   - 50-75: inferences with visible supporting detail.\n"
+    "   - 20-49: claims requiring external evidence that was not acquired.\n"
+    "   - 0-19: claims that cannot be established from the image at all.\n"
+    "   For multi-part questions, overall confidence = confidence of the weakest sub-objective.\n"
+    "7. CONCLUSION SEMANTICS:\n"
+    "   - 'answered': evidence supports a direct answer to the question.\n"
+    "   - 'inconclusive': evidence is conflicting or does not establish a reliable conclusion.\n"
+    "   - 'insufficient_evidence': required evidence cannot be obtained from the image.\n"
+    "   - 'likely_genuine'/'likely_misleading'/'suspicious': forensic verdicts only when "
+    "observable signals support them.\n"
+    "   Do NOT use 'uncertain' as a generic fallback. Do NOT force every investigation into 'answered'.\n"
+    "8. CROSS-CHECK: Before returning your answer, verify every factual statement against the "
+    "evidence. Remove or qualify any statement not traceable to acquired evidence.\n"
+)
+
+
 async def _image_analyzer(inv, evidence):
-    system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's image analyst. Your primary goal is to answer the user's question by analyzing the provided image(s). "
-        "Observe the image content directly for objects, text, timestamps, people, settings, and other visual details relevant to the question. "
-        "Include any signs of manipulation, generative-AI artifacts, or provenance inconsistencies if relevant to the question. "
-        "Distinguish clearly between direct visual observations and inferences. Cite specific visual elements to support your answer. "
-        "If the user asks for text extraction, description, or listing of visual elements, provide the answer directly in the 'answer' field and use conclusion 'answered'. "
-        "If you cannot answer the question using the image or available evidence, explicitly state what information is missing. "
-        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, answer: string, assessmentReasoning: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
+    """Open-ended image investigator.
+
+    The user's question drives everything: sub-objectives are decomposed from
+    the question, evidence is evaluated per sub-objective, and the final answer
+    is cross-checked against the evidence before returning.
+    """
+    system_prompt = (
+        _QUESTION_RULE + _IMAGE_EVIDENCE_RULES +
+        "You are Inquvia's image analyst. Answer the user's question by analyzing the provided "
+        "image(s) and any acquired evidence. Apply the EVIDENCE GROUNDING RULES strictly.\n\n"
+        "PROCESS (follow in order):\n"
+        "1. DECOMPOSE: Read the user's question and identify every sub-objective "
+        "(what must be established to fully answer it).\n"
+        "2. CLASSIFY each sub-objective as:\n"
+        "   a) Answerable from direct visual observation\n"
+        "   b) Answerable by inference from visual evidence (label as inference)\n"
+        "   c) Requires external evidence not available from the image alone\n"
+        "3. ANSWER each sub-objective independently using the appropriate evidence level.\n"
+        "4. CROSS-CHECK: Before finalizing, verify every factual statement in your answer "
+        "against the evidence. Detect unsupported statements and remove or qualify them. "
+        "Detect contradictions between your answer and the evidence.\n"
+        "5. SYNTHESIZE: Combine sub-objective results into a coherent overall answer. "
+        "Do not let success on one sub-objective mask failure on another.\n"
+        "6. ASSIGN evidenceSignals for each acquired evidence item based on what it actually supports.\n"
+        "7. SET confidence to reflect the weakest sub-objective.\n\n"
+        "Return ONLY JSON with this exact schema:\n"
+        "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|"
+        "'insufficient_evidence'|'inconclusive', "
+        "confidence: number 0-100, "
+        "answer: string (direct answer to the user's question, or explicit insufficiency statement), "
+        "assessmentReasoning: string (explain sub-objective decomposition and evidence used), "
+        "subObjectives: [{objective: string, status: 'answered'|'inconclusive'|'insufficient_evidence', "
+        "evidenceLevel: 'observed'|'inferred'|'external_required', finding: string}], "
+        "findings: string[], contradictions: string[], limitations: string[], "
+        "uncertainty: string (specific reason if uncertain, empty string if not), "
+        "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }"
     )
     images = [i for i in (inv.get("inputs") or []) if i.get("type") == "image"]
     parts = []
@@ -254,13 +347,12 @@ async def _image_analyzer(inv, evidence):
             else:
                 missing_images.append(input_.get("fileName") or input_.get("content") or "image")
     if missing_images:
-        # If any image file cannot be retrieved, we cannot perform visual analysis.
-        # Return an honest insufficiency result rather than falling back to text-only.
         return {
             "conclusion": "insufficient_evidence",
             "confidence": 0,
             "answer": f"Unable to analyze image content: the following image file(s) could not be accessed from storage: {', '.join(missing_images)}",
             "assessmentReasoning": "Visual analysis requires direct access to the submitted image bytes. File retrieval from storage failed, so no visual observations could be made.",
+            "subObjectives": [],
             "findings": [],
             "contradictions": [],
             "limitations": [f"Image file retrieval failed for: {', '.join(missing_images)} — visual evidence unavailable"],
@@ -270,12 +362,12 @@ async def _image_analyzer(inv, evidence):
             "evidenceSignals": [],
         }
     if not any(p.get("file") for p in parts):
-        # No image inputs at all - honest insufficiency
         return {
             "conclusion": "insufficient_evidence",
             "confidence": 0,
             "answer": "No image was submitted for analysis.",
             "assessmentReasoning": "The investigation requires an image input, but none was provided.",
+            "subObjectives": [],
             "findings": [],
             "contradictions": [],
             "limitations": ["No image input provided"],
@@ -284,7 +376,12 @@ async def _image_analyzer(inv, evidence):
             "risk": "unknown",
             "evidenceSignals": [],
         }
-    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    result = await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    # Persist sub-objectives so the evidence graph can use them
+    raw_sub = result.pop("subObjectives", None)
+    if raw_sub and isinstance(raw_sub, list):
+        inv["subObjectives"] = raw_sub
+    return result
 
 
 async def _video_analyzer(inv, evidence):
@@ -365,7 +462,9 @@ async def _video_analyzer(inv, evidence):
         limitations = extract.get("limitations") or []
         if not frames and not limitations:
             limitations.append("Frame extraction produced no frames; visual evidence is unavailable.")
-        if extract.get("audio") and not transcript:
+        if not (extract.get("inspection") or {}).get("hasAudio") and extract.get("state") == "ok":
+            limitations.append("No audio track was detected; audio analysis is not applicable.")
+        elif extract.get("audio") and not transcript:
             limitations.append("Audio stream present but no transcript available; audio evidence is unavailable.")
         if limitations:
             parts.append({"text": "VIDEO_PROCESSING_LIMITATIONS: " + "; ".join(limitations)})
@@ -530,11 +629,36 @@ async def _document_analyzer(inv, evidence):
 
 async def _source_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's web source analyst. Evaluate the submitted URL using the live web inspection data (DNS, SSL, HTTP, content snippet) "
-        "and the acquired evidence. Assess credibility signals, not absolute verification. Express confidence honestly. "
-        "If the question asks to extract, summarize, or describe the page content: provide the extracted content in 'answer' "
-        "and use conclusion 'answered'. If the question asks whether the source is credible/legitimate/risky: "
-        "issue a credibility assessment ONLY when observable signals support it. "
+        "You are Inquvia's web source analyst. "
+        "Your PRIMARY objective is to answer the user's exact question using the extracted page content. "
+        "Follow this process strictly:\n"
+        "1. Read the user's question and identify every sub-objective.\n"
+        "2. Search the FULL_PAGE_TEXT for passages that directly address each sub-objective.\n"
+        "3. Quote or paraphrase the exact relevant passage(s) before forming your answer.\n"
+        "4. Prefer exact values from the source over approximate summaries. "
+        "If the source states a specific number, date, or duration, use that exact value — "
+        "do NOT substitute a rounded, approximate, or generic value.\n"
+        "5. If the source contains conflicting values, report the conflict explicitly in 'contradictions'.\n"
+        "6. Cross-check your final answer against the quoted passages before returning it. "
+        "If your answer states a fact not present in the passages, remove or qualify it.\n"
+        "7. For every major factual statement in the answer, assign 'supporting' to the "
+        "evidence item(s) that contain the supporting passage in evidenceSignals. "
+        "A successful page retrieval that contains the answer MUST be marked 'supporting', "
+        "not 'uncertain'. Only mark an evidence item 'uncertain' if it genuinely neither "
+        "supports nor contradicts the answer.\n"
+        "8. Use conclusion 'answered' when the page content directly answers the question. "
+        "Use 'inconclusive' only when the content is ambiguous or conflicting. "
+        "Use 'insufficient_evidence' only when the required information is genuinely absent from the page.\n"
+        "9. Confidence must reflect evidence quality: high (80-95) when exact values are "
+        "present and unambiguous in the source; moderate (50-75) when inferred or partially "
+        "supported; low (<50) when conflicting or absent. Do NOT return high confidence when "
+        "your answer contains a value that differs from what the source states.\n"
+        "10. Credibility signals (DNS, SSL, HTTP status) are secondary context — do not let "
+        "them override a factual answer that is directly supported by the page content. "
+        "A successful HTTP retrieval does NOT make the answer uncertain; it is evidence that "
+        "the page was accessible and its content is available for analysis.\n"
+        "11. The user's exact question (from QUESTION field) is the investigation objective — "
+        "preserve it verbatim in your reasoning.\n"
         "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
         "confidence: number 0-100, answer: string, assessmentReasoning: string, "
         "findings: string[], contradictions: string[], limitations: string[], uncertainty: string, "
@@ -543,11 +667,60 @@ async def _source_analyzer(inv, evidence):
     )
     url_input = _find_input(inv, "url")
     inspection = inv.get("webInspection")
-    context = [
-        f"URL: {url_input.get('content') if url_input else _first_text_input(inv) or inv.get('question')}",
-        f"LIVE_WEB_INSPECTION:\n{json_dumps(inspection)}" if inspection else "No live web inspection was performed.",
-    ]
-    return await _run_analysis(inv, evidence, system_prompt, [{"text": "\n\n".join(context)}])
+
+    # Build context: URL + retrieval status + full extracted page text.
+    # The full text is the primary evidence body; the AI must ground its
+    # answer in it rather than relying on internal knowledge.
+    url_str = url_input.get("content") if url_input else _first_text_input(inv) or inv.get("question")
+    context_parts = []
+
+    # Retrieval status block (separate from answer uncertainty).
+    if inspection:
+        status = inspection.get("statusCode")
+        is_online = inspection.get("isOnline")
+        ssl_valid = inspection.get("sslValid")
+        title = inspection.get("title") or ""
+        access = inspection.get("access") or {}
+        retrieval_lines = [
+            f"URL: {url_str}",
+            f"HTTP_STATUS: {status or 'unknown'}",
+            f"ONLINE: {is_online}",
+            f"SSL_VALID: {ssl_valid}",
+        ]
+        if title:
+            retrieval_lines.append(f"PAGE_TITLE: {title}")
+        if access.get("blocked"):
+            retrieval_lines.append(f"ACCESS_BLOCKED: {access.get('reason', 'unknown reason')}")
+        if inspection.get("renderNote"):
+            retrieval_lines.append(f"RENDER_NOTE: {inspection['renderNote']}")
+        context_parts.append({"text": "RETRIEVAL_STATUS:\n" + "\n".join(retrieval_lines)})
+
+        # Full page text — the primary evidence body for answering the question.
+        # Prefer fullText (complete bounded extraction); fall back to content chunk.
+        full_text = inspection.get("fullText") or inspection.get("content") or ""
+
+        # Also pull full text from evidence metadata if the inspection on inv
+        # was stored before the fullText field was added.
+        if not full_text:
+            for ev in evidence:
+                meta = ev.get("metadata") or {}
+                if meta.get("checkCapability") == "content_extract" and meta.get("fullText"):
+                    full_text = meta["fullText"]
+                    break
+
+        if full_text:
+            context_parts.append({"text": f"FULL_PAGE_TEXT (use this to answer the question):\n{full_text[:50000]}"})
+            # Structured headings as a navigation aid.
+            headings = inspection.get("headings") or []
+            if headings:
+                heading_lines = [f"{'#' * h['level']} {h['text']}" for h in headings[:40]]
+                context_parts.append({"text": "PAGE_HEADINGS:\n" + "\n".join(heading_lines)})
+        else:
+            context_parts.append({"text": f"URL: {url_str}\n\nNo page content could be extracted (access blocked or network failure)."})
+    else:
+        context_parts.append({"text": f"URL: {url_str}\n\nNo live web inspection was performed."})
+
+    return await _run_analysis(inv, evidence, system_prompt, context_parts)
 
 
 async def _data_analyzer(inv, evidence):

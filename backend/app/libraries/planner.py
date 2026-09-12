@@ -128,7 +128,7 @@ def _make_planner(keys):
 
 plan_claim_requirements = _make_planner(["original_source", "claim_support", "independent_source", "contradictory_evidence"])
 plan_image_requirements = _make_planner(["image_provenance", "reverse_image", "image_metadata", "source_verify"])
-plan_video_requirements = _make_planner(["video_analysis", "frame_evidence", "image_metadata", "source_verify"])
+plan_video_requirements = _make_planner(["video_analysis", "frame_evidence", "audio_transcription", "source_verify"])
 plan_document_requirements = _make_planner(["document_verify", "source_verify"])
 plan_source_requirements = _make_planner(["domain_lookup", "ssl_scan", "content_extract", "source_verify"])
 plan_data_requirements = _make_planner(["data_consistency", "source_verify"])
@@ -137,11 +137,12 @@ plan_audio_requirements = _make_planner(["audio_transcription", "source_verify"]
 
 async def plan_dynamic_requirements(question: str, inputs: list[str] | None = None,
                                     max_checks: int = 4) -> list[dict]:
-    """AI-picks which executable evidence checks answer THIS question.
+    """Question-driven evidence planner.
 
-    Selection is driven by the question content and the available input types,
-    against the executable catalog (EXECUTABLE_CHECKS). Falls back to the
-    keyword planner when the model can't answer (offline/resilience).
+    For image investigations the planner decomposes the question into
+    sub-objectives and selects only the checks that are relevant to those
+    objectives. For all other input types it selects from the executable
+    catalog. Falls back to the keyword planner when the model is unavailable.
     """
     from ..libraries import ai as ai_lib
 
@@ -164,8 +165,17 @@ async def plan_dynamic_requirements(question: str, inputs: list[str] | None = No
     )
     system_prompt = (
         "You are Inquvia's investigation planner. A user submitted a question plus the input types they "
-        "uploaded. Select the evidence checks from the catalog that are directly useful to answer the "
-        f"question. Return ONLY a JSON array of capability ids (max {max_checks})."
+        "uploaded. Your task:\n"
+        "1. Identify every sub-objective in the question (what must be established to answer it fully).\n"
+        "2. For each sub-objective, determine which evidence checks from the catalog are directly required.\n"
+        "3. Do NOT select checks that are irrelevant to the question. For example:\n"
+        "   - A question about visible content (color, text, objects) needs image_provenance and image_metadata.\n"
+        "   - A question about authenticity/manipulation needs image_provenance and image_metadata.\n"
+        "   - A question about file properties needs image_metadata.\n"
+        "   - A question about document text needs document_verify.\n"
+        "   - A question about a URL needs content_extract.\n"
+        "4. Select only checks that contribute evidence toward answering the question.\n"
+        f"Return ONLY a JSON object: {{\"subObjectives\": [string], \"checks\": [capability_id]}} (max {max_checks} checks)."
     )
     user_text = f"QUESTION: {question or ''}\nINPUT_TYPES: {', '.join(inputs) or 'none'}\nCATALOG:\n{catalog}"
     raw = await ai_lib.call_ai_with_parts(system_prompt, [{"text": user_text}])
@@ -173,7 +183,9 @@ async def plan_dynamic_requirements(question: str, inputs: list[str] | None = No
     if raw:
         try:
             data = _json.loads(raw)
-            for item in data if isinstance(data, list) else []:
+            # Accept both {checks: [...]} and a plain array for backward compat
+            check_list = data.get("checks") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            for item in check_list or []:
                 if isinstance(item, str) and item in EXECUTABLE_BY_CAP:
                     picked.add(item)
         except Exception:

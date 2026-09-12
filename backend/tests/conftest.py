@@ -24,7 +24,7 @@ os.environ.setdefault("INQUVIA_X402_OFFLINE", "1")
 
 @pytest.fixture(autouse=True)
 def _mongo(monkeypatch):
-    import backend.app.db as db_module
+    import app.db as db_module
     mock_client = mongomock.MongoClient()
     db_module._client = mock_client
     mock_client[db_module.config.MONGODB_DB_NAME].sessions.create_index("expiresAt", expireAfterSeconds=0)
@@ -34,7 +34,7 @@ def _mongo(monkeypatch):
 
 @pytest.fixture
 def client():
-    from backend.app.main import app
+    from app.main import app
     return TestClient(app)
 
 
@@ -108,7 +108,7 @@ def probe_no_402():
 @pytest.fixture
 def test_user():
     user = {"id": "user_test_1", "email": "test@example.com", "walletAddress": "TESTWALLETADDRESS"}
-    import backend.app.db as db_module
+    import app.db as db_module
     db_module.create_user(user)
     return user
 
@@ -116,6 +116,6 @@ def test_user():
 @pytest.fixture
 def test_user2():
     user = {"id": "user_test_2", "email": "test2@example.com", "walletAddress": "TESTWALLETADDRESS2"}
-    import backend.app.db as db_module
+    import app.db as db_module
     db_module.create_user(user)
     return user

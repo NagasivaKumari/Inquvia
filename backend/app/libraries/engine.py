@@ -133,6 +133,8 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     inv["status"] = "cross_checking"
     _set_stage(inv, "analyzing", "completed")
     _set_stage(inv, "cross_checking", "active")
+    # supportingEvidenceIds / contradictoryEvidenceIds are computed AFTER the
+    # analyzer runs so they reflect any signal updates applied by _apply_evidence_signals.
     inv["supportingEvidenceIds"] = [
         e["id"] for e in evidence if e.get("signal") == "supporting" or e.get("supportsClaim")
     ]
@@ -214,8 +216,8 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
         "decision": result["conclusion"],
         "conclusionText": result["conclusionText"],
         "confidence": result["confidence"],
-        "supportingEvidenceIds": [e["id"] for e in evidence if e.get("signal") == "supporting"],
-        "contradictoryEvidenceIds": [e["id"] for e in evidence if e.get("signal") == "contradictory"],
+        "supportingEvidenceIds": inv["supportingEvidenceIds"],
+        "contradictoryEvidenceIds": inv["contradictoryEvidenceIds"],
         "uncertainEvidenceIds": [e["id"] for e in evidence if e.get("signal") == "uncertain"],
         "evidenceCount": len(evidence),
         "relationships": rel_agg,
