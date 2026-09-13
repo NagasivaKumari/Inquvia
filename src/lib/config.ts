@@ -467,7 +467,7 @@ export function getEndpointSummary(
   title: string;
   description: string;
   acceptsFiles: boolean;
-  fileTypes: string[];
+  fileTypes: string;
   maxSize: string;
   requiredInputs: string[];
   optionalInputs: string[];

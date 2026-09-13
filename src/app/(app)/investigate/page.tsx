@@ -84,7 +84,7 @@ function InvestigateForm() {
     { path: string; priceUsdc: number }[] | null
   >(null);
   const [evidenceServices, setEvidenceServices] = useState<
-    { endpoint: string; name: string; acceptedFileExtensions: string[]; maxFileSizeMB: number }[] | null
+    EvidenceServiceContract[] | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
