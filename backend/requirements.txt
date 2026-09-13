@@ -10,6 +10,9 @@ cryptography
 Pillow
 PyMuPDF
 
+# Browser rendering
+playwright
+
 # Test dependencies
 pytest
 pytest-asyncio

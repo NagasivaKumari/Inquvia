@@ -1,5 +1,5 @@
 """Shared analysis building blocks (mirrors investigation/analyze.ts)."""
-from ..libraries import storage
+from ..libraries import storage, engines
 
 VALID_CONCLUSIONS = [
     "likely_genuine", "likely_misleading", "suspicious",
@@ -10,59 +10,8 @@ VALID_SIGNALS = ["supporting", "contradictory", "uncertain", "observed"]
 
 
 def redundant_evidence_ids(inv: dict, evidence: list[dict]) -> set:
-    """Ids of evidence that must NOT count as independent confirmation.
-
-    Two kinds are de-weighted (kept in the evidence trail, excluded from the
-    confidence / signal tallies):
-      - duplicate copies: the provider's duplicates analysis is combined into
-        connected sets; the earliest-acquired copy of each set stays primary,
-        the rest are de-weighted.
-      - dependent/derived evidence: a provider-stated independent=False.
-    Unknown independence is kept (counted) because there is no basis to
-    de-weight it; a provider-stated independent=True counts normally.
-    """
-    duplicate_pairs = {}
-    try:
-        raw = inv.get("duplicates") or {}
-        pair_list = raw.get("duplicates") if isinstance(raw, dict) else raw
-        for p in pair_list or []:
-            if isinstance(p, (list, tuple)) and len(p) >= 2:
-                duplicate_pairs.setdefault(p[0], []).append(p[1])
-                duplicate_pairs.setdefault(p[1], []).append(p[0])
-    except Exception:
-        duplicate_pairs = {}
-
-    rank = {e["id"]: i for i, e in enumerate(evidence)}
-    adjacency = {}
-    for a, bs in duplicate_pairs.items():
-        adjacency.setdefault(a, set()).update(bs)
-        for b in bs:
-            adjacency.setdefault(b, set()).update([a])
-
-    redundant = set()
-    seen = set()
-    for eid in rank:
-        if eid in seen or eid not in adjacency:
-            continue
-        comp, stack = [], [eid]
-        while stack:
-            n = stack.pop()
-            if n in seen:
-                continue
-            seen.add(n)
-            comp.append(n)
-            for m in adjacency.get(n, ()):
-                if m not in seen:
-                    stack.append(m)
-        primary = min(comp, key=lambda x: rank.get(x, len(evidence) + 1))
-        for m in comp:
-            if m != primary:
-                redundant.add(m)
-
-    for e in evidence:
-        if e.get("independent") is False:
-            redundant.add(e["id"])
-    return redundant
+    """Ids of evidence that must NOT count as independent confirmation."""
+    return engines.DuplicateDependencyEngine.detect_redundant(evidence)
 
 
 def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:

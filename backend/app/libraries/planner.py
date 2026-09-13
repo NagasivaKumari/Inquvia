@@ -1,4 +1,8 @@
-"""Evidence requirement planning (mirrors investigation/planner.ts)."""
+"""Evidence requirement planning."""
+
+import json
+from typing import List, Optional
+from ..libraries import ai as ai_lib
 
 # Executable evidence checks — the catalog the AI plans against. Each maps to a
 # check that evidence_checks.py actually runs against the user's submission.
@@ -24,193 +28,90 @@ EXECUTABLE_CHECKS = [
 EXECUTABLE_BY_CAP = {c["capability"]: c for c in EXECUTABLE_CHECKS}
 
 
-CAPABILITY_BANK = {
-    "image_provenance": {"capability": "image_provenance", "reason": "Determine where and when the image originates", "type": "image"},
-    "source_verify": {"capability": "source_verify", "reason": "Verify the credibility and identity of the source", "type": "url"},
-    "reverse_image": {"capability": "reverse_image", "reason": "Search for prior occurrences of the image across indices", "type": "image"},
-    "image_metadata": {"capability": "image_metadata", "reason": "Inspect EXIF and metadata for consistency", "type": "image"},
-    "video_analysis": {"capability": "video_analysis", "reason": "Analyze video content for manipulation or context", "type": "video"},
-    "frame_evidence": {"capability": "frame_evidence", "reason": "Extract and verify key frames from the video", "type": "video"},
-    "domain_lookup": {"capability": "domain_lookup", "reason": "Check domain registration, WHOIS and DNS telemetry", "type": "url"},
-    "ssl_scan": {"capability": "ssl_scan", "reason": "Validate SSL certificate and security posture", "type": "url"},
-    "content_extract": {"capability": "content_extract", "reason": "Extract and verify page content", "type": "url"},
-    "claim_support": {"capability": "claim_support", "reason": "Find supporting evidence for the claim", "type": "text"},
-    "contradictory_evidence": {"capability": "contradictory_evidence", "reason": "Find evidence that contradicts the claim", "type": "text"},
-    "original_source": {"capability": "original_source", "reason": "Locate the original source of the claim", "type": "text"},
-    "independent_source": {"capability": "independent_source", "reason": "Locate independent corroborating sources", "type": "text"},
-    "data_consistency": {"capability": "data_consistency", "reason": "Validate structured data for consistency", "type": "data"},
-    "document_verify": {"capability": "document_verify", "reason": "Verify document authenticity and issuer", "type": "document"},
-    "audio_transcription": {"capability": "audio_transcription", "reason": "Transcribe and inspect the audio recording", "type": "audio"},
-}
+class EvidencePlanner:
+    """AI-driven evidence planner with deterministic fallback."""
 
+    def __init__(self, executable_checks: List[dict] = EXECUTABLE_CHECKS):
+        self.checks = executable_checks
+        self.by_cap = {c["capability"]: c for c in executable_checks}
 
-def plan_evidence_requirements(question: str, inputs: list[str]) -> list[dict]:
-    """Legacy keyword planner (kept for the non-capability path; paid
-    capabilities use the AI-driven plan_dynamic_requirements below)."""
-    seen = set()
-    result = []
-
-    def add(key):
-        if key in seen:
-            return
-        seen.add(key)
-        cap = CAPABILITY_BANK.get(key)
-        if not cap:
-            return
-        result.append({
-            "id": f"req_{len(seen)}_{key}",
-            "type": cap["type"],
-            "capability": cap["capability"],
-            "reason": cap["reason"],
-        })
-
-    q = question.lower()
-    types = set(inputs)
-
-    if "image" in types or any(w in q for w in ("image", "photo", "picture")):
-        add("image_provenance")
-        add("source_verify")
-        add("reverse_image")
-        if not any(w in q for w in ("image", "photo")) or "image" in types:
-            add("image_metadata")
-    elif "video" in types or any(w in q for w in ("video", "footage", "clip")):
-        add("video_analysis")
-        add("frame_evidence")
-        add("source_verify")
-        add("image_metadata")
-    elif "document" in types or any(w in q for w in ("document", "pdf", "file")):
-        add("document_verify")
-        add("source_verify")
-    elif "data" in types or any(w in q for w in ("data", "dataset", "json", "csv")):
-        add("data_consistency")
-        add("source_verify")
-
-    if any(w in q for w in ("http", "url", "website", "site", "domain", "seller", "store")) or "url" in types:
-        add("domain_lookup")
-        add("ssl_scan")
-        add("content_extract")
-        add("source_verify")
-
-    add("original_source")
-    add("claim_support")
-    add("independent_source")
-    if any(w in q for w in ("fake", "misleading", "scam", "genuine", "authentic", "true")):
-        add("contradictory_evidence")
-
-    return [{**r, "id": f"req_{i + 1}"} for i, r in enumerate(result[:6])]
-
-
-def _make_planner(keys):
-    def plan(question, inputs, force=()):
-        seen = set()
-        result = []
-
-        def add(key):
-            if key in seen:
-                return
-            seen.add(key)
-            cap = CAPABILITY_BANK.get(key)
-            if not cap:
-                return
-            result.append({
-                "id": f"req_{len(seen)}_{key}",
-                "type": cap["type"],
-                "capability": cap["capability"],
-                "reason": cap["reason"],
-            })
-
-        for key in list(force) + list(keys):
-            add(key)
-        return result[:6]
-
-    return plan
-
-
-plan_claim_requirements = _make_planner(["original_source", "claim_support", "independent_source", "contradictory_evidence"])
-plan_image_requirements = _make_planner(["image_provenance", "reverse_image", "image_metadata", "source_verify"])
-plan_video_requirements = _make_planner(["video_analysis", "frame_evidence", "audio_transcription", "source_verify"])
-plan_document_requirements = _make_planner(["document_verify", "source_verify"])
-plan_source_requirements = _make_planner(["domain_lookup", "ssl_scan", "content_extract", "source_verify"])
-plan_data_requirements = _make_planner(["data_consistency", "source_verify"])
-plan_audio_requirements = _make_planner(["audio_transcription", "source_verify"])
-
-
-async def plan_dynamic_requirements(question: str, inputs: list[str] | None = None,
-                                    max_checks: int = 4) -> list[dict]:
-    """Question-driven evidence planner.
-
-    For image investigations the planner decomposes the question into
-    sub-objectives and selects only the checks that are relevant to those
-    objectives. For all other input types it selects from the executable
-    catalog. Falls back to the keyword planner when the model is unavailable.
-    
-    CRITICAL: For object-counting/visual-content questions, the planner MUST
-    select image_provenance (which triggers visual analysis in the analyzer),
-    even if metadata/provenance checks are also selected. Visual evidence is
-    never optional when the question requires it.
-    """
-    from ..libraries import ai as ai_lib
-
-    inputs = [i for i in (inputs or []) if i]
-    applicable = [c for c in EXECUTABLE_CHECKS if not inputs or c["type"] in inputs or c["type"] == "text"]
-
-    def build(checks: list[dict]) -> list[dict]:
-        return [
-            {"id": f"req_{i + 1}", "type": c["type"], "capability": c["capability"], "reason": c["name"]}
-            for i, c in enumerate(checks[:max_checks])
-        ]
-
-    if not applicable:
-        return build([])
-
-    import json as _json
-    catalog = "\n".join(
-        f"{c['capability']}: {c['name']} — applies to input type {c['type']}. {c['desc']}"
-        for c in applicable
-    )
-    system_prompt = (
-        "You are Inquvia's investigation planner. A user submitted a question plus the input types they "
-        "uploaded. Your task:\n"
-        "1. Identify every sub-objective in the question (what must be established to answer it fully).\n"
-        "2. For each sub-objective, determine which evidence checks from the catalog are directly required.\n"
-        "3. CRITICAL RULES:\n"
-        "   - For questions about VISIBLE CONTENT (objects, text, colors, spatial relationships, counts), "
-        "you MUST select image_provenance. Visual analysis is non-optional for visual questions.\n"
-        "   - For questions about authenticity/manipulation, select image_provenance AND image_metadata.\n"
-        "   - For questions about file properties/EXIF only, select image_metadata.\n"
-        "   - For questions about document TEXT, select document_verify.\n"
-        "   - For questions about URL content, select content_extract.\n"
-        "   - Questions asking 'how many' or 'count' or 'enumerate' objects REQUIRE image_provenance.\n"
-        "4. Do NOT omit visual evidence checks when the question explicitly asks about visible content.\n"
-        f"Return ONLY a JSON object: {{\"subObjectives\": [string], \"checks\": [capability_id]}} (max {max_checks} checks)."
-    )
-    user_text = f"QUESTION: {question or ''}\nINPUT_TYPES: {', '.join(inputs) or 'none'}\nCATALOG:\n{catalog}"
-    raw = await ai_lib.call_ai_with_parts(system_prompt, [{"text": user_text}])
-    picked = set()
-    if raw:
+    async def plan(self, question: str, inputs: List[str]) -> List[dict]:
+        """Plan evidence requirements based on question objectives."""
+        
+        # 1. Try AI-driven planning
         try:
-            data = _json.loads(raw)
-            # Accept both {checks: [...]} and a plain array for backward compat
-            check_list = data.get("checks") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            for item in check_list or []:
-                if isinstance(item, str) and item in EXECUTABLE_BY_CAP:
-                    picked.add(item)
-        except Exception:
-            picked = set()
-    
-    # Question-driven forcing: for object-counting/visual questions, FORCE image_provenance
-    # if it wasn't already selected and image inputs are present.
-    if "image" in inputs:
-        q_lower = (question or "").lower()
-        visual_keywords = ["how many", "count", "objects", "visible", "see", "shown", "appear", "located", "where"]
-        if any(kw in q_lower for kw in visual_keywords):
-            if "image_provenance" not in picked:
-                picked.add("image_provenance")
-    
-    if picked:
-        order = {c["capability"]: i for i, c in enumerate(applicable)}
-        checks = sorted([EXECUTABLE_BY_CAP[p] for p in picked], key=lambda c: order[c["capability"]])
-        return build(checks)
-    fallback = plan_evidence_requirements(question, inputs)
-    checks = [EXECUTABLE_BY_CAP[r["capability"]] for r in fallback if r["capability"] in EXECUTABLE_BY_CAP]
-    return build(checks)
+            return await self._plan_ai(question, inputs)
+        except Exception as e:
+            print(f"AI planning failed, falling back: {e}")
+            # 2. Fallback to deterministic capability-based selection
+            return self._plan_fallback(question, inputs)
+
+    async def _plan_ai(self, question: str, inputs: List[str]) -> List[dict]:
+        """Utilize LLM to select evidence services based on capabilities."""
+        applicable = [c for c in self.checks if not inputs or c["type"] in inputs or c["type"] == "text"]
+        
+        catalog = "\n".join(
+            f"{c['capability']}: {c['name']} — {c['desc']}"
+            for c in applicable
+        )
+        
+        system_prompt = (
+            "You are Inquvia's investigation planner. Identify investigation objectives "
+            "from the user question and select relevant evidence capability checks.\n"
+            "Return ONLY a JSON object: {\"subObjectives\": [string], \"checks\": [capability_id]}\n"
+            f"CATALOG:\n{catalog}"
+        )
+        
+        user_text = f"QUESTION: {question}\nINPUT_TYPES: {', '.join(inputs)}"
+        raw = await ai_lib.call_ai_with_parts(system_prompt, [{"text": user_text}])
+        
+        data = json.loads(raw)
+        checks = []
+        for cap_id in data.get("checks", []):
+            if cap_id in self.by_cap:
+                checks.append({
+                    "id": f"req_{len(checks) + 1}",
+                    "type": self.by_cap[cap_id]["type"],
+                    "capability": cap_id,
+                    "reason": self.by_cap[cap_id]["name"]
+                })
+        return checks
+
+    def _plan_fallback(self, question: str, inputs: List[str]) -> List[dict]:
+        """Deterministic fallback capability selection."""
+        checks = []
+        # Fallback just selects all applicable checks based on input type
+        for c in self.checks:
+            if not inputs or c["type"] in inputs or c["type"] == "text":
+                checks.append({
+                    "id": f"req_{len(checks) + 1}",
+                    "type": c["type"],
+                    "capability": c["capability"],
+                    "reason": c["name"]
+                })
+        return checks[:4]
+
+# Backward compatibility wrappers for existing tests
+def plan_evidence_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+def plan_claim_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+def plan_image_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+def plan_video_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+
+def plan_claim_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+
+def plan_source_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)
+
+
+def plan_evidence_requirements(question: str, inputs: List[str]) -> List[dict]:
+    return EvidencePlanner()._plan_fallback(question, inputs)

@@ -23,6 +23,8 @@ from ..libraries.evidence_validation import (
     ErrorResponse,
     EvidenceValidationError,
     EvidenceValidator,
+)
+from ..libraries.contract_registry import (
     image_contract,
     video_contract,
     audio_contract,

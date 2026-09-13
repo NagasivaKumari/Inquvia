@@ -237,10 +237,15 @@ def _frame_record(inp: dict, label: str, frame: dict, total: int, observation: d
         meta["visualObservation"] = observation["visibleContent"]
         meta["visualObservationUnclear"] = bool(observation.get("unclear"))
         meta["visualObservationSource"] = "multimodal_ai"
-    return {
+    
+    res = {
         "finding": finding,
         "metadata": meta,
     }
+    if observation and observation.get("visibleContent") and not observation.get("unclear"):
+        res["signal"] = "observed"
+    
+    return res
 
 
 _FRAME_OBSERVE_PROMPT = (
@@ -687,7 +692,11 @@ async def _url_findings(inv: dict) -> list[dict]:
             records.append({
                 "finding": f"URL check ({url}): could not be inspected — network or DNS failure.",
                 "signal": "uncertain",
-                "metadata": {"url": url, "evidenceAvailable": False},
+                "metadata": {
+                    "url": url,
+                    "evidenceAvailable": False,
+                    "errorType": "retrieval_failure",
+                },
             })
             continue
         # Cache the full inspection on the investigation so the analyzer can
@@ -699,6 +708,9 @@ async def _url_findings(inv: dict) -> list[dict]:
         has_content = bool(inspection.get("fullText") or inspection.get("content"))
         access = inspection.get("access") or {}
         blocked = access.get("blocked", False)
+        quality = inspection.get("contentQuality", {})
+        render_mode = inspection.get("renderMode", "static")
+        rendered = inspection.get("renderedContent")
 
         bits = [f"URL check ({url}): HTTP {status or 'n/a'}"]
         bits.append(f"online={is_online}")
@@ -714,6 +726,10 @@ async def _url_findings(inv: dict) -> list[dict]:
             bits.append(f"blocked={access.get('reason', 'access denied')[:80]}")
         if inspection.get("renderNote"):
             bits.append(f"renderNote={inspection['renderNote'][:120]}")
+        if render_mode == "browser":
+            bits.append(f"renderMode=browser")
+        if quality.get("completeness") != "complete":
+            bits.append(f"completeness={quality.get('completeness')}")
 
         # A successful retrieval (2xx + content present) is supporting evidence
         # for any question about the page. Blocked/failed retrievals stay uncertain.
@@ -724,11 +740,21 @@ async def _url_findings(inv: dict) -> list[dict]:
         else:
             signal = "uncertain"
 
+        # Determine evidence status based on retrieval and rendering
+        evidence_status = "retrieved"
+        if blocked or not is_online:
+            evidence_status = "retrieval_failed"
+        elif quality.get("completeness") == "empty":
+            evidence_status = "content_unavailable"
+        elif quality.get("completeness") in ("partial", "sparse"):
+            evidence_status = "content_incomplete"
+
         records.append({
             "finding": ", ".join(bits),
             "signal": signal,
             "metadata": {
                 "url": url,
+                "finalUrl": inspection.get("finalUrl"),
                 "statusCode": status,
                 "isOnline": is_online,
                 "sslValid": inspection.get("sslValid"),
@@ -737,6 +763,13 @@ async def _url_findings(inv: dict) -> list[dict]:
                 "hasContent": has_content,
                 "blocked": blocked,
                 "evidenceAvailable": is_online and not blocked,
+                "evidenceStatus": evidence_status,
+                "renderMode": render_mode,
+                "renderAttempted": inspection.get("renderAttempted", False),
+                "renderError": inspection.get("renderError"),
+                "contentQuality": quality,
+                "retrievalTimestamp": inspection.get("retrievalTimestamp"),
+                "extractionTimestamp": inspection.get("extractionTimestamp"),
                 # Full extracted text so the analyzer can quote exact values.
                 "fullText": (inspection.get("fullText") or "")[:60000],
                 "bodySnippet": inspection.get("bodySnippet") or "",
@@ -744,6 +777,7 @@ async def _url_findings(inv: dict) -> list[dict]:
                 "paragraphs": (inspection.get("paragraphs") or [])[:100],
                 "tables": inspection.get("tables") or [],
                 "metaDescription": inspection.get("metaDescription") or "",
+                "renderedContent": rendered,
             },
         })
     return records

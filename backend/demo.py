@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app.libraries.planner import (
     plan_claim_requirements,
     plan_source_requirements,
-    plan_evidence_requirements,
+    EvidencePlanner,
 )
 from app.libraries.analyze import heuristic_analysis, normalize_conclusion, clamp_confidence
 from app import auth
@@ -21,7 +21,7 @@ def test_planner():
     assert reqs[0]["capability"], "requirement has capability"
     src = plan_source_requirements("Analyze https://example.com", ["url"])
     assert any(r["capability"] == "domain_lookup" for r in src)
-    gen = plan_evidence_requirements("fake", ["text"])
+    gen = EvidencePlanner()._plan_fallback("fake", ["text"])
     assert any(r["capability"] == "contradictory_evidence" for r in gen)
     assert all(r["id"].startswith("req_") for r in gen)
 

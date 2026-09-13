@@ -247,6 +247,7 @@ async def call_text_provider_chain(system_prompt: str, text_context: str, temper
     return None
 
 
+
 def parse_ai_json(raw: str | None):
     if not raw:
         return None
@@ -260,3 +261,11 @@ def parse_ai_json(raw: str | None):
         return json.loads(cleaned)
     except Exception:
         return None
+
+async def transcribe_audio(file_b64: str, mime: str) -> str | None:
+    """Verbatim transcription, no hallucinated corrections."""
+    system_prompt = (
+        "Transcribe the following audio VERBATIM. Do not correct, summarize, or interpret. "
+        "Keep proper names exactly as spoken; if a name is unclear, leave it verbatim as spoken."
+    )
+    return await call_ai_with_parts(system_prompt, [{"file": {"mimeType": mime, "base64": file_b64}}], temperature=0.0, text_fallback=False)

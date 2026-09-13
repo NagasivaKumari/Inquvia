@@ -283,25 +283,54 @@ class VideoProcessor:
                 break
         return frames
 
+    def _is_valid_audio(self, path: Path) -> bool:
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        if not self.ffprobe:
+            return True
+        # Check duration > 0.1s
+        args = ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+        try:
+            res = _run(self.ffprobe, args, 10)
+            if res.returncode == 0:
+                duration = float(res.stdout.strip())
+                return duration > 0.1
+        except Exception:
+            pass
+        return False
+
     def extract_audio(self, source: str, out_wav: str, max_seconds: float | None = None) -> str | None:
-        """16kHz mono PCM WAV for transcription. Returns the wav path or None
+        """16kHz mono PCM WAV for transcription, with retries. Returns the wav path or None
         on failure. max_seconds bounds the decoded window."""
         if not self.ffmpeg:
             return None
-        args = ["-v", "error", "-i", source, "-vn", "-acodec", "pcm_s16le",
-                "-ar", "16000", "-ac", "1"]
-        if max_seconds:
-            args += ["-t", str(max_seconds)]
-        args.append(out_wav)
+        
         Path(out_wav).parent.mkdir(parents=True, exist_ok=True)
-        try:
-            res = _run(self.ffmpeg, args, config.VIDEO_FFMPEG_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            logger.error("ffmpeg audio extraction timed out for %s", source)
-            return None
-        path = Path(out_wav)
-        if res.returncode == 0 and path.is_file() and path.stat().st_size > 0:
-            return out_wav
+        
+        # Primary strategy: AAC extraction
+        base_args = ["-i", source, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1"]
+        if max_seconds:
+            base_args += ["-t", str(max_seconds)]
+        
+        # Strategies to try: 
+        # 1. Primary: 16kHz mono PCM
+        # 2. Fallback: No forced sample rate/channels
+        strategies = [
+            base_args,
+            ["-i", source, "-vn", "-acodec", "pcm_s16le"] + (["-t", str(max_seconds)] if max_seconds else [])
+        ]
+        
+        for strategy in strategies:
+            for attempt in range(2):
+                try:
+                    res = _run(self.ffmpeg, strategy + [out_wav], config.VIDEO_FFMPEG_TIMEOUT)
+                    path = Path(out_wav)
+                    if res.returncode == 0 and self._is_valid_audio(path):
+                        return out_wav
+                    logger.warning("ffmpeg audio extraction attempt %d failed for %s. Error: %s", attempt + 1, source, res.stderr)
+                except subprocess.TimeoutExpired:
+                    logger.warning("ffmpeg audio extraction timed out attempt %d for %s", attempt + 1, source)
+                
         return None
 
     def describe(self, inspection: dict, label: str = "") -> str:

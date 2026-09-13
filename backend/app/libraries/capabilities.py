@@ -6,7 +6,7 @@ from .. import db
 from ..libraries import engine
 from ..libraries import web_inspector
 from ..libraries import evidence_checks
-from ..libraries import planner
+from ..libraries.planner import EvidencePlanner
 
 
 class InputError(Exception):
@@ -117,7 +117,7 @@ async def run_capability(capability_id, args, requirements, title, before_discov
 
 async def run_claim_investigation(args):
     question = (args.get("question") or "").strip() or "Investigate this claim"
-    reqs = await planner.plan_dynamic_requirements(question, ["text"])
+    reqs = await EvidencePlanner().plan(question, ["text"])
     return await run_capability(
         "claim-investigation", args, reqs,
         "Claim Investigation",
@@ -126,7 +126,7 @@ async def run_claim_investigation(args):
 
 async def run_image_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await planner.plan_dynamic_requirements(question, ["image"])
+    reqs = await EvidencePlanner().plan(question, ["image"])
     return await run_capability(
         "image-investigation", args, reqs,
         "Image Investigation",
@@ -135,7 +135,7 @@ async def run_image_investigation(args):
 
 async def run_video_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await planner.plan_dynamic_requirements(question, ["video"])
+    reqs = await EvidencePlanner().plan(question, ["video"])
     background_tasks = args.get("background_tasks")
     
     # Initialize with 'queued' status
@@ -193,7 +193,7 @@ async def run_video_investigation_async(inv_id: str, reqs: list):
 
 async def run_document_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await planner.plan_dynamic_requirements(question, ["document"])
+    reqs = await EvidencePlanner().plan(question, ["document"])
     return await run_capability(
         "document-investigation", args, reqs,
         "Document Investigation",
@@ -209,7 +209,7 @@ async def run_source_investigation(args):
 
     inspection = await web_inspector.inspect_live_url(url_input["content"])
 
-    reqs = await planner.plan_dynamic_requirements(question, ["url"])
+    reqs = await EvidencePlanner().plan(question, ["url"])
 
     def before(pending):
         if inspection:
@@ -224,7 +224,7 @@ async def run_source_investigation(args):
 
 async def run_data_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await planner.plan_dynamic_requirements(question, ["data"])
+    reqs = await EvidencePlanner().plan(question, ["data"])
     return await run_capability(
         "data-investigation", args, reqs,
         "Data Investigation",
@@ -233,7 +233,7 @@ async def run_data_investigation(args):
 
 async def run_audio_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await planner.plan_dynamic_requirements(question, ["audio"])
+    reqs = await EvidencePlanner().plan(question, ["audio"])
     return await run_capability(
         "audio-investigation", args, reqs,
         "Audio Investigation",

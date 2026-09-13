@@ -355,8 +355,8 @@ async def run_investigation(request: dict) -> dict:
         _emit(inv, "investigation_created", "Investigation created")
 
     if inv["status"] in ("created", "planning"):
-        from ..libraries.planner import plan_evidence_requirements
-        requirements = plan_evidence_requirements(
+        from ..libraries.planner import EvidencePlanner
+        requirements = EvidencePlanner()._plan_fallback(
             inv.get("question", ""), [i.get("type") for i in (inv.get("inputs") or [])]
         )
         inv = plan_capability(inv, requirements)
