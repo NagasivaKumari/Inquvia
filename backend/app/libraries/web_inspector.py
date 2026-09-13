@@ -330,24 +330,17 @@ def _assess_content_quality(
     # Check for labels without associated values in EXTRACTED TEXT
     # Pattern: "Label:" at end of line or followed by minimal content
     import re
+    # Match Label:
     label_pattern = r"[A-Z][a-zA-Z\s]+:\s*$"
     label_only_count = len(re.findall(label_pattern, extracted_text, re.MULTILINE))
-    if label_only_count > 3:
-        quality["signals"]["labels_without_values"] = True
-        quality["issues"].append(f"Found {label_only_count} labels that appear to lack associated values")
-        if quality["completeness"] == "complete":
-            quality["completeness"] = "partial"
-
-    # Also check RAW HTML for label patterns that likely have empty dynamic values
-    # Look for label-like text followed by empty/whitespace-only elements or data attributes
-    html_label_pattern = r'(?:class|id|data-testid|data-cy)=["\'][^"\']*(?:label|field|value)[^"\']*["\'][^>]*>\s*[A-Z][a-zA-Z\s]+:'
-    html_labels = len(re.findall(html_label_pattern, html, re.IGNORECASE))
-    # Also check for label text followed by empty span/div
-    empty_value_pattern = r'[A-Z][a-zA-Z\s]+:\s*<\s*(?:span|div)[^>]*>\s*<\s*/\s*(?:span|div)'
+    
+    # Match <... class="label">Label</...> <... class="value"></...>
+    empty_value_pattern = r'(?:class|data-testid|id)=["\'][^"\']*(?:label|title)[^"\']*["\'][^>]*>[^<]*<[^>]*>\s*<[^>]*class=["\'][^"\']*(?:value|data)[^"\']*["\'][^>]*>\s*<\s*/\s*(?:span|div)'
     empty_values = len(re.findall(empty_value_pattern, html, re.IGNORECASE))
-    if html_labels > 3 or empty_values > 3:
+    
+    if label_only_count > 3 or empty_values > 0:
         quality["signals"]["labels_without_values"] = True
-        quality["issues"].append(f"Found {html_labels + empty_values} labeled fields in HTML that may have dynamic/empty values")
+        quality["issues"].append(f"Found {label_only_count + empty_values} labeled fields that appear to lack associated values")
         if quality["completeness"] == "complete":
             quality["completeness"] = "partial"
 
@@ -503,8 +496,11 @@ async def _try_browser_render(url: str, html: str, extracted: dict) -> tuple[dic
         result = await render_page(url)
         print(f"[DEBUG] render_page result: success={result.success}, text_len={len(result.text) if result.text else 0}, timed_out={result.timed_out}, error={result.error}")
         comparison = len(result.text) if result.text else 0
-        print(f"[DEBUG] Comparison: {comparison} > {len(static_text)} = {comparison > len(static_text)}")
-        if result.success and result.text and len(result.text) > len(static_text):
+        is_significant_improvement = comparison > len(static_text)
+        is_reasonable_substitute = (comparison > 0.8 * len(static_text))
+        print(f"[DEBUG] Comparison: {comparison} > {len(static_text)} = {is_significant_improvement}, reasonable={is_reasonable_substitute}")
+        
+        if result.success and result.text and (is_significant_improvement or is_reasonable_substitute):
             print("[DEBUG] Using rendered content!")
             # Re-extract from rendered HTML
             rendered_extracted = _extraction_result(result.final_url or url, result.html, render_mode="browser")

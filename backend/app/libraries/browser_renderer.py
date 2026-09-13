@@ -63,7 +63,6 @@ class BrowserRenderer:
                     "--disable-gpu",
                     "--no-first-run",
                     "--no-zygote",
-                    "--single-process",
                     "--disable-blink-features=AutomationControlled",
                     "--disable-web-security",
                     "--disable-site-isolation-trials",
