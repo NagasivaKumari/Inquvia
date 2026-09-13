@@ -35,6 +35,10 @@ from .api import evidence as evidence_api
 from .x402.gate import build_x402_middleware, extract_settlement_tx_id_from_response_headers
 
 
+# Import evidence validation for service discovery
+from .libraries.evidence_validation import get_all_evidence_contracts
+
+
 import time
 from collections import defaultdict
 
@@ -757,6 +761,97 @@ async def api_providers_discover(request: Request):
         ],
         "source": "inquvia",
     })
+
+
+# ── Evidence Services (with input contracts) ──
+@app.get("/api/evidence/services")
+async def api_evidence_services():
+    """Return the complete input contract for all 12 evidence endpoints.
+    
+    This endpoint provides machine-readable discovery information including:
+    - Endpoint name and description
+    - Required and optional inputs
+    - Accepted file types, formats, and MIME types
+    - Size limits
+    - Field types and constraints
+    - URL requirements
+    - JSON structure specifications
+    
+    The frontend should use this to dynamically show endpoint requirements
+    to users before they submit requests.
+    """
+    contracts = get_all_evidence_contracts()
+    
+    # Convert contracts to plain dicts for JSON response
+    services = []
+    for contract in contracts:
+        service = {
+            "id": contract.endpoint.replace("/api/evidence/", ""),
+            "name": contract.name,
+            "description": contract.description,
+            "endpoint": contract.endpoint,
+            "method": contract.method,
+            "requiresAuthentication": contract.requires_authentication,
+            "requiresPayment": contract.requires_payment,
+            "maxFileSizeMB": contract.max_file_size_mb,
+            "maxRequestSizeMB": contract.max_request_size_mb,
+            "acceptedFileTypes": contract.accepted_file_types,
+            "acceptedFileExtensions": contract.accepted_file_extensions,
+            "acceptedMimeTypes": contract.accepted_mimetypes,
+            "requiredInputs": [
+                {
+                    "name": f.name,
+                    "type": f.type,
+                    "required": f.required,
+                    "description": f.description,
+                    "acceptedMimeTypes": f.accepted_mimetypes,
+                    "maxSizeMB": f.max_size_mb,
+                    "allowMultiple": f.allow_multiple,
+                    "minLength": f.min_length,
+                    "maxLength": f.max_length,
+                    "pattern": f.pattern,
+                    "minValue": f.min_value,
+                    "maxValue": f.max_value,
+                    "integerOnly": f.integer_only,
+                    "allowedValues": f.allowed_values,
+                }
+                for f in contract.required_inputs
+            ],
+            "optionalInputs": [
+                {
+                    "name": f.name,
+                    "type": f.type,
+                    "required": f.required,
+                    "description": f.description,
+                    "acceptedMimeTypes": f.accepted_mimetypes,
+                    "maxSizeMB": f.max_size_mb,
+                    "allowMultiple": f.allow_multiple,
+                    "minLength": f.min_length,
+                    "maxLength": f.max_length,
+                    "pattern": f.pattern,
+                    "minValue": f.min_value,
+                    "maxValue": f.max_value,
+                    "integerOnly": f.integer_only,
+                    "allowedValues": f.allowed_values,
+                }
+                for f in contract.optional_inputs
+            ],
+        }
+        
+        if contract.url_requirements:
+            service["urlRequirements"] = contract.url_requirements
+        if contract.json_structure:
+            service["jsonStructure"] = contract.json_structure
+        if contract.example_input:
+            service["exampleInput"] = contract.example_input
+        
+        services.append(service)
+    
+    return JSONResponse({
+        "services": services,
+        "source": "inquvia",
+        "count": len(services)
+    }, headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ── Wallet ──

@@ -156,7 +156,7 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     # its reasoning, the selected passages (with page provenance + nature), and
     # explicit gaps. Only present when the analyzer produced them.
     for key in ("answer", "assessmentReasoning", "evidenceItems",
-                "missingInformation", "additionalSourcesNeeded"):
+                "missingInformation", "additionalSourcesNeeded", "objectCounts"):
         if result.get(key) not in (None, "", []):
             inv[key] = result[key]
 

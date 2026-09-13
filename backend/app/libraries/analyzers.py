@@ -159,6 +159,7 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
         "evidenceItems",
         "missingInformation",
         "additionalSourcesNeeded",
+        "objectCounts",
     ):
         if raw.get(key) not in (None, "", []):
             result[key] = raw.get(key)
@@ -291,6 +292,83 @@ _IMAGE_EVIDENCE_RULES = (
     "evidence. Remove or qualify any statement not traceable to acquired evidence.\n"
 )
 
+# Generic object-counting / distinct-object rules for image questions. These
+# are deliberately category-agnostic: no specific object or category names, no
+# quantities, no filenames, no expected answers.
+_IMAGE_COUNTING_RULES = (
+    "OBJECT COUNTING RULES (apply whenever the question asks HOW MANY, or requires counting "
+    "a category of physical objects visible in the image):\n"
+    "1. ENUMERATE BEFORE COUNTING: for each requested category, identify every distinct physical "
+    "instance and list it as its own entry with a short label and a location description derived "
+    "from the image (e.g. 'left of the doorway', 'top-right corner', 'behind the desk'). Compute "
+    "the count only from that list of instances.\n"
+    "2. ONE OBJECT = ONE INSTANCE: count distinct physical objects, not visible fragments. When "
+    "two visible parts clearly belong to one continuous object (adjacent positions, matching "
+    "appearance, aligned edges, connected shapes), they are a single instance. Do not double-count "
+    "one object seen from multiple angles or protruding from behind cover.\n"
+    "3. PARTIAL VISIBILITY COUNTS: a partially visible object — cropped at the frame edge, mostly "
+    "hidden behind another object, or partly out of view — is still a distinct instance when the "
+    "visible portion is sufficient to identify it as the category and shows it is separate from "
+    "its neighbours. Mark it 'partially_visible'. Do not treat every visible sliver as a separate "
+    "object.\n"
+    "4. REPRESENTATIONS ARE NOT PHYSICAL INSTANCES: an object shown inside a screen, monitor, "
+    "photograph, poster, painting, sign, label, or printed text is a representation of the object, "
+    "not a physical instance present in the scene. Exclude such representations from physical "
+    "counts. A physical object and its reflection or mirror image are the same single object — "
+    "count the physical instance once.\n"
+    "5. COUNT MUST MATCH THE ENUMERATION: the number reported in your answer must equal the number "
+    "of instances you listed. Re-read the instance list and reconcile your answer against it; the "
+    "instance list is the source of truth.\n"
+    "6. UNRESOLVABLE COUNTS: if objects are so heavily occluded or ambiguous that the exact number "
+    "cannot be established (e.g. a continuous mass where one object ends and another begins), do "
+    "NOT invent a precise number. Report the range you can defend, set countCertain=false, and "
+    "state in 'uncertainty' and 'limitations' exactly which instances could not be resolved and why.\n"
+)
+
+
+def _reconcile_object_counts(raw: dict) -> tuple[list | None, list[str]]:
+    """Deterministic cross-check for object category counts.
+
+    The individually enumerated instances are the source of truth: a reported
+    category count is corrected to equal the number of listed instances, and a
+    count asserted without any instance list is marked unverifiable instead of
+    being passed through as fact.
+    """
+    raw_counts = raw.get("objectCounts")
+    if not isinstance(raw_counts, list):
+        return None, []
+    counts, notes = [], []
+    for i, entry in enumerate(raw_counts):
+        if not isinstance(entry, dict):
+            continue
+        entry = dict(entry)
+        inst = [x for x in (entry.get("instances") or []) if isinstance(x, dict)]
+        entry["instances"] = inst
+        label = entry.get("category") or f"entry {i + 1}"
+        if inst:
+            enumerated = len(inst)
+            claimed = entry.get("count")
+            entry["count"] = enumerated
+            if claimed not in (None, "", enumerated):
+                notes.append(
+                    f"Object category '{label}': the reported count did not match the enumerated "
+                    f"instances and was corrected to {enumerated}."
+                )
+        else:
+            claimed = entry.get("count")
+            if claimed in (None, 0, "0"):
+                entry["count"] = 0
+            else:
+                entry["count"] = None
+                entry["countCertain"] = False
+                notes.append(
+                    f"Object category '{label}': a count was reported without an enumerated "
+                    "instance list, so it could not be verified against the image observations."
+                )
+        entry.setdefault("countCertain", bool(inst))
+        counts.append(entry)
+    return counts, notes
+
 
 async def _image_analyzer(inv, evidence):
     """Open-ended image investigator.
@@ -300,7 +378,7 @@ async def _image_analyzer(inv, evidence):
     is cross-checked against the evidence before returning.
     """
     system_prompt = (
-        _QUESTION_RULE + _IMAGE_EVIDENCE_RULES +
+        _QUESTION_RULE + _IMAGE_EVIDENCE_RULES + _IMAGE_COUNTING_RULES +
         "You are Inquvia's image analyst. Answer the user's question by analyzing the provided "
         "image(s) and any acquired evidence. Apply the EVIDENCE GROUNDING RULES strictly.\n\n"
         "PROCESS (follow in order):\n"
@@ -311,13 +389,16 @@ async def _image_analyzer(inv, evidence):
         "   b) Answerable by inference from visual evidence (label as inference)\n"
         "   c) Requires external evidence not available from the image alone\n"
         "3. ANSWER each sub-objective independently using the appropriate evidence level.\n"
-        "4. CROSS-CHECK: Before finalizing, verify every factual statement in your answer "
+        "4. If any sub-objective requires counting a category of objects, run the OBJECT "
+        "COUNTING RULES and record the per-instance enumeration in 'objectCounts'.\n"
+        "5. CROSS-CHECK: Before finalizing, verify every factual statement in your answer "
         "against the evidence. Detect unsupported statements and remove or qualify them. "
-        "Detect contradictions between your answer and the evidence.\n"
-        "5. SYNTHESIZE: Combine sub-objective results into a coherent overall answer. "
+        "Detect contradictions between your answer and the evidence. For every count, the "
+        "number in your answer must match the instances enumerated in 'objectCounts'.\n"
+        "6. SYNTHESIZE: Combine sub-objective results into a coherent overall answer. "
         "Do not let success on one sub-objective mask failure on another.\n"
-        "6. ASSIGN evidenceSignals for each acquired evidence item based on what it actually supports.\n"
-        "7. SET confidence to reflect the weakest sub-objective.\n\n"
+        "7. ASSIGN evidenceSignals for each acquired evidence item based on what it actually supports.\n"
+        "8. SET confidence to reflect the weakest sub-objective.\n\n"
         "Return ONLY JSON with this exact schema:\n"
         "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|"
         "'insufficient_evidence'|'inconclusive', "
@@ -326,6 +407,10 @@ async def _image_analyzer(inv, evidence):
         "assessmentReasoning: string (explain sub-objective decomposition and evidence used), "
         "subObjectives: [{objective: string, status: 'answered'|'inconclusive'|'insufficient_evidence', "
         "evidenceLevel: 'observed'|'inferred'|'external_required', finding: string}], "
+        "objectCounts (only when the question asks for a count): "
+        "[{category: string, count: number|null, countCertain: boolean, "
+        "instances: [{id: string, description: string, location: string, "
+        "visibility: 'fully_visible'|'partially_visible'}], uncertainty: string}], "
         "findings: string[], contradictions: string[], limitations: string[], "
         "uncertainty: string (specific reason if uncertain, empty string if not), "
         "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
@@ -377,6 +462,14 @@ async def _image_analyzer(inv, evidence):
             "evidenceSignals": [],
         }
     result = await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    # Deterministic cross-check of category counts against the enumerated
+    # instances: a reported count is only as reliable as the instance list that
+    # backs it. Corrected/unverifiable counts surface as limitations.
+    counted, count_notes = _reconcile_object_counts(result)
+    if counted is not None:
+        result["objectCounts"] = counted
+        if count_notes:
+            result["limitations"] = (result.get("limitations") or []) + count_notes
     # Persist sub-objectives so the evidence graph can use them
     raw_sub = result.pop("subObjectives", None)
     if raw_sub and isinstance(raw_sub, list):

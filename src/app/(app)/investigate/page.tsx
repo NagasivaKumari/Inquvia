@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { API_BASE, ALGORAND_CONFIG, capabilityTitle } from "@/lib/config";
+import { API_BASE, ALGORAND_CONFIG, capabilityTitle, EvidenceServiceContract } from "@/lib/config";
 import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { payForCapability, detectCapabilityEndpoint } from "@/lib/x402/client";
 import { connectPera, signChallenge } from "@/lib/wallet/pera";
@@ -20,6 +20,41 @@ function base64(u8: Uint8Array): string {
   let bin = "";
   u8.forEach((b) => (bin += String.fromCharCode(b)));
   return btoa(bin);
+}
+
+/** Component to display endpoint requirements dynamically based on service contract. */
+function EndpointRequirements({ endpoint, services }: { endpoint: string; services: EvidenceServiceContract[] }) {
+  const service = services.find((s) => s.endpoint === endpoint);
+  if (!service) return null;
+
+  const fileExtensions = service.acceptedFileExtensions.map((ext) => ext.replace(".", "").toUpperCase()).join(", ");
+  const maxSize = service.maxFileSizeMB;
+  
+  if (fileExtensions) {
+    return <>Accepted files: {fileExtensions} — up to {maxSize}MB each</>;
+  } else if (service.acceptedMimeTypes.length > 0) {
+    return <>Accepted formats: {service.acceptedMimeTypes.join(", ")} — up to {maxSize}MB</>;
+  } else {
+    return <>Required: Submit JSON/structured data input</>;
+  }
+}
+
+/** Get the accept attribute for file input based on endpoint contract. */
+function getAcceptAttribute(services: EvidenceServiceContract[] | null, endpoint: string): string {
+  if (!services || !endpoint) return "";
+  
+  const service = services.find((s) => s.endpoint === endpoint);
+  if (!service) return "";
+  
+  const extensions = service.acceptedFileExtensions.map((ext) => ext.trim()).join(",");
+  if (extensions) return extensions;
+  
+  // Fallback to common accept patterns
+  if (service.acceptedMimeTypes.includes("application/json")) return ".json,application/json";
+  if (service.acceptedMimeTypes.includes("text/csv")) return ".csv,text/csv";
+  if (service.acceptedMimeTypes.includes("application/pdf")) return ".pdf,application/pdf";
+  
+  return "";
 }
 
 function InvestigateForm() {
@@ -48,6 +83,9 @@ function InvestigateForm() {
   const [capabilities, setCapabilities] = useState<
     { path: string; priceUsdc: number }[] | null
   >(null);
+  const [evidenceServices, setEvidenceServices] = useState<
+    { endpoint: string; name: string; acceptedFileExtensions: string[]; maxFileSizeMB: number }[] | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -59,10 +97,15 @@ function InvestigateForm() {
         }
       })
       .catch(() => {});
-    // Fetch capabilities once and cache for the session
+    // Fetch paid capabilities once and cache for the session
     apiFetch(`${API_BASE}/api/investigate`)
       .then((r) => r.json())
       .then((d) => setCapabilities(d.capabilities ?? []))
+      .catch(() => {});
+    // Fetch evidence service contracts for dynamic UI
+    apiFetch(`${API_BASE}/api/evidence/services`)
+      .then((r) => r.json())
+      .then((d) => setEvidenceServices(d.services ?? []))
       .catch(() => {});
   }, []);
 
@@ -304,15 +347,20 @@ function InvestigateForm() {
           >
             <div className="upload-zone-icon" aria-hidden="true">+</div>
             <p>Drag and drop files here, or click to browse</p>
-            <p className="text-xs text-muted">
-              Images, videos, audio, PDFs, documents, JSON, CSV — up to 10MB each
-            </p>
+            {evidenceServices && detectedCap && (
+              <p className="text-xs text-muted">
+                <EndpointRequirements 
+                  endpoint={detectedCap} 
+                  services={evidenceServices} 
+                />
+              </p>
+            )}
           </div>
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*,video/*,audio/*,application/pdf,text/*,application/json,text/csv"
+            accept={getAcceptAttribute(evidenceServices, detectedCap)}
             onChange={(e) => handleFiles(e.target.files)}
             className="sr-only"
             aria-hidden

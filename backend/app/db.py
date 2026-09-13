@@ -166,16 +166,34 @@ def store_upload_file(data: bytes, filename: str, mime: str, case_id: str) -> st
 
 def read_upload_file(file_id: str) -> tuple[bytes, str] | None:
     """Read a GridFS upload by its stable ``gridfs:<id>`` reference."""
+    import logging
     database = get_db()
     try:
         if file_id.startswith("gridfs:"):
-            grid_file = GridFS(database).get(ObjectId(file_id.removeprefix("gridfs:")))
-            return grid_file.read(), str(grid_file.content_type or "application/octet-stream")
+            file_id_without_prefix = file_id.removeprefix("gridfs:")
+            grid_file = GridFS(database).get(ObjectId(file_id_without_prefix))
+            data = grid_file.read()
+            content_type = str(grid_file.content_type or "application/octet-stream")
+            logging.info(f"read_upload_file: gridfs file {file_id_without_prefix[:8]}... read {len(data)} bytes, mime={content_type}")
+            if len(data) < 100:
+                logging.warning(f"read_upload_file: gridfs file {file_id_without_prefix[:8]}... suspiciously small ({len(data)} bytes)")
+            if data and len(data) >= 5 and not data[:5] == b"%PDF-":
+                logging.warning(f"read_upload_file: gridfs file {file_id_without_prefix[:8]}... invalid PDF header (got {data[:20]!r})")
+            grid_file.close()
+            return data, content_type
         if file_id.startswith("mongo:"):
             doc = database["uploads"].find_one({"_id": ObjectId(file_id.removeprefix("mongo:"))})
-            return (bytes(doc["data"]), str(doc.get("contentType") or "application/octet-stream")) if doc else None
+            if doc:
+                data = bytes(doc["data"])
+                content_type = str(doc.get("contentType") or "application/octet-stream")
+                logging.info(f"read_upload_file: mongo file {file_id.removeprefix('mongo:')[:8]}... read {len(data)} bytes, mime={content_type}")
+                return data, content_type
+            logging.warning(f"read_upload_file: mongo file {file_id.removeprefix('mongo:')[:8]}... not found")
+            return None
+        logging.warning(f"read_upload_file: unknown file_id format: {file_id[:50]}...")
         return None
-    except Exception:
+    except Exception as e:
+        logging.exception(f"read_upload_file: exception reading {file_id[:50]}...: {type(e).__name__}: {e}")
         return None
 
 

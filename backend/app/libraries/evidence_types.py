@@ -6,6 +6,8 @@ class ExtractionQuality(TypedDict):
     success: bool
     features_detected: List[str]  # e.g., ["text", "tables", "images"]
     page_range: Optional[List[int]]
+    quality: Literal["complete", "partial", "sparse", "empty"]
+    metrics: Dict[str, object]
 
 @dataclass
 class EvidenceResult:

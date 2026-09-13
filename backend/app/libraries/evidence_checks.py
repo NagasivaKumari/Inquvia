@@ -536,6 +536,7 @@ async def _document_findings(inv: dict) -> list[dict]:
             continue
         stored = signals_lib.load_bytes(path)
         if not stored:
+            logger.warning(f"_document_findings: file could not be read - {label}, path={path[:50]}...")
             records.append({
                 "finding": f"Document check ({label}): the file could not be read — evidence unavailable.",
                 "metadata": {
@@ -546,12 +547,21 @@ async def _document_findings(inv: dict) -> list[dict]:
                 },
             })
             continue
-        extracted = await document_extract.extract_document_pages_with_ocr(
-            stored, inp.get("mimeType"), run_ai_ocr
-        )
+        logger.info(f"_document_findings: extracting document - {label}, path={path[:50]}..., mime={inp.get('mimeType')}")
+        try:
+            extracted = await document_extract.extract_document_pages_with_ocr(
+                stored, inp.get("mimeType"), run_ai_ocr
+            )
+        except Exception as e:
+            logger.exception(f"document extraction failed for {label}: {type(e).__name__}: {e}")
+            extracted = None
         if not extracted or not extracted.get("pages"):
+            logger.warning(f"_document_findings: extraction returned no pages - {label}, extracted={extracted is not None}, quality={extracted.get('extractionQuality') if extracted else None}")
+            # Reached only when the file genuinely cannot be read at all (no
+            # extractor, unparseable container) — never because extraction was
+            # merely sparse/broken; fallbacks already ran inside extraction.
             records.append({
-                "finding": f"Document check ({label}): no readable text could be extracted — evidence unavailable.",
+                "finding": f"Document check ({label}): the file could not be read — evidence unavailable.",
                 "metadata": {
                     "fileName": inp.get("fileName"),
                     "mimeType": inp.get("mimeType"),
@@ -573,13 +583,19 @@ async def _document_findings(inv: dict) -> list[dict]:
                 finding = (
                     f"Document check ({label}), page {page['page']} [{source_label}]: {text}"
                 )
+                # A page whose readable content was actually recovered is
+                # acquired evidence for whatever the question asks about it;
+                # retrieval/read success mirrors the URL check's 'supporting'.
+                signal = "supporting"
             else:
                 finding = (
                     f"Document check ({label}), page {page['page']} [{source_label}]: "
                     "no readable text was recovered (scanned page, OCR returned nothing)."
                 )
+                signal = "uncertain"
             records.append({
                 "finding": finding,
+                "signal": signal,
                 "metadata": {
                     "fileName": inp.get("fileName"),
                     "mimeType": inp.get("mimeType"),
@@ -590,6 +606,9 @@ async def _document_findings(inv: dict) -> list[dict]:
                     "documentLabel": label,
                     "objective": (inv.get("question") or "").strip(),
                     "extractionQuality": extracted.get("extractionQuality"),
+                    "qualityMetrics": extracted.get("qualityMetrics"),
+                    "evidenceAvailable": bool(text),
+                    "tableCount": len(page.get("tables") or []),
                 },
             })
     return records

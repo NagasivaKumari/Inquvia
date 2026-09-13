@@ -396,3 +396,102 @@ export function capabilityTitle(idOrPath: string): string {
   const id = idOrPath.replace(/^\/api\/x402\//, "");
   return getPaidCapability(id)?.title ?? idOrPath;
 }
+
+// ── Evidence Service Contract Types ──
+
+export interface EvidenceInputField {
+  name: string;
+  type: "file" | "string" | "number" | "boolean" | "object" | "array";
+  required: boolean;
+  description: string;
+  acceptedMimeTypes?: string[];
+  maxSizeMB?: number;
+  allowMultiple?: boolean;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minValue?: number;
+  maxValue?: number;
+  integerOnly?: boolean;
+  allowedValues?: string[];
+}
+
+export interface EvidenceServiceContract {
+  id: string;
+  name: string;
+  description: string;
+  endpoint: string;
+  method: "POST" | "GET" | "PUT" | "DELETE";
+  requiresAuthentication: boolean;
+  requiresPayment: boolean;
+  maxFileSizeMB: number;
+  maxRequestSizeMB: number;
+  acceptedFileTypes: string[];
+  acceptedFileExtensions: string[];
+  acceptedMimeTypes: string[];
+  requiredInputs: EvidenceInputField[];
+  optionalInputs: EvidenceInputField[];
+  urlRequirements?: string;
+  jsonStructure?: Record<string, any>;
+  exampleInput?: Record<string, any>;
+}
+
+/** Fetch the complete evidence service contracts from the backend. */
+export async function fetchEvidenceServices(): Promise<EvidenceServiceContract[]> {
+  try {
+    const response = await fetch(`${API_BASE}/api/evidence/services`);
+    if (!response.ok) {
+      console.error("Failed to fetch evidence services:", response.statusText);
+      return [];
+    }
+    const data = await response.json();
+    return data.services || [];
+  } catch (error) {
+    console.error("Error fetching evidence services:", error);
+    return [];
+  }
+}
+
+/** Get a specific evidence service contract by endpoint path. */
+export function getEvidenceService(
+  endpoint: string,
+  services: EvidenceServiceContract[]
+): EvidenceServiceContract | undefined {
+  return services.find((s) => s.endpoint === endpoint);
+}
+
+/** Get a summary of what an endpoint accepts for UI display. */
+export function getEndpointSummary(
+  contract: EvidenceServiceContract
+): {
+  title: string;
+  description: string;
+  acceptsFiles: boolean;
+  fileTypes: string[];
+  maxSize: string;
+  requiredInputs: string[];
+  optionalInputs: string[];
+  requiresClaim: boolean;
+  requiresFile: boolean;
+  requiresUrl: boolean;
+  requiresStructuredData: boolean;
+} {
+  const required = contract.requiredInputs.map((f) => f.name);
+  const optional = contract.optionalInputs.map((f) => f.name);
+  
+  return {
+    title: contract.name,
+    description: contract.description,
+    acceptsFiles: contract.acceptedFileTypes.length > 0,
+    fileTypes: contract.acceptedFileExtensions
+      .map((ext) => ext.replace(".", "").toUpperCase())
+      .join(", "),
+    maxSize: `${contract.maxFileSizeMB} MB`,
+    requiredInputs: required,
+    optionalInputs: optional,
+    requiresClaim: required.includes("claim") || optional.includes("claim"),
+    requiresFile: required.some((f) => f === "file"),
+    requiresUrl: required.includes("url"),
+    requiresStructuredData: required.includes("evidence"),
+  };
+}

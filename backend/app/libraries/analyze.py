@@ -270,29 +270,45 @@ def normalize_conclusion(raw: str | None):
 
 
 async def run_ai_ocr(data: bytes, mime: str | None, pages: list[dict]) -> dict:
-    """The app's existing OCR capability: hand the scanned attachment to the
-    configured multimodal AI and collect verbatim per-page transcriptions.
+    """The app's OCR capability: hand the pages without a readable text layer to
+    the configured multimodal AI and collect verbatim per-page transcriptions.
 
-    Returns {page_number: text} for the pages the model could read; {} when no
-    OCR-capable provider is configured, the attachment can't be reached, or the
-    model produced nothing. Text is the model's transcription of the rendered
-    page — OCR-derived evidence, labeled as such, never invented from nothing.
+    Pages carrying a rendered image (base64 PNG) are sent as images — this is
+    the reliable path for scanned pages and pages a broken text layer could not
+    fully cover. When no per-page images are available (fallback callers), the
+    whole attachment is sent instead. Returns {page_number: text} for the pages
+    the model could read; {} when no OCR-capable provider is configured,
+    rendering is unavailable, or the model produced nothing. Text is the
+    model's transcription of the visible page — OCR-derived evidence, labeled
+    as such, never invented from nothing.
     """
     if not data or not pages:
         return {}
     try:
         import base64
         from ..libraries import ai as ai_lib
-        part = {"file": {"mimeType": mime or "application/octet-stream",
-                         "base64": base64.b64encode(data).decode("ascii")}}
+
+        parts = []
+        if any(p.get("image") for p in pages):
+            for p in pages:
+                if p.get("image"):
+                    parts.append({"file": {"mimeType": "image/png", "base64": p["image"]}})
+                    parts.append({"text": f"PAGE {p['page']} (transcribe this page verbatim)"})
+        else:
+            parts.append({"file": {"mimeType": mime or "application/octet-stream",
+                                   "base64": base64.b64encode(data).decode("ascii")}})
+
         prompt = (
-            "You are the OCR step of an evidence pipeline. The attached document contains pages "
-            "without a selectable text layer. Transcribe the visible content VERBATIM for every page: "
+            "You are the OCR step of an evidence pipeline. The attached document pages have no "
+            "usable selectable text layer. Transcribe the visible content VERBATIM for every page: "
             "exact words, numbers and dates as printed; do not summarize, interpret, or add anything "
-            "not present on the page. If a page is blank, transcribe it as an empty string. "
+            "not present on the page. If a page contains TABLES or structured layouts, preserve the "
+            "structure: keep each row's cells in order and separate columns with ' | ' so row/column "
+            "relationships stay intact; do not reorder cells or merge values across rows. If a page "
+            "is blank, transcribe it as an empty string. "
             'Return ONLY JSON: {"pages": [{"page": <number>, "text": "<verbatim transcription>"}, ...]}'
         )
-        raw = await ai_lib.call_ai_with_parts(prompt, [part])
+        raw = await ai_lib.call_ai_with_parts(prompt, parts)
         payload = ai_lib.parse_ai_json(raw)
         out = {}
         for item in (payload or {}).get("pages") or []:
