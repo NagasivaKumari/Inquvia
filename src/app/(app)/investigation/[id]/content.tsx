@@ -7,6 +7,11 @@ import { API_BASE } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
 import { economicSummary } from "@/lib/report-export";
 import { SourceViewer } from "@/components/sources/SourceViewer";
+import { StageProgressBar } from "@/components/investigation/StageProgress";
+import { ResultPanel } from "@/components/investigation/ResultPanel";
+import { EvidenceBoard } from "@/components/evidence/EvidenceBoard";
+import { InvestigationPlan } from "@/components/investigation/InvestigationPlan";
+import { ALGORAND_CONFIG } from "@/lib/config";
 import type {
   Investigation,
   EvidenceAcquisition,
@@ -157,30 +162,74 @@ export default function InvestigationPage() {
   const stage = inv.currentStage;
   const date = new Date(inv.createdAt).toLocaleString();
 
+  // Drawers state
+  const [showPlan, setShowPlan] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  const [showDiscovery, setShowDiscovery] = useState(false);
+
+  // Group evidence items
+  const evidenceList = inv.evidence ?? [];
+  const contradictory = evidenceList.filter(
+    (e) => e.signal === "contradictory" || e.contradictsClaim || (inv.contradictoryEvidenceIds ?? []).includes(e.id)
+  );
+  const supporting = evidenceList.filter(
+    (e) => (e.signal === "supporting" || e.supportsClaim || (inv.supportingEvidenceIds ?? []).includes(e.id)) && !contradictory.some((c) => c.id === e.id)
+  );
+  const neutral = evidenceList.filter(
+    (e) => !contradictory.some((c) => c.id === e.id) && !supporting.some((s) => s.id === e.id)
+  );
+
+  const contradictions = inv.contradictions ?? [];
+  const hasContradictions = contradictions.length > 0 || contradictory.length > 0;
+
+  // Economics computation
+  const econ = economicSummary(inv);
+  const networkName = ALGORAND_CONFIG.network;
+  const settledAcqWithTx = acqs.find((a) => a.txId);
+  const settlementRef = inv.economicSummary?.algorandRef || settledAcqWithTx?.txId;
+  const isSettled = inv.economicSummary?.settlementStatus === "settled" || !!settledAcqWithTx?.txId;
+
+  // Explorer link builder
+  const getExplorerTxUrl = (tx: string) => {
+    const isTestnet = networkName === "testnet";
+    return isTestnet
+      ? `https://lora.algokit.io/testnet/transaction/${encodeURIComponent(tx)}`
+      : `https://allo.info/tx/${encodeURIComponent(tx)}`;
+  };
+
+  const isActiveInvestigation = inv.status === "planning" || inv.status === "discovering" || inv.status === "analyzing" || inv.status === "cross_checking" || inv.status === "evidence_requested";
+
   return (
     <div className={styles.page}>
+      {/* 1. CASE HEADER */}
       <header className={styles.header}>
         <div className={styles.headerTop}>
-          <div>
-            <p className={styles.caseId}>Case {inv.id}</p>
-            <h1 className="heading-lg">{inv.title}</h1>
-            <p className={styles.question}>&ldquo;{inv.question}&rdquo;</p>
+          <div className={styles.casePills}>
+            <span className={styles.caseId}>Case {inv.id}</span>
+            <span className={styles.typePill}>Input: {inv.inputType}</span>
+            {inv.capability && (
+              <span className={styles.typePill}>{inv.capability.replaceAll("_", " ")}</span>
+            )}
           </div>
-          <StatusBadge status={inv.status} />
+          <div className={styles.statusGroup}>
+            {inv.capabilityPriceUsdc != null && (
+              <span className={styles.paymentPill}>
+                ${inv.capabilityPriceUsdc.toFixed(2)} USDC {isSettled ? "• Settled" : ""}
+              </span>
+            )}
+            <StatusBadge status={inv.status} />
+          </div>
         </div>
+
+        <h1 className={styles.questionTitle}>{inv.question}</h1>
+
         <div className={styles.meta}>
-          <span>{date}</span>
-          <span>Input: {inv.inputType}</span>
-          {inv.capability && (
-            <span>Capability: {inv.capability.replaceAll("_", " ")}</span>
-          )}
-          {inv.capabilityPriceUsdc != null && (
-            <span>Paid: ${inv.capabilityPriceUsdc.toFixed(4)} USDC</span>
-          )}
-          {inv.reinvestigationOf && (
-            <span>Reinvestigating case {inv.reinvestigationOf}</span>
-          )}
+          <span>Created: {date}</span>
+          <span>Network: {networkName}</span>
+          <span>Evidence items: {evidenceList.length}</span>
+          {acqs.length > 0 && <span>Checks: {acqs.length}</span>}
         </div>
+
         {inv.blockReason && (
           <div className={styles.blocked}>
             <strong>Unable to complete:</strong> {inv.blockReason}
@@ -188,58 +237,245 @@ export default function InvestigationPage() {
         )}
       </header>
 
-      {/* UPLOADED SOURCE */}
-      <SubmittedSource inv={inv} />
+      {/* SINGLE-STREAM STORY CONTAINER */}
+      <div className={styles.stream}>
+        {/* 2. SUBMITTED SOURCE */}
+        <SubmittedSource inv={inv} />
 
-      {/* LEFT — timeline / RIGHT — assessment */}
-      <div className={styles.layout}>
-        <div className={styles.col}>
-          <Timeline
-            status={inv.status}
-            currentStage={stage}
-            acquisitions={acqs}
-          />
-        </div>
+        {/* 3. LIVE INVESTIGATION PROGRESS */}
+        {inv.stages && inv.stages.length > 0 && (
+          <section className={styles.stepperSection} aria-label="Investigation progress">
+            <StageProgressBar stages={inv.stages} currentStage={stage} />
+          </section>
+        )}
 
-        <div className={`${styles.col} ${styles.colCenter}`}>
-          <DiscoveryPanel discovery={discovery} />
-          <EvidenceGraphPanel graph={graph} />
-        </div>
-
-        <div className={styles.col}>
-          <AssessmentPanel
-            status={inv.status}
-            conclusion={inv.conclusion}
-            conclusionText={inv.conclusionText}
-            confidence={inv.confidence}
-            risk={inv.risk}
-            evidence={inv.evidence}
-            limitations={inv.limitations}
-            findings={inv.findings}
-            paidMicro={Math.round(economicSummary(inv).spend * 1e6)}
-          />
-        </div>
-      </div>
-
-      {/* ECONOMIC EVENTS */}
-      {acqs.length > 0 && (
-        <section className={`card ${styles.section}`}>
-          <h2 className="heading-sm">Evidence acquisition</h2>
-          <div className={styles.acqList}>
-            {acqs.map((a) => (
-              <AcquisitionRow key={a.id} acq={a} />
-            ))}
+        {/* 4. ASSESSMENT HERO */}
+        {inv.status === "completed" ? (
+          <ResultPanel investigation={inv} hideEvidence={true} />
+        ) : (
+          <div className="card" style={{ padding: "var(--space-6)" }}>
+            <h2 className="heading-sm" style={{ marginBottom: "var(--space-2)" }}>Investigation in progress</h2>
+            <p className="text-muted">
+              Evidence is currently being collected and cross-examined. The final assessment, confidence score, and findings will be generated once completed.
+            </p>
           </div>
-        </section>
-      )}
+        )}
 
-      {/* ACTIVITY */}
-      {activity.length > 0 && (
-        <section className={`card ${styles.section}`}>
-          <h2 className="heading-sm">Activity</h2>
-          <ActivityTimeline events={activity} />
+        {/* 5. CONTRADICTION EXPERIENCE */}
+        <section aria-labelledby="contradictions-heading">
+          {hasContradictions ? (
+            <div className={styles.contradictionAlert}>
+              <div className={styles.contradictionHeader}>
+                <h2 id="contradictions-heading">Material contradictions identified</h2>
+                <span className={styles.contradictionCount}>
+                  {contradictions.length || contradictory.length} Conflict{(contradictions.length || contradictory.length) === 1 ? "" : "s"}
+                </span>
+              </div>
+              <p className="text-sm" style={{ color: "var(--color-danger)" }}>
+                The evidence gathered conflicts directly with claims or assertions made:
+              </p>
+              <div className={styles.contradictionList}>
+                {contradictions.map((c, i) => (
+                  <div key={i} className={styles.contradictionItem}>
+                    <strong>Conflict:</strong> {c}
+                  </div>
+                ))}
+                {contradictions.length === 0 && contradictory.map((c) => (
+                  <div key={c.id} className={styles.contradictionItem}>
+                    <strong>{c.type}:</strong> {c.finding}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className={styles.noContradictions}>
+              <span className={styles.noContradictionsCheck}>✓</span>
+              <span>No material contradictions detected across verified sources.</span>
+            </div>
+          )}
         </section>
-      )}
+
+        {/* 6. EVIDENCE BOARD (Grouped Categorical Sections) */}
+        {evidenceList.length > 0 ? (
+          <div className={styles.evidenceSection}>
+            {contradictory.length > 0 && (
+              <EvidenceBoard items={contradictory} title="Contradictory evidence" />
+            )}
+            {supporting.length > 0 && (
+              <EvidenceBoard items={supporting} title="Supporting evidence" />
+            )}
+            {neutral.length > 0 && (
+              <EvidenceBoard items={neutral} title="Contextual & neutral evidence" />
+            )}
+          </div>
+        ) : (
+          <div className="card" style={{ padding: "var(--space-5)" }}>
+            <h2 className="heading-sm">Evidence collection</h2>
+            <p className="text-muted" style={{ fontSize: "0.875rem", marginTop: 4 }}>
+              {inv.status === "completed" ? "No evidence items recorded for this investigation." : "Evidence records will appear here as they are acquired."}
+            </p>
+          </div>
+        )}
+
+        {/* 7. INVESTIGATION PLAN (Collapsible) */}
+        {inv.investigationPlan && inv.investigationPlan.length > 0 && (
+          <div className={styles.drawer}>
+            <button
+              type="button"
+              className={styles.drawerHeader}
+              onClick={() => setShowPlan((p) => !p)}
+              aria-expanded={showPlan}
+            >
+              <span>Investigation plan & automated checks ({inv.investigationPlan.length})</span>
+              <span>{showPlan ? "▲ Hide" : "▼ Show"}</span>
+            </button>
+            {showPlan && (
+              <div className={styles.drawerContent}>
+                <InvestigationPlan items={inv.investigationPlan} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 8. ECONOMICS & X402 PROOF */}
+        <section className={styles.economicsCard} aria-labelledby="economics-heading">
+          <div className={styles.economicsHeader}>
+            <div>
+              <h2 id="economics-heading" className="heading-sm">Economics & x402 settlement proof</h2>
+              <p className="text-xs text-muted" style={{ marginTop: 2 }}>
+                Cryptographic settlement and micro-payment accounting
+              </p>
+            </div>
+            <span className={styles.caseId}>{networkName.toUpperCase()}</span>
+          </div>
+
+          <div className={styles.economicsGrid}>
+            <div className={styles.economicsMetric}>
+              <span className={styles.metricLabel}>Investigation fee</span>
+              <span className={styles.metricValue}>${econ.spend.toFixed(2)} USDC</span>
+            </div>
+            <div className={styles.economicsMetric}>
+              <span className={styles.metricLabel}>Protocol</span>
+              <span className={styles.metricValue} style={{ fontSize: "1rem" }}>HTTP 402</span>
+            </div>
+            <div className={styles.economicsMetric}>
+              <span className={styles.metricLabel}>Settlement state</span>
+              <span
+                className={styles.metricValue}
+                style={{
+                  fontSize: "1rem",
+                  color: isSettled ? "var(--color-success)" : "var(--color-warning)",
+                }}
+              >
+                {isSettled ? "Settled on-chain" : inv.status === "awaiting_payment" ? "Awaiting payment" : "Included in fee"}
+              </span>
+            </div>
+          </div>
+
+          {settlementRef ? (
+            <div className={styles.txBox}>
+              <div>
+                <div className={styles.metricLabel}>Transaction reference</div>
+                <div className={styles.txHash}>{settlementRef}</div>
+              </div>
+              <a
+                href={getExplorerTxUrl(settlementRef)}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.txLink}
+              >
+                View on explorer ↗
+              </a>
+            </div>
+          ) : (
+            <div className={styles.txBox}>
+              <div>
+                <div className={styles.metricLabel}>Settlement ledger</div>
+                <div className="text-muted" style={{ fontSize: "0.8125rem" }}>
+                  {isSettled ? "Internal micro-transaction recorded" : "Payment settlement pending confirmation"}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Itemized acquisition breakdown */}
+          {acqs.length > 0 && (
+            <div style={{ marginTop: "var(--space-5)" }}>
+              <h3 className="heading-xs" style={{ marginBottom: "var(--space-3)" }}>
+                Itemized check acquisitions ({acqs.length})
+              </h3>
+              <div className={styles.acqList}>
+                {acqs.map((a) => (
+                  <AcquisitionRow key={a.id} acq={a} />
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* 9. DISCOVERED SERVICES (Collapsible if present) */}
+        {discovery && (discovery.services ?? []).length > 0 && (
+          <div className={styles.drawer}>
+            <button
+              type="button"
+              className={styles.drawerHeader}
+              onClick={() => setShowDiscovery((d) => !d)}
+              aria-expanded={showDiscovery}
+            >
+              <span>Discovered evidence services ({discovery.services?.length ?? 0})</span>
+              <span>{showDiscovery ? "▲ Hide" : "▼ Show"}</span>
+            </button>
+            {showDiscovery && (
+              <div className={styles.drawerContent}>
+                <DiscoveryPanel discovery={discovery} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 10. EVIDENCE GRAPH RELATIONSHIPS (Lightweight list, if present) */}
+        {graph && graph.edges.length > 0 && (
+          <section className="card" style={{ padding: "var(--space-5)" }}>
+            <h2 className="heading-sm" style={{ marginBottom: "var(--space-3)" }}>
+              Evidence relationships & graph links ({graph.edges.length})
+            </h2>
+            <div className={styles.relationList}>
+              {graph.edges.map((edge, idx) => {
+                const fromNode = graph.nodes.find((n) => n.id === edge.from);
+                const toNode = graph.nodes.find((n) => n.id === edge.to);
+                return (
+                  <div key={idx} className={styles.relationItem}>
+                    <strong>{fromNode ? fromNode.label : edge.from}</strong>
+                    <span className={styles.relationBadge}>{edge.relation.replaceAll("_", " ")}</span>
+                    <span>→</span>
+                    <strong>{toNode ? toNode.label : edge.to}</strong>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* 11. ACTIVITY AUDIT TRAIL (Collapsible) */}
+        {activity.length > 0 && (
+          <div className={styles.drawer}>
+            <button
+              type="button"
+              className={styles.drawerHeader}
+              onClick={() => setShowActivity((a) => !a)}
+              aria-expanded={showActivity}
+            >
+              <span>Audit trail & system activity ({activity.length} events)</span>
+              <span>{showActivity ? "▲ Hide" : "▼ Show"}</span>
+            </button>
+            {showActivity && (
+              <div className={styles.drawerContent}>
+                <ActivityTimeline events={activity} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className={styles.actions}>
         {inv.status === "completed" && (
@@ -272,7 +508,7 @@ function TextFileContent({ src }: { src: string }) {
       .then((t) => {
         if (!cancelled) setText(t.slice(0, 4000));
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       cancelled = true;
     };
@@ -664,8 +900,8 @@ function AcquisitionRow({ acq }: { acq: EvidenceAcquisition }) {
               acq.evidence.signal === "supporting"
                 ? styles.sigOk
                 : acq.evidence.signal === "contradictory"
-                ? styles.sigBad
-                : styles.sigWarn
+                  ? styles.sigBad
+                  : styles.sigWarn
             }
           >
             {acq.evidence.signal}

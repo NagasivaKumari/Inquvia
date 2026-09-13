@@ -5,9 +5,10 @@ import styles from "./ResultPanel.module.css";
 
 interface Props {
   investigation: Investigation;
+  hideEvidence?: boolean;
 }
 
-export function ResultPanel({ investigation }: Props) {
+export function ResultPanel({ investigation, hideEvidence = false }: Props) {
   const supporting = investigation.evidence.filter((e) =>
     investigation.supportingEvidenceIds.includes(e.id)
   );
@@ -66,11 +67,11 @@ export function ResultPanel({ investigation }: Props) {
         </div>
       )}
 
-      {supporting.length > 0 && (
+      {!hideEvidence && supporting.length > 0 && (
         <EvidenceBoard items={supporting} title="Supporting evidence" />
       )}
 
-      {contradictory.length > 0 && (
+      {!hideEvidence && contradictory.length > 0 && (
         <EvidenceBoard items={contradictory} title="Contradictory evidence" />
       )}
 

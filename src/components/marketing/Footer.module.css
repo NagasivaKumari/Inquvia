@@ -1,0 +1,334 @@
+.footerWrap {
+  background: radial-gradient(circle at 82% 20%, rgba(14, 165, 233, 0.16) 0%, rgba(2, 132, 199, 0.06) 40%, transparent 65%),
+              linear-gradient(180deg, #051329 0%, #020712 100%);
+  border-top: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 28px 28px 0 0;
+  margin: 0 clamp(12px, 2vw, 28px);
+  padding: clamp(4rem, 6vw, 5.5rem) 0 clamp(2rem, 3vw, 2.5rem);
+  color: #ffffff;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 -12px 48px rgba(0, 20, 60, 0.2);
+}
+
+.footerInner {
+  display: flex;
+  flex-direction: column;
+}
+
+.mainGrid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr 2.1fr;
+  gap: clamp(1.5rem, 3vw, 3.2rem);
+  align-items: start;
+}
+
+/* --------------------------------------------------------------------------
+   BRAND COLUMN
+   -------------------------------------------------------------------------- */
+.brandCol {
+  display: flex;
+  flex-direction: column;
+}
+
+.brandLogo {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: #ffffff;
+}
+
+.logoMark {
+  height: 34px;
+  width: auto;
+  mix-blend-mode: screen;
+  display: block;
+}
+
+.logoText {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 1.4rem;
+  letter-spacing: -0.03em;
+  color: #ffffff;
+}
+
+.brandHeading {
+  font-family: var(--font-heading);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-top: 18px;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+}
+
+.brandSub {
+  font-size: 0.88rem;
+  color: #94a3b8;
+  line-height: 1.6;
+  margin-top: 6px;
+  max-width: 260px;
+}
+
+/* --------------------------------------------------------------------------
+   NAVIGATION COLUMNS
+   -------------------------------------------------------------------------- */
+.navCol {
+  display: flex;
+  flex-direction: column;
+}
+
+.colTitle {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #38bdf8;
+  margin-bottom: 18px;
+}
+
+.linkList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+}
+
+.navLink {
+  font-size: 0.88rem;
+  color: #cbd5e1;
+  text-decoration: none;
+  transition: color 0.2s ease, transform 0.2s ease;
+  line-height: 1.4;
+  display: inline-block;
+}
+
+.navLink:hover {
+  color: #ffffff;
+  transform: translateX(2px);
+}
+
+/* --------------------------------------------------------------------------
+   TRUST / ALGORAND PANEL
+   -------------------------------------------------------------------------- */
+.trustCol {
+  display: flex;
+  flex-direction: column;
+}
+
+.trustCard {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 22px 24px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.trustCard:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 16px 40px rgba(0, 30, 80, 0.4);
+}
+
+.trustCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trustHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.trustLogoWrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.trustCardTitleWrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.trustTitle {
+  font-family: var(--font-heading);
+  font-size: 1.08rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.trustProtocol {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #38bdf8;
+  margin-top: 3px;
+}
+
+.trustExternalLink {
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.trustCard:hover .trustExternalLink {
+  color: #38bdf8;
+  transform: translate(2px, -2px);
+}
+
+.trustDesc {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.55;
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+/* 3 Trust Pillars below the card matching Variant 2 layout */
+.trustPillars {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 22px;
+  padding-top: 4px;
+}
+
+.trustPillarItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.trustPillarIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.trustPillarItem:hover .trustPillarIcon {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.trustPillarLabel {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+/* --------------------------------------------------------------------------
+   BOTTOM BAR
+   -------------------------------------------------------------------------- */
+.bottomBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: clamp(3rem, 5vw, 4.5rem);
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.8125rem;
+  color: #64748b;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.copyright {
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
+.motto {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE BREAKPOINTS
+   -------------------------------------------------------------------------- */
+@media (max-width: 1200px) {
+  .mainGrid {
+    grid-template-columns: 1.3fr 1fr 1fr 1fr 1.9fr;
+    gap: 1.5rem;
+  }
+}
+
+@media (max-width: 1024px) {
+  .footerWrap {
+    margin: 0;
+    border-radius: 0;
+  }
+  .mainGrid {
+    grid-template-columns: 1.5fr repeat(3, 1fr);
+  }
+  .trustCol {
+    grid-column: span 4;
+    margin-top: 2rem;
+    max-width: 520px;
+  }
+}
+
+@media (max-width: 768px) {
+  .mainGrid {
+    grid-template-columns: 1fr 1fr;
+    gap: 2.5rem 1.5rem;
+  }
+  .brandCol {
+    grid-column: span 2;
+  }
+  .trustCol {
+    grid-column: span 2;
+    margin-top: 1rem;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .mainGrid {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .brandCol,
+  .trustCol {
+    grid-column: span 1;
+  }
+  .trustPillars {
+    gap: 8px;
+  }
+  .trustPillarLabel {
+    font-size: 0.6875rem;
+  }
+  .bottomBar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
