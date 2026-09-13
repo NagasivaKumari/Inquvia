@@ -95,6 +95,71 @@ ALLOWED_MIME = [
     "application/pdf", "text/plain", "text/csv", "application/json",
 ]
 
+# Human-facing extensions per MIME type (single source of truth for both the
+# validation error messages and the capability contract served to the frontend).
+MIME_EXTENSIONS = {
+    "image/jpeg": [".jpg", ".jpeg"],
+    "image/png": [".png"],
+    "image/webp": [".webp"],
+    "image/gif": [".gif"],
+    "video/mp4": [".mp4"],
+    "video/webm": [".webm"],
+    "audio/mpeg": [".mp3"],
+    "audio/mp3": [".mp3"],
+    "audio/wav": [".wav"],
+    "audio/ogg": [".ogg"],
+    "application/pdf": [".pdf"],
+    "text/plain": [".txt"],
+    "text/csv": [".csv"],
+    "application/json": [".json"],
+}
+
+
+def mime_input_type(mime: str) -> str:
+    """Canonical MIME -> input type mapping (mirrors atomic_route)._mime_to_input_type."""
+    mime = (mime or "").lower()
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime == "application/pdf" or mime.startswith("text/"):
+        return "document"
+    if "json" in mime or "csv" in mime:
+        return "data"
+    return "document"
+
+
+# Each capability owns a distinct set of input types — a video investigation
+# rejects audio/image files, document accepts text-or-PDF, data accepts only
+# JSON, and so on. Rejects mismatched uploads before any payment can run.
+ATOMIC_INPUT_TYPES = {
+    "claim-investigation": {"text", "url", "document"},
+    "image-investigation": {"image"},
+    "video-investigation": {"video"},
+    "document-investigation": {"document", "text"},
+    "source-investigation": {"url"},
+    "data-investigation": {"data"},
+    "audio-investigation": {"audio"},
+}
+
+
+def capability_accepted_mimes(capability_id: str) -> list[str]:
+    """MIME types a capability actually validates against (derived from the
+    same ALLOWED_MIME + input-type rules used during validation)."""
+    allowed = ATOMIC_INPUT_TYPES.get(capability_id, set())
+    return [m for m in ALLOWED_MIME if mime_input_type(m) in allowed]
+
+
+def capability_accepted_extensions(capability_id: str) -> list[str]:
+    seen: list[str] = []
+    for mime in capability_accepted_mimes(capability_id):
+        for ext in MIME_EXTENSIONS.get(mime, []):
+            if ext not in seen:
+                seen.append(ext)
+    return seen
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or ""

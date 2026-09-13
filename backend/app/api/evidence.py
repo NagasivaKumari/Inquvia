@@ -35,6 +35,7 @@ from ..libraries.evidence_validation import (
     duplicates_contract,
     timeline_contract,
     gaps_contract,
+    get_all_evidence_contracts,
 )
 
 router = APIRouter()
@@ -87,6 +88,12 @@ async def _ai_finding(kind: str, claim: str, parts: list[dict]) -> dict:
     )
     raw = ai.parse_ai_json(await ai.call_ai_with_parts(prompt, [{"text": f"CLAIM: {claim}"}, *parts]))
     return raw if isinstance(raw, dict) else {}
+
+
+@router.get("/api/evidence/contracts")
+async def get_contracts():
+    """Return the authoritative contract metadata for all evidence endpoints."""
+    return [c.model_dump() for c in get_all_evidence_contracts()]
 
 
 # ── File Upload Endpoints (with clear error messages) ──

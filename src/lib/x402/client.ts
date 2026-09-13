@@ -308,6 +308,55 @@ export interface PaidInvestigationResult {
  * JSON is sent. The wrapped fetch handles the 402 → sign → facilitator settle
  * → retry flow automatically.
  */
+/**
+ * Build a human-readable error message from a failed capability response.
+ * Prefers the structured backend message ({ error, errorCode, field, details })
+ * or FastAPI's { detail } shape; falls back to a status-code mapping so the
+ * user always sees a useful sentence, never just an HTTP number.
+ */
+function toErrorMessage(body: Record<string, unknown> | null, status: number): string {
+  if (body && typeof body.error === "string" && body.error) return body.error;
+  const detail = body?.detail;
+  if (detail && typeof detail === "object") {
+    const m = (detail as { message?: unknown }).message;
+    if (typeof m === "string" && m) return m;
+  }
+  const details = body?.details && typeof body.details === "object" ? (body.details as Record<string, unknown>) : null;
+  switch (status) {
+    case 401:
+      return "Please sign in to continue.";
+    case 403:
+      return "You do not have permission to perform this action.";
+    case 413: {
+      const max = typeof details?.maxSizeMB === "number" ? ` Maximum allowed size is ${details.maxSizeMB}MB.` : "";
+      return `File is too large.${max}`;
+    }
+    case 415: {
+      const accepted = Array.isArray(details?.acceptedFileExtensions) && details.acceptedFileExtensions.length
+        ? ` Supported formats: ${details.acceptedFileExtensions.map((e) => String(e).replace(".", "").toUpperCase()).join(", ")}.`
+        : "";
+      return `File type not supported.${accepted}`;
+    }
+    case 400:
+    case 422:
+      return "Invalid request. Please check your input and try again.";
+    case 402:
+      return "Payment is required to complete this request.";
+    default:
+      return status >= 500
+        ? "Something went wrong on the server. Please try again."
+        : `The server returned an unexpected error.`;
+  }
+}
+
+function withErrorMeta(err: Error, res: Response, body: Record<string, unknown> | null): Error {
+  const meta = err as Error & { status?: number; code?: string };
+  meta.status = res.status;
+  const code = body && typeof body.errorCode === "string" ? body.errorCode : undefined;
+  if (code) meta.code = code;
+  return err;
+}
+
 export async function payForCapability(input: {
   address: string;
   endpoint: string;
@@ -317,6 +366,7 @@ export async function payForCapability(input: {
   url?: string;
   files?: File[];
   idempotencyKey?: string;
+  reinvestigateFrom?: string;
   signal?: AbortSignal;
 }): Promise<PaidInvestigationResult> {
   const capabilityId = input.endpoint.split("/").pop();
@@ -330,6 +380,7 @@ export async function payForCapability(input: {
       if (input.text) fd.append("text", input.text);
       if (input.url) fd.append("url", input.url);
       if (input.serviceName) fd.append("serviceName", input.serviceName);
+      if (input.reinvestigateFrom) fd.append("reinvestigateFrom", input.reinvestigateFrom);
       for (const file of input.files ?? []) {
         fd.append("files", file);
       }
@@ -342,6 +393,7 @@ export async function payForCapability(input: {
         serviceName: input.serviceName,
         text: input.text,
         url: input.url,
+        reinvestigateFrom: input.reinvestigateFrom,
       }),
     };
   };
@@ -444,16 +496,17 @@ export async function payForCapability(input: {
 
   if (!res.ok) {
     const required = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required");
-    let reason = "";
     if (required) {
       try {
         const decoded = JSON.parse(atob(required)) as { error?: string };
-        reason = decoded.error ? `: ${decoded.error}` : "";
-      } catch {
-        reason = "";
+        const reason = decoded.error ? `: ${decoded.error}` : "";
+        throw new Error(`Payment required${reason}`);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("Payment required")) throw err;
       }
     }
-    throw new Error(`Investigation endpoint returned ${res.status}${reason}`);
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    throw withErrorMeta(new Error(toErrorMessage(body, res.status)), res, body);
   }
 
   const txId = extractSettlementTxId(res);
@@ -497,7 +550,8 @@ export async function payForInvestigation(input: {
   });
 
   if (!res.ok) {
-    throw new Error(`Investigation endpoint returned ${res.status}`);
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    throw withErrorMeta(new Error(toErrorMessage(body, res.status)), res, body);
   }
 
   const txId = extractSettlementTxId(res);

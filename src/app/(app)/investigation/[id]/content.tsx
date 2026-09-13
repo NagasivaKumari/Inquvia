@@ -177,6 +177,9 @@ export default function InvestigationPage() {
           {inv.capabilityPriceUsdc != null && (
             <span>Paid: ${inv.capabilityPriceUsdc.toFixed(4)} USDC</span>
           )}
+          {inv.reinvestigationOf && (
+            <span>Reinvestigating case {inv.reinvestigationOf}</span>
+          )}
         </div>
         {inv.blockReason && (
           <div className={styles.blocked}>
@@ -242,6 +245,14 @@ export default function InvestigationPage() {
         {inv.status === "completed" && (
           <Link href={`/reports/${inv.id}`} className="btn btn-primary">
             View Report
+          </Link>
+        )}
+        {(inv.inputs ?? []).some((i) => i.filePath || i.type === "url" || i.type === "text") && (
+          <Link
+            href={`/investigate?reinvestigateFrom=${inv.id}&cap=${inv.capability ?? ""}`}
+            className="btn btn-secondary"
+          >
+            Reinvestigate
           </Link>
         )}
         <Link href="/investigate" className="btn btn-secondary">

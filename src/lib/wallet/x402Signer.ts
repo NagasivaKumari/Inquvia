@@ -83,11 +83,19 @@ export function createX402Signer(address: string, capabilityId?: string): Client
         return txns.map((_, i) => signedMap.get(i) ?? null);
       } catch (err) {
         console.error("x402Signer: error", err);
-        const message = err instanceof Error ? err.message : String(err);
+        const raw = err instanceof Error ? err.message : String(err);
+        // Pera's "cannot sign any of the requested transactions" is the classic
+        // stale/dead WalletConnect bridge. The user can't know that from the raw
+        // text — tell them exactly what fixes it, and drop the dead session so
+        // the next attempt reconnects fresh instead of hitting the same wall.
+        const needsReconnect = /cannot sign any of the requested transactions/i.test(raw)
+          || /timed out/i.test(raw)
+          || /expired|desync/i.test(raw);
+        const message = needsReconnect
+          ? "Pera couldn't sign the payment. Disconnect and reconnect your wallet in the Pera app, then try again."
+          : raw;
         emit("error", { message });
-        if (/timed out/i.test(message)) {
-          // If the signing request timed out, the WalletConnect bridge is likely dead or desynced.
-          // Disconnect so the user can establish a fresh session on their next retry.
+        if (needsReconnect) {
           try {
             const { disconnectPera } = await import("./pera");
             await disconnectPera();
@@ -95,7 +103,7 @@ export function createX402Signer(address: string, capabilityId?: string): Client
             // best-effort cleanup
           }
         }
-        throw err;
+        throw new Error(message);
       }
     },
   };

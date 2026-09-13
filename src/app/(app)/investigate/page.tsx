@@ -7,6 +7,7 @@ import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { payForCapability, detectCapabilityEndpoint } from "@/lib/x402/client";
 import { connectPera, signChallenge } from "@/lib/wallet/pera";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
+import type { Investigation } from "@/lib/types";
 import styles from "./page.module.css";
 
 interface UploadedFile {
@@ -16,6 +17,22 @@ interface UploadedFile {
   file: File;
 }
 
+interface PaidCapability {
+  path: string;
+  priceUsdc: number;
+  acceptedFileExtensions?: string[];
+  acceptedMimeTypes?: string[];
+  maxFileSizeMB?: number;
+}
+
+/** Raw snake_case contract served by /api/evidence/contracts. */
+interface RawEvidenceContract {
+  endpoint: string;
+  accepted_file_extensions?: string[];
+  accepted_mimetypes?: string[];
+  max_file_size_mb?: number;
+}
+
 function base64(u8: Uint8Array): string {
   let bin = "";
   u8.forEach((b) => (bin += String.fromCharCode(b)));
@@ -23,37 +40,66 @@ function base64(u8: Uint8Array): string {
 }
 
 /** Component to display endpoint requirements dynamically based on service contract. */
-function EndpointRequirements({ endpoint, services }: { endpoint: string; services: EvidenceServiceContract[] }) {
-  const service = services.find((s) => s.endpoint === endpoint);
-  if (!service) return null;
-
-  const fileExtensions = service.acceptedFileExtensions.map((ext) => ext.replace(".", "").toUpperCase()).join(", ");
-  const maxSize = service.maxFileSizeMB;
+function EndpointRequirements({ endpoint, capabilities, services, contracts }: {
+  endpoint: string;
+  capabilities: PaidCapability[] | null;
+  services: EvidenceServiceContract[];
+  contracts: RawEvidenceContract[];
+}) {
+  const map: Record<string, string> = {
+    "/api/x402/image-investigation": "/api/evidence/image",
+    "/api/x402/video-investigation": "/api/evidence/video",
+    "/api/x402/audio-investigation": "/api/evidence/audio",
+    "/api/x402/document-investigation": "/api/evidence/document",
+    "/api/x402/data-investigation": "/api/evidence/structured",
+  };
+  const target = map[endpoint] || endpoint;
+  const contract = contracts.find((c) => c.endpoint === target);
   
-  if (fileExtensions) {
-    return <>Accepted files: {fileExtensions} — up to {maxSize}MB each</>;
-  } else if (service.acceptedMimeTypes.length > 0) {
-    return <>Accepted formats: {service.acceptedMimeTypes.join(", ")} — up to {maxSize}MB</>;
-  } else {
-    return <>Required: Submit JSON/structured data input</>;
+  const cap = capabilities?.find((c) => c.path === endpoint);
+  const service = services.find((s) => s.endpoint === endpoint);
+
+  const extensions = contract?.accepted_file_extensions ?? 
+                     (cap?.acceptedFileExtensions?.length ? cap.acceptedFileExtensions : service?.acceptedFileExtensions) ?? [];
+  const maxSizeMB = contract?.max_file_size_mb ?? cap?.maxFileSizeMB ?? service?.maxFileSizeMB ?? 10;
+
+  if (extensions.length) {
+    return (
+      <>
+        Accepted files: {extensions.map((e) => e.replace(".", "").toUpperCase()).join(", ")}
+        {" — "}up to {maxSizeMB}MB each
+      </>
+    );
   }
+  const mimes = contract?.accepted_mimetypes ?? 
+                (cap?.acceptedMimeTypes?.length ? cap.acceptedMimeTypes : service?.acceptedMimeTypes) ?? [];
+  if (mimes.length) {
+    return <>Accepted formats: {mimes.join(", ")} — up to {maxSizeMB}MB</>;
+  }
+  if (endpoint.endsWith("source-investigation")) return <>Accepts a URL — no file uploads</>;
+  return <>Required: submit text or structured data input</>;
 }
 
 /** Get the accept attribute for file input based on endpoint contract. */
-function getAcceptAttribute(services: EvidenceServiceContract[] | null, endpoint: string): string {
-  if (!services || !endpoint) return "";
+function getAcceptAttribute(capabilities: PaidCapability[] | null, services: EvidenceServiceContract[] | null, contracts: RawEvidenceContract[], endpoint: string): string {
+  if (!endpoint) return "";
+  const map: Record<string, string> = {
+    "/api/x402/image-investigation": "/api/evidence/image",
+    "/api/x402/video-investigation": "/api/evidence/video",
+    "/api/x402/audio-investigation": "/api/evidence/audio",
+    "/api/x402/document-investigation": "/api/evidence/document",
+    "/api/x402/data-investigation": "/api/evidence/structured",
+  };
+  const target = map[endpoint] || endpoint;
+  const contract = contracts.find((c) => c.endpoint === target);
   
-  const service = services.find((s) => s.endpoint === endpoint);
-  if (!service) return "";
+  const cap = capabilities?.find((c) => c.path === endpoint);
+  const service = services?.find((s) => s.endpoint === endpoint);
   
-  const extensions = service.acceptedFileExtensions.map((ext) => ext.trim()).join(",");
-  if (extensions) return extensions;
-  
-  // Fallback to common accept patterns
-  if (service.acceptedMimeTypes.includes("application/json")) return ".json,application/json";
-  if (service.acceptedMimeTypes.includes("text/csv")) return ".csv,text/csv";
-  if (service.acceptedMimeTypes.includes("application/pdf")) return ".pdf,application/pdf";
-  
+  const extensions = contract?.accepted_file_extensions ?? cap?.acceptedFileExtensions ?? service?.acceptedFileExtensions ?? [];
+  if (extensions.length) return extensions.join(",");
+  const mimes = contract?.accepted_mimetypes ?? cap?.acceptedMimeTypes ?? service?.acceptedMimeTypes ?? [];
+  if (mimes.length) return mimes.join(",");
   return "";
 }
 
@@ -64,11 +110,10 @@ function InvestigateForm() {
   const selectedService = searchParams.get("service") ?? "";
   const rawCap = searchParams.get("cap") ?? "";
   // Normalize: accept either "source-investigation" or "/api/x402/source-investigation"
-  const capabilityHint = rawCap
-    ? rawCap.startsWith("/api/x402/")
-      ? rawCap
-      : `/api/x402/${rawCap}`
-    : "";
+  const [capabilityHint, setCapabilityHint] = useState(
+    rawCap ? (rawCap.startsWith("/api/x402/") ? rawCap : `/api/x402/${rawCap}`) : ""
+  );
+  const reinvestigateFrom = searchParams.get("reinvestigateFrom") ?? "";
 
   const [question, setQuestion] = useState(initialQuestion);
   const [url, setUrl] = useState("");
@@ -80,13 +125,34 @@ function InvestigateForm() {
   const [walletAddress, setWalletAddress] = useState("");
   const [price, setPrice] = useState<string | null>(null);
   const [detectedCap, setDetectedCap] = useState<string>("");
-  const [capabilities, setCapabilities] = useState<
-    { path: string; priceUsdc: number }[] | null
-  >(null);
+  const [capabilities, setCapabilities] = useState<PaidCapability[] | null>(
+    null
+  );
   const [evidenceServices, setEvidenceServices] = useState<
     EvidenceServiceContract[] | null
   >(null);
+  const [contracts, setContracts] = useState<RawEvidenceContract[]>([]);
+  const [sourceInv, setSourceInv] = useState<Investigation | null>(null);
+  const [reuseError, setReuseError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!reinvestigateFrom) return;
+    apiFetch(`${API_BASE}/api/investigations/${reinvestigateFrom}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((inv) => {
+        if (!inv) {
+          setReuseError("Source investigation not found.");
+          return;
+        }
+        const source = inv as Investigation;
+        setSourceInv(source);
+        if (source.capability) setCapabilityHint(`/api/x402/${source.capability}`);
+        const srcUrl = (source.inputs ?? []).find((i) => i.type === "url")?.content;
+        if (srcUrl) setUrl(String(srcUrl));
+      })
+      .catch(() => setReuseError("Could not load the source investigation."));
+  }, [reinvestigateFrom]);
 
   useEffect(() => {
     apiFetch(`${API_BASE}/api/auth/me`)
@@ -107,7 +173,25 @@ function InvestigateForm() {
       .then((r) => r.json())
       .then((d) => setEvidenceServices(d.services ?? []))
       .catch(() => {});
+    // Fetch authoritative evidence contracts
+    apiFetch(`${API_BASE}/api/evidence/contracts`)
+      .then((r) => r.json())
+      .then((d) => setContracts(d ?? []))
+      .catch(() => {});
   }, []);
+
+  const getContractForEndpoint = (endpoint: string) => {
+    // Map x402 endpoints to /api/evidence endpoints
+    const map: Record<string, string> = {
+      "/api/x402/image-investigation": "/api/evidence/image",
+      "/api/x402/video-investigation": "/api/evidence/video",
+      "/api/x402/audio-investigation": "/api/evidence/audio",
+      "/api/x402/document-investigation": "/api/evidence/document",
+      "/api/x402/data-investigation": "/api/evidence/structured",
+    };
+    const target = map[endpoint] || endpoint;
+    return contracts.find((c) => c.endpoint === target);
+  };
 
   // Detect capability from current inputs (for price display).
   useEffect(() => {
@@ -229,27 +313,41 @@ function InvestigateForm() {
       }
     }
 
-    const requiredType = capabilityHint.match(/\/api\/x402\/(image|video|document|audio|data)-investigation$/)?.[1];
-    if (requiredType) {
-      const hasRequiredFile = files.some((file) => {
-        if (requiredType === "data") return file.type.includes("json") || file.type.includes("csv");
-        if (requiredType === "document") return file.type === "application/pdf" || file.type.startsWith("text/");
-        if (requiredType === "video") return file.type.startsWith("video/") || /\.(mp4|mov|avi|wmv)$/i.test(file.name);
-        return file.type.startsWith(`${requiredType}/`);
-      });
-      if (!hasRequiredFile) {
-        setError(`Please upload a ${requiredType} file before starting this investigation.`);
-        setIsSubmitting(false);
-        return;
+    const fileObjects = files.map((f) => f.file);
+    const endpoint = capabilityHint || detectCapabilityEndpoint(fileObjects, url.trim());
+    setDetectedCap(endpoint);
+
+    // Validate files against the capability contract BEFORE any payment runs,
+    // so an unsupported file is rejected with the accepted formats up front.
+    const contract = capabilities?.find((c) => c.path === endpoint);
+    if (contract) {
+      const acceptedExts = (contract.acceptedFileExtensions ?? []).map((e) => e.toLowerCase());
+      const acceptedMimes = contract.acceptedMimeTypes ?? [];
+      if (acceptedExts.length > 0) {
+        const list = acceptedExts.map((e) => e.replace(".", "").toUpperCase()).join(", ");
+        if (files.length === 0 && !sourceInv) {
+          setError(`Please upload a file before starting this investigation. Accepted formats: ${list}.`);
+          setIsSubmitting(false);
+          return;
+        }
+        const bad = files.find(
+          (f) =>
+            !acceptedExts.some((e) => f.name.toLowerCase().endsWith(e)) &&
+            !acceptedMimes.includes(f.type)
+        );
+        if (bad) {
+          setError(
+            `"${bad.name}" is not supported by ${capabilityTitle(endpoint)}. Accepted formats: ${list}.`
+          );
+          setIsSubmitting(false);
+          return;
+        }
       }
     }
 
     setPaymentStatus("Opening Pera Wallet — approve the USDC payment…");
 
     try {
-      const fileObjects = files.map((f) => f.file);
-      // capabilityHint is already normalized to /api/x402/... form
-      const endpoint = capabilityHint || detectCapabilityEndpoint(fileObjects, url.trim());
       const idempotencyKey = crypto.randomUUID();
 
       const controller = new AbortController();
@@ -265,6 +363,7 @@ function InvestigateForm() {
           url: url.trim() || undefined,
           files: fileObjects.length > 0 ? fileObjects : undefined,
           idempotencyKey,
+          reinvestigateFrom: reinvestigateFrom || undefined,
           signal: controller.signal,
         });
       } finally {
@@ -307,9 +406,28 @@ function InvestigateForm() {
           />
         </div>
 
+        {sourceInv && (
+          <div className={styles.reuseNote} role="note">
+            <strong>Reinvestigating Case {sourceInv.id}</strong>
+            <p className="text-muted">&ldquo;{sourceInv.question}&rdquo;</p>
+            <p className="text-muted" style={{ fontSize: "0.8125rem", marginTop: 4 }}>
+              Evidence from the original investigation will be reused — no re-upload needed.
+              Upload new files above only if you want to replace or add evidence.
+            </p>
+            <ul className={styles.reuseList}>
+              {(sourceInv.inputs ?? []).map((i, n) => (
+                <li key={n} className="text-muted">
+                  {i.fileName ? `${i.type}: ${i.fileName}` : `${i.type}: ${i.content}`}
+                </li>
+              ))}
+            </ul>
+            {reuseError && <p className={styles.error}>{reuseError}</p>}
+          </div>
+        )}
+
         <div className="form-group">
           <label htmlFor="url" className="form-label">
-            URL (optional)
+            URL {sourceInv ? "(optional — original is reused)" : "(optional)"}
           </label>
           <input
             id="url"
@@ -322,7 +440,9 @@ function InvestigateForm() {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Upload evidence (optional)</label>
+          <label className="form-label">
+            {sourceInv ? "Add replacement evidence (optional)" : "Upload evidence (optional)"}
+          </label>
           <div
             className={`upload-zone ${dragOver ? "drag-over" : ""}`}
             onDragOver={(e) => {
@@ -347,11 +467,13 @@ function InvestigateForm() {
           >
             <div className="upload-zone-icon" aria-hidden="true">+</div>
             <p>Drag and drop files here, or click to browse</p>
-            {evidenceServices && detectedCap && (
+            {(evidenceServices || capabilities) && detectedCap && (
               <p className="text-xs text-muted">
-                <EndpointRequirements 
-                  endpoint={detectedCap} 
-                  services={evidenceServices} 
+                <EndpointRequirements
+                  endpoint={detectedCap}
+                  capabilities={capabilities}
+                  services={evidenceServices ?? []}
+                  contracts={contracts}
                 />
               </p>
             )}
@@ -360,7 +482,7 @@ function InvestigateForm() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept={getAcceptAttribute(evidenceServices, detectedCap)}
+            accept={getAcceptAttribute(capabilities, evidenceServices, contracts, detectedCap)}
             onChange={(e) => handleFiles(e.target.files)}
             className="sr-only"
             aria-hidden

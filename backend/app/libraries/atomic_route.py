@@ -17,31 +17,10 @@ def _nanoid(prefix, n=8):
 
 
 def _mime_to_input_type(mime: str) -> str:
-    if mime.startswith("image/"):
-        return "image"
-    if mime.startswith("video/"):
-        return "video"
-    if mime.startswith("audio/"):
-        return "audio"
-    if mime == "application/pdf" or mime.startswith("text/"):
-        return "document"
-    if "json" in mime or "csv" in mime:
-        return "data"
-    return "document"
+    return config.mime_input_type(mime)
 
 
-# Each capability owns a distinct set of input types — a video investigation
-# rejects audio/image files, document accepts text-or-PDF, data accepts only
-# CSV/JSON, and so on. Rejects mismatched uploads before any payment can run.
-ALLOWED_INPUT_TYPES = {
-    "claim-investigation": {"text", "url", "document"},
-    "image-investigation": {"image"},
-    "video-investigation": {"video"},
-    "document-investigation": {"document", "text"},
-    "source-investigation": {"url"},
-    "data-investigation": {"data"},
-    "audio-investigation": {"audio"},
-}
+ALLOWED_INPUT_TYPES = config.ATOMIC_INPUT_TYPES
 
 
 async def parse_body(body: dict | None, files: list) -> dict:
@@ -77,12 +56,57 @@ def _build_stored_inputs(parsed: dict, case_id: str) -> list[dict]:
     return inputs
 
 
-async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None, background_tasks=None) -> dict:
+def _build_reused_inputs(parsed: dict, case_id: str, source: dict, files: list) -> list[dict]:
+    """Reinvestigation inputs: reuse the source investigation's evidence
+    without re-uploading it. Replacement url/text/files override the source."""
+    source_inputs = source.get("inputs") or []
+    inputs = []
+    url = storage.sanitize_url(parsed.get("url") or "")
+    if url:
+        inputs.append({"type": "url", "content": url, "reusedFrom": source.get("id")})
+    else:
+        src_url = next((i.get("content") for i in source_inputs if i.get("type") == "url"), "")
+        if src_url:
+            inputs.append({"type": "url", "content": src_url, "reusedFrom": source.get("id")})
+    text = parsed.get("text") or ""
+    if text:
+        inputs.append({"type": "text", "content": text, "reusedFrom": source.get("id")})
+    else:
+        src_text = next((i.get("content") for i in source_inputs if i.get("type") == "text"), "")
+        if src_text:
+            inputs.append({"type": "text", "content": src_text, "reusedFrom": source.get("id")})
+    if files:
+        for file in files:
+            stored = storage.store_file(file["data"], file["name"], file["mime"], case_id)
+            inputs.append({
+                "type": _mime_to_input_type(file["mime"]),
+                "content": file["name"],
+                "fileName": stored["fileName"],
+                "mimeType": stored["mimeType"],
+                "filePath": stored["filePath"],
+                "reusedFrom": source.get("id"),
+            })
+    else:
+        for i in source_inputs:
+            if i.get("filePath"):
+                inputs.append({
+                    "type": i.get("type") or _mime_to_input_type(i.get("mimeType") or ""),
+                    "content": i.get("fileName") or i.get("content") or "evidence",
+                    "fileName": i.get("fileName"),
+                    "mimeType": i.get("mimeType"),
+                    "filePath": i.get("filePath"),
+                    "reusedFrom": source.get("id"),
+                })
+    return inputs
+
+
+async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None, background_tasks=None, reuse_source: dict | None = None) -> dict:
     """Returns { status, content, headers }. Status 200 on success with the
-    Investigation as content."""
+    Investigation as content. When reuse_source (a previous investigation owned
+    by the user) is given, its uploaded evidence is reused for a new paid run."""
     capability = config.get_paid_capability(capability_id)
     if not capability:
-        return {"status": 400, "content": {"error": f"Unknown capability: {capability_id}"}}
+        return {"status": 400, "content": {"error": f"Unknown capability: {capability_id}", "errorCode": "UNKNOWN_CAPABILITY"}}
 
     if idempotency_key:
         existing = db.get_investigation_by_idempotency_key(idempotency_key, user["id"])
@@ -100,10 +124,21 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
 
     if not (parsed.get("question") or "").strip():
         print(f"DEBUG: Missing question in parsed body: {parsed}")
-        return {"status": 400, "content": {"error": "Question is required"}}
+        return {"status": 400, "content": {
+            "error": "Please enter a question for your investigation.",
+            "errorCode": "MISSING_REQUIRED_FIELD", "field": "question",
+        }}
 
     case_id = f"case_{secrets.token_urlsafe(6)[:10]}"
-    inputs = _build_stored_inputs(parsed, case_id)
+    if reuse_source:
+        inputs = _build_reused_inputs(parsed, case_id, reuse_source, files)
+    else:
+        inputs = _build_stored_inputs(parsed, case_id)
+    allowed = ALLOWED_INPUT_TYPES.get(capability_id)
+    if reuse_source and allowed:
+        # Drop any reused inputs this capability does not accept, so a
+        # mismatched source never drags an incompatible slot along.
+        inputs = [i for i in inputs if i.get("type") in allowed]
 
     # Capability-specific input assembly (mirrors assembleInputs).
     if capability_id == "source-investigation":
@@ -125,9 +160,19 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     if bad:
         kinds = ", ".join(sorted(allowed))
         detail = ", ".join(f"{i.get('fileName') or i.get('content') or i.get('type')}" for i in bad[:3])
+        accepted_exts = config.capability_accepted_extensions(capability_id)
+        accepted_mimes = config.capability_accepted_mimes(capability_id)
+        if accepted_exts:
+            hint = "This endpoint accepts: " + ", ".join(e.lstrip(".").upper() for e in accepted_exts) + " files."
+        else:
+            hint = "This endpoint does not accept file uploads."
         return {"status": 400, "content": {
-            "error": f"{capability_id} only accepts {kinds} inputs. Incompatible file(s): {detail}",
+            "error": f"{capability_id} only accepts {kinds} inputs. Incompatible file(s): {detail}. {hint}",
+            "errorCode": "UNSUPPORTED_FILE_TYPE", "field": "files",
             "acceptedInputTypes": sorted(allowed),
+            "acceptedFileExtensions": accepted_exts,
+            "acceptedMimeTypes": accepted_mimes,
+            "maxFileSizeMB": config.MAX_UPLOAD_SIZE_MB,
         }}
 
     # Capability execution. Payment gating (402 / verify / settle) is handled
@@ -159,6 +204,9 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     if inv and parsed.get("serviceName"):
         inv["requestedService"] = parsed["serviceName"]
         inv["title"] = parsed["serviceName"]
+        db.save_investigation(inv)
+    if reuse_source and inv:
+        inv["reinvestigationOf"] = reuse_source.get("id")
         db.save_investigation(inv)
 
     return {"status": 200, "content": inv or result}

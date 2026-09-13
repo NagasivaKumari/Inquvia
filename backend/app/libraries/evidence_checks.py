@@ -76,6 +76,7 @@ async def _media_findings(inv: dict, kind: str) -> list[dict]:
         if not data:
             records.append({
                 "finding": f"{kind.capitalize()} check ({label}): the file could not be read — evidence unavailable.",
+                "signal": "uncertain",
                 "metadata": {
                     "fileName": inp.get("fileName"),
                     "mimeType": inp.get("mimeType"),
@@ -96,8 +97,13 @@ async def _media_findings(inv: dict, kind: str) -> list[dict]:
             meta["probeError"] = True
         inp["fileSignals"] = dict(meta["fileSignals"])
         
+        # File-level metadata observations (format, dimensions, EXIF presence/absence)
+        # are directly observed facts, not uncertain interpretations. Mark them as
+        # "observed" so the status reflects that metadata extraction succeeded.
+        # The signal indicates the observation was made, not whether it proves authenticity.
         records.append({
             "finding": desc or f"{kind.capitalize()} check ({label}): no observable file-level metadata extracted.",
+            "signal": "observed",
             "metadata": meta,
         })
     return records
@@ -795,8 +801,11 @@ async def run_evidence_checks(inv: dict) -> dict:
             finding = finding[:limit]
             now = _now_iso()
             ev_id = _nanoid("ev")
-            # Use the per-record signal when the check produced one (e.g. URL
-            # retrieval success → 'supporting'); fall back to 'uncertain'.
+            # Use the per-record signal when the check produced one.
+            # File-level metadata observations are marked 'observed'.
+            # URL retrieval success is marked 'supporting'.
+            # Document page retrieval success is marked 'supporting'.
+            # Fall back to 'uncertain' only when the check didn't set a signal.
             ev_signal = rec.get("signal") or "uncertain"
             ev = {
                 "id": ev_id,

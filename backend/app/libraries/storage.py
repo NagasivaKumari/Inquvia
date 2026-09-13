@@ -25,13 +25,52 @@ def sanitize_url(url: str) -> str:
     return ""
 
 
-def validate_upload(mime: str, size: int) -> tuple[bool, str | None]:
+def validation_error(message: str, code: str | None = None, field: str | None = None, details: dict | None = None) -> dict:
+    """Structured validation error preserving a machine-readable code + human message."""
+    resp = {"error": message}
+    if code:
+        resp["errorCode"] = code
+    if field:
+        resp["field"] = field
+    if details:
+        resp["details"] = details
+    return resp
+
+
+def _accepted_extensions_hint(capability_id: str | None) -> str | None:
+    exts = config.capability_accepted_extensions(capability_id) if capability_id else []
+    if exts:
+        return "This endpoint accepts: " + ", ".join(e.lstrip(".").upper() for e in exts) + " files."
+    return None
+
+
+def validate_upload(mime: str, size: int, filename: str = "upload.bin", capability_id: str | None = None) -> tuple[bool, dict | None]:
+    safe_name = Path(filename).name or "upload.bin"
     if size <= 0:
-        return False, "File is empty"
+        return False, validation_error(
+            f'"{safe_name}" is empty. Please choose a file that has content.',
+            "INVALID_FIELD_VALUE", "files",
+        )
     if size > config.MAX_UPLOAD_SIZE:
-        return False, f"File exceeds the {config.MAX_UPLOAD_SIZE_MB}MB upload limit"
+        return False, validation_error(
+            f'"{safe_name}" is too large. The maximum allowed size is {config.MAX_UPLOAD_SIZE_MB}MB.',
+            "FILE_TOO_LARGE", "files",
+            {"maxSizeMB": config.MAX_UPLOAD_SIZE_MB, "receivedSizeBytes": size},
+        )
     if mime not in config.ALLOWED_MIME:
-        return False, "File type not supported"
+        hint = _accepted_extensions_hint(capability_id)
+        message = f'"{safe_name}" is not a supported file type.'
+        if hint:
+            message += " " + hint
+        else:
+            accepted = ", ".join(sorted({ext.lstrip(".").upper() for m in config.ALLOWED_MIME for ext in config.MIME_EXTENSIONS.get(m, [])}))
+            message += f" Supported types: {accepted}."
+        details = {
+            "maxSizeMB": config.MAX_UPLOAD_SIZE_MB,
+            "acceptedFileExtensions": config.capability_accepted_extensions(capability_id) if capability_id else [],
+            "acceptedMimeTypes": config.capability_accepted_mimes(capability_id) if capability_id else list(config.ALLOWED_MIME),
+        }
+        return False, validation_error(message, "UNSUPPORTED_FILE_TYPE", "files", details)
     return True, None
 
 

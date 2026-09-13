@@ -143,6 +143,11 @@ async def plan_dynamic_requirements(question: str, inputs: list[str] | None = No
     sub-objectives and selects only the checks that are relevant to those
     objectives. For all other input types it selects from the executable
     catalog. Falls back to the keyword planner when the model is unavailable.
+    
+    CRITICAL: For object-counting/visual-content questions, the planner MUST
+    select image_provenance (which triggers visual analysis in the analyzer),
+    even if metadata/provenance checks are also selected. Visual evidence is
+    never optional when the question requires it.
     """
     from ..libraries import ai as ai_lib
 
@@ -168,13 +173,15 @@ async def plan_dynamic_requirements(question: str, inputs: list[str] | None = No
         "uploaded. Your task:\n"
         "1. Identify every sub-objective in the question (what must be established to answer it fully).\n"
         "2. For each sub-objective, determine which evidence checks from the catalog are directly required.\n"
-        "3. Do NOT select checks that are irrelevant to the question. For example:\n"
-        "   - A question about visible content (color, text, objects) needs image_provenance and image_metadata.\n"
-        "   - A question about authenticity/manipulation needs image_provenance and image_metadata.\n"
-        "   - A question about file properties needs image_metadata.\n"
-        "   - A question about document text needs document_verify.\n"
-        "   - A question about a URL needs content_extract.\n"
-        "4. Select only checks that contribute evidence toward answering the question.\n"
+        "3. CRITICAL RULES:\n"
+        "   - For questions about VISIBLE CONTENT (objects, text, colors, spatial relationships, counts), "
+        "you MUST select image_provenance. Visual analysis is non-optional for visual questions.\n"
+        "   - For questions about authenticity/manipulation, select image_provenance AND image_metadata.\n"
+        "   - For questions about file properties/EXIF only, select image_metadata.\n"
+        "   - For questions about document TEXT, select document_verify.\n"
+        "   - For questions about URL content, select content_extract.\n"
+        "   - Questions asking 'how many' or 'count' or 'enumerate' objects REQUIRE image_provenance.\n"
+        "4. Do NOT omit visual evidence checks when the question explicitly asks about visible content.\n"
         f"Return ONLY a JSON object: {{\"subObjectives\": [string], \"checks\": [capability_id]}} (max {max_checks} checks)."
     )
     user_text = f"QUESTION: {question or ''}\nINPUT_TYPES: {', '.join(inputs) or 'none'}\nCATALOG:\n{catalog}"
@@ -190,6 +197,16 @@ async def plan_dynamic_requirements(question: str, inputs: list[str] | None = No
                     picked.add(item)
         except Exception:
             picked = set()
+    
+    # Question-driven forcing: for object-counting/visual questions, FORCE image_provenance
+    # if it wasn't already selected and image inputs are present.
+    if "image" in inputs:
+        q_lower = (question or "").lower()
+        visual_keywords = ["how many", "count", "objects", "visible", "see", "shown", "appear", "located", "where"]
+        if any(kw in q_lower for kw in visual_keywords):
+            if "image_provenance" not in picked:
+                picked.add("image_provenance")
+    
     if picked:
         order = {c["capability"]: i for i, c in enumerate(applicable)}
         checks = sorted([EXECUTABLE_BY_CAP[p] for p in picked], key=lambda c: order[c["capability"]])

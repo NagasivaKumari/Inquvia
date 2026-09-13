@@ -699,6 +699,9 @@ async def api_investigate():
                 "id": c["id"], "title": c["title"], "path": c["endpoint"], "method": "POST",
                 "priceUsdc": c["priceUsdc"], "priceMicro": round(c["priceUsdc"] * 1e6),
                 "description": c["description"], "inputTypes": c["inputTypes"],
+                "acceptedFileExtensions": config.capability_accepted_extensions(c["id"]),
+                "acceptedMimeTypes": config.capability_accepted_mimes(c["id"]),
+                "maxFileSizeMB": config.MAX_UPLOAD_SIZE_MB,
             }
             for c in config.PAID_CAPABILITIES
         ],
@@ -1002,25 +1005,27 @@ async def _handle_atomic_capability(
             return JSONResponse({
                 "error": "Upload interrupted: the connection closed before the file finished "
                          "uploading. Keep files under 10MB and retry.",
+                "errorCode": "UPLOAD_INTERRUPTED", "field": "files",
             }, status_code=400)
         except Exception as e:
             print(f"DEBUG: Form parsing error: {e}")
-            return JSONResponse({"error": "Could not read the uploaded file."}, status_code=400)
+            return JSONResponse({"error": "Could not read the uploaded file.", "errorCode": "INVALID_UPLOAD", "field": "files"}, status_code=400)
         body = {
             "question": form.get("question"),
             "url": form.get("url"),
             "text": form.get("text"),
             "serviceName": form.get("serviceName"),
+            "reinvestigateFrom": form.get("reinvestigateFrom"),
         }
         for f in form.getlist("files"):
             data = await f.read()
             print(f"DEBUG: Processing file {f.filename}, length={len(data)}, content_type={f.content_type}")
             if data and len(data) > 0:
                 from .libraries.storage import validate_upload
-                ok, err = validate_upload(f.content_type or "", len(data))
+                ok, err = validate_upload(f.content_type or "", len(data), f.filename or "upload.bin", capability_id)
                 if not ok:
-                    print(f"DEBUG: File validation failed for {f.filename}: {err}")
-                    return JSONResponse({"error": err}, status_code=400)
+                    print(f"DEBUG: File validation failed for {f.filename}: {err.get('error')}")
+                    return JSONResponse(err, status_code=400)
                 files.append({
                     "data": data,
                     "name": f.filename or "upload.bin",
@@ -1031,12 +1036,35 @@ async def _handle_atomic_capability(
         body = await _json(request)
         print(f"DEBUG: Parsed JSON body: {body}")
 
+    reuse_source = None
+    reinvestigate_from = (body or {}).get("reinvestigateFrom")
+    if reinvestigate_from:
+        reinvestigate_from = (reinvestigate_from or "").strip()
+        if not reinvestigate_from:
+            return JSONResponse({
+                "error": "reinvestigateFrom must be a non-empty investigation id.",
+                "errorCode": "INVALID_INPUT", "field": "reinvestigateFrom",
+            }, status_code=400)
+        source = db.get_investigation(reinvestigate_from)
+        if not source:
+            return JSONResponse({
+                "error": "Source investigation not found.",
+                "errorCode": "SOURCE_NOT_FOUND", "field": "reinvestigateFrom",
+            }, status_code=404)
+        if source.get("userId") != user["id"]:
+            return JSONResponse({
+                "error": "You can only reinvestigate your own investigations.",
+                "errorCode": "FORBIDDEN", "field": "reinvestigateFrom",
+            }, status_code=403)
+        reuse_source = source
+
     try:
         result = await atomic_route.handle_atomic_paid_request(
-            capability_id, user, body, files, idempotency_key, background_tasks=background_tasks
+            capability_id, user, body, files, idempotency_key, background_tasks=background_tasks,
+            reuse_source=reuse_source,
         )
     except atomic_route.InputValidationError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": str(e), "errorCode": "INVALID_INPUT"}, status_code=400)
     except Exception:
         import traceback; traceback.print_exc()
         return JSONResponse({"error": "Failed to process investigation"}, status_code=500)
