@@ -129,6 +129,8 @@ INVESTIGATION_BLOCKED_STATES = [
 
 # All capability endpoints use one shared price in whole USDC dollars.
 INVESTIGATION_PRICE_USDC = _env_num("INVESTIGATION_PRICE_USDC")
+# Video can be priced separately; falls back to the shared price when unset.
+VIDEO_PRICE_USDC = _env_num("VIDEO_PRICE_USDC") or INVESTIGATION_PRICE_USDC
 
 PAID_CAPABILITIES = [
     {"id": "claim-investigation", "title": "Claim Investigation",
@@ -140,7 +142,7 @@ PAID_CAPABILITIES = [
      "description": "Investigate an image for context, provenance, and evidence.",
      "inputTypes": ["image"]},
     {"id": "video-investigation", "title": "Video Investigation",
-        "endpoint": "/api/x402/video-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
+        "endpoint": "/api/x402/video-investigation", "priceUsdc": VIDEO_PRICE_USDC,
      "description": "Investigate what a video shows and whether its context holds up.",
      "inputTypes": ["video"]},
     {"id": "document-investigation", "title": "Document Investigation",
