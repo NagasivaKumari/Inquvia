@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -10,11 +10,120 @@ import {
   PAID_CAPABILITIES,
   API_BASE,
   PROCESS_STEPS,
-  CONSUMER_CASES,
-  DECISION_MOMENTS,
   MEDIA,
 } from "@/lib/config";
 import styles from "./page.module.css";
+
+// Capability card thumbnail mapping matching reference aesthetics
+const CAPABILITY_MEDIA: Record<string, { image: string; tag: string }> = {
+  "claim-investigation": {
+    image: "https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=800&q=80",
+    tag: "TEXT",
+  },
+  "image-investigation": {
+    image: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80",
+    tag: "IMAGE",
+  },
+  "video-investigation": {
+    image: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=800&q=80",
+    tag: "VIDEO",
+  },
+  "document-investigation": {
+    image: "/document-audit.jpg",
+    tag: "DOCUMENT",
+  },
+  "source-investigation": {
+    image: "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?auto=format&fit=crop&w=800&q=80",
+    tag: "URL",
+  },
+  "data-investigation": {
+    image: "/evidence-matrix.jpg",
+    tag: "DATA",
+  },
+  "audio-investigation": {
+    image: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=800&q=80",
+    tag: "AUDIO",
+  },
+};
+
+// Real situation cards matching reference composition
+const REAL_SITUATIONS = [
+  {
+    image: MEDIA.shopping,
+    question: "Is this seller legitimate?",
+  },
+  {
+    image: MEDIA.website,
+    question: "Can I trust this website?",
+  },
+  {
+    image: MEDIA.joboffer,
+    question: "Is this job offer genuine?",
+  },
+  {
+    image: MEDIA.document,
+    question: "Does this document look suspicious?",
+  },
+];
+
+// Interactive Assessment Demo Stages
+const DEMO_STAGES = [
+  {
+    id: "question",
+    label: "Question",
+    badge: "SUBMITTED",
+    badgeType: "neutral",
+    confidence: "Initial intake",
+    supporting: 0,
+    contradictory: 0,
+    unknown: 100,
+    note: "User asks: “Is this online seller legitimate?” Inquvia formulates the scope of investigation.",
+  },
+  {
+    id: "investigation",
+    label: "Investigation",
+    badge: "INSPECTING",
+    badgeType: "info",
+    confidence: "Sources dispatched",
+    supporting: 35,
+    contradictory: 20,
+    unknown: 45,
+    note: "Independent web, registry, domain provenance, and consumer report checks dispatched.",
+  },
+  {
+    id: "evidence",
+    label: "Evidence",
+    badge: "ANALYZING",
+    badgeType: "warning",
+    confidence: "Findings mapped",
+    supporting: 60,
+    contradictory: 30,
+    unknown: 25,
+    note: "Signals collected: Domain registered 12 days ago, product photos stolen, missing SSL business profile.",
+  },
+  {
+    id: "cross-check",
+    label: "Cross-check",
+    badge: "CORROBORATING",
+    badgeType: "warning",
+    confidence: "Signals weighed",
+    supporting: 72,
+    contradictory: 32,
+    unknown: 18,
+    note: "Contradiction checking: Registered address is a vacant lot; customer reviews copied from known scam lists.",
+  },
+  {
+    id: "assessment",
+    label: "Assessment",
+    badge: "SUSPICIOUS",
+    badgeType: "danger",
+    confidence: "91% confidence",
+    supporting: 78,
+    contradictory: 32,
+    unknown: 18,
+    note: "Not every answer is true or false. Inconclusive. Some evidence conflicts. What we couldn’t verify stays visible.",
+  },
+];
 
 function HomePageContent() {
   const router = useRouter();
@@ -23,6 +132,7 @@ function HomePageContent() {
   const [evidenceServices, setEvidenceServices] = useState<
     { id: string; name: string; description?: string; capability?: string; priceMicro?: number }[]
   >([]);
+  const [demoStageIndex, setDemoStageIndex] = useState(4); // Default: Assessment stage
 
   useEffect(() => {
     fetch(`${API_BASE}/api/investigate`)
@@ -48,6 +158,26 @@ function HomePageContent() {
       .catch(() => {});
   }, []);
 
+  // Subtle scroll-reveal observer
+  useEffect(() => {
+    if (typeof window === "undefined" || !("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add(styles.sectionVisible);
+          }
+        });
+      },
+      { threshold: 0.08, rootMargin: "0px 0px -40px 0px" }
+    );
+
+    const elements = document.querySelectorAll(`.${styles.revealOnScroll}`);
+    elements.forEach((el) => observer.observe(el));
+
+    return () => observer.disconnect();
+  }, []);
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim()) {
@@ -60,15 +190,22 @@ function HomePageContent() {
   const run = (q: string) =>
     router.push(`/investigate?q=${encodeURIComponent(q)}`);
 
+  // Display the 6 primary capabilities in the 3x2 grid shown in the reference
+  const displayedCapabilities = PAID_CAPABILITIES.slice(0, 6);
+  const currentStage = DEMO_STAGES[demoStageIndex];
+
   return (
     <div className={styles.main}>
-      {/* HERO */}
-      <section className={styles.heroSection}>
+      {/* HERO SECTION */}
+      <section className={`${styles.heroSection} ${styles.revealOnScroll}`}>
         <div className={`container ${styles.heroGrid}`}>
           <div className={styles.heroContent}>
-            <p className={styles.eyebrow}>{APP_NAME} Â· Evidence-backed investigation</p>
+            <p className={styles.eyebrow}>
+              INQUVIA // EVIDENCE-BACKED INVESTIGATION
+            </p>
             <h1 className={styles.heroTitle}>
-              Investigate before you decide.
+              Investigate before{" "}
+              <span className={styles.heroTitleHighlight}>you decide.</span>
             </h1>
             <p className={styles.heroSub}>{SUBHEADLINE}</p>
 
@@ -79,77 +216,126 @@ function HomePageContent() {
               <input
                 id="hero-q"
                 type="text"
-                placeholder="Ask a claim, image, video, document, website, or data question"
+                placeholder="Ask a claim, image, video, document, website, or data..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className={styles.searchInput}
               />
-              <button type="submit" className="btn btn-primary">
-                Investigate â†’
+              <button type="submit" className={styles.searchBtn}>
+                Investigate <span className={styles.btnArrow}>&rarr;</span>
               </button>
             </form>
 
-
+            <div className={styles.heroBadges}>
+              <div className={styles.heroBadgeItem}>
+                <span className={styles.heroBadgeIcon}>✓</span>
+                <span>$0.50 per investigation</span>
+              </div>
+              <div className={styles.heroBadgeItem}>
+                <span className={styles.heroBadgeIcon}>⚡</span>
+                <span>Powered by Algorand</span>
+              </div>
+              <div className={styles.heroBadgeItem}>
+                <span className={styles.heroBadgeIcon}>🛡</span>
+                <span>Evidence you can trust</span>
+              </div>
+            </div>
           </div>
 
-          <figure className={styles.heroVisual}>
-            <img src={MEDIA.hero} alt={MEDIA.heroAlt} loading="eager" />
-            <figcaption>
-              Bring a claim, image, video, document, website, or data. Inquvia
-              helps you understand what the evidence actually shows.
-            </figcaption>
-          </figure>
+          <div className={styles.heroVisualWrapper}>
+            <div className={styles.heroImageCard}>
+              <img
+                src="/hero-workspace.jpg"
+                alt="Investigators reviewing evidence and analysis in workspace"
+                loading="eager"
+              />
+            </div>
+            <div className={styles.heroFloatingCard}>
+              <h4 className={styles.heroFloatingTitle}>From questions to proven facts.</h4>
+              <ul className={styles.heroFloatingList}>
+                <li className={styles.heroFloatingItem}>
+                  <span className={styles.heroFloatingCheck}>✓</span>
+                  <span>Real evidence</span>
+                </li>
+                <li className={styles.heroFloatingItem}>
+                  <span className={styles.heroFloatingCheck}>✓</span>
+                  <span>Independent sources</span>
+                </li>
+                <li className={styles.heroFloatingItem}>
+                  <span className={styles.heroFloatingCheck}>✓</span>
+                  <span>On-chain verification</span>
+                </li>
+              </ul>
+            </div>
+            <div className={styles.heroHandwritingNote}>
+              Real evidence. A more informed world.
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* WHAT CAN YOU INVESTIGATE? */}
-      <section id="capabilities" className={styles.toolsSection}>
+      {/* CAPABILITIES: WHAT CAN YOU INVESTIGATE? */}
+      <section id="capabilities" className={`${styles.toolsSection} ${styles.revealOnScroll}`}>
         <div className="container">
-          <div className="section-header">
-            <span className="section-kicker">Capabilities</span>
-            <h2 className="section-title">What can you investigate?</h2>
-            <p className="section-lede">
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionKicker}>Capabilities</span>
+            <h2 className={styles.sectionTitle}>What can you investigate?</h2>
+            <p className={styles.sectionLede}>
               Investigate almost anything you&apos;re unsure about. Each type is
               an independent pay-per-request service.
             </p>
           </div>
 
           <div className={styles.toolsGrid}>
-            {PAID_CAPABILITIES.map((cap) => (
-              <button
-                key={cap.id}
-                type="button"
-                className={styles.toolCard}
-                onClick={() =>
-                  router.push(
-                    `/investigate/launch?capability=${encodeURIComponent(cap.id)}`
-                  )
-                }
-              >
-                <span className={styles.toolType}>{cap.inputTypes[0]}</span>
-                <h3 className={styles.toolTitle}>{cap.title}</h3>
-                <p className={styles.toolDesc}>{cap.description}</p>
-                <div className={styles.toolMeta}>
-                  <span className={styles.toolPrice}>
-                    {prices[cap.id] === undefined
-                      ? "Price at checkout"
-                      : `$${prices[cap.id]} USDC`}
-                  </span>
-                  <span className={styles.toolGo}>Investigate â†’</span>
-                </div>
-              </button>
-            ))}
+            {displayedCapabilities.map((cap) => {
+              const meta = CAPABILITY_MEDIA[cap.id] ?? {
+                image: "/document-audit.jpg",
+                tag: cap.inputTypes[0]?.toUpperCase() ?? "INSPECT",
+              };
+              return (
+                <button
+                  key={cap.id}
+                  type="button"
+                  className={styles.toolCard}
+                  onClick={() =>
+                    router.push(
+                      `/investigate/launch?capability=${encodeURIComponent(cap.id)}`
+                    )
+                  }
+                >
+                  <div className={styles.toolCardMedia}>
+                    <img src={meta.image} alt={cap.title} loading="lazy" />
+                  </div>
+                  <div className={styles.toolCardBody}>
+                    <span className={styles.toolType}>{meta.tag}</span>
+                    <h3 className={styles.toolTitle}>{cap.title}</h3>
+                    <p className={styles.toolDesc}>{cap.description}</p>
+                    <div className={styles.toolMeta}>
+                      <span className={styles.toolPrice}>
+                        {prices[cap.id] === undefined
+                          ? "Price at checkout"
+                          : `$${prices[cap.id]} USDC`}
+                      </span>
+                      <span className={styles.toolGo}>
+                        Investigate <span className={styles.btnArrow}>&rarr;</span>
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </section>
 
+      {/* DYNAMIC EVIDENCE SERVICES (IF REGISTERED BY PROVIDERS) */}
       {evidenceServices.length > 0 && (
-        <section id="evidence" className={styles.toolsSection}>
+        <section id="evidence-services" className={`${styles.toolsSection} ${styles.revealOnScroll}`}>
           <div className="container">
-            <div className="section-header">
-              <span className="section-kicker">Evidence services</span>
-              <h2 className="section-title">What Inquvia can check for you</h2>
-              <p className="section-lede">
+            <div className={styles.sectionHeader}>
+              <span className={styles.sectionKicker}>Evidence services</span>
+              <h2 className={styles.sectionTitle}>What Inquvia can check for you</h2>
+              <p className={styles.sectionLede}>
                 Inquvia selects only the relevant evidence checks for your request,
                 then shows the sources, limitations, and payment trail in your report.
               </p>
@@ -157,16 +343,18 @@ function HomePageContent() {
             <div className={styles.toolsGrid}>
               {evidenceServices.map((service) => (
                 <div key={service.id} className={styles.toolCard}>
-                  <span className={styles.toolType}>{service.capability ?? "evidence"}</span>
-                  <h3 className={styles.toolTitle}>{service.name}</h3>
-                  <p className={styles.toolDesc}>{service.description || "Evidence analysis service"}</p>
-                  <div className={styles.toolMeta}>
-                    <span className={styles.toolPrice}>
-                      {typeof service.priceMicro === "number"
-                        ? `$${(service.priceMicro / 1_000_000).toFixed(3)} USDC`
-                        : "Priced per request"}
-                    </span>
-                    <span className={styles.toolGo}>Selected when relevant</span>
+                  <div className={styles.toolCardBody}>
+                    <span className={styles.toolType}>{service.capability ?? "evidence"}</span>
+                    <h3 className={styles.toolTitle}>{service.name}</h3>
+                    <p className={styles.toolDesc}>{service.description || "Evidence analysis service"}</p>
+                    <div className={styles.toolMeta}>
+                      <span className={styles.toolPrice}>
+                        {typeof service.priceMicro === "number"
+                          ? `$${(service.priceMicro / 1_000_000).toFixed(3)} USDC`
+                          : "Priced per request"}
+                      </span>
+                      <span className={styles.toolGo}>Selected when relevant</span>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -175,173 +363,144 @@ function HomePageContent() {
         </section>
       )}
 
-      {/* REAL-LIFE QUESTIONS */}
-      <section className={styles.casesSection}>
+      {/* REAL-WORLD SITUATIONS */}
+      <section className={`${styles.casesSection} ${styles.revealOnScroll}`}>
         <div className="container">
-          <div className="section-header centered">
-            <span className="section-kicker">Real situations</span>
-            <h2 className="section-title">Things people check before they decide</h2>
-            <p className="section-lede">
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionKicker}>Real situations</span>
+            <h2 className={styles.sectionTitle}>Things people check before they decide</h2>
+            <p className={styles.sectionLede}>
               Real questions ordinary people bring to Inquvia every day.
             </p>
           </div>
           <div className={styles.casesGrid}>
-            {CONSUMER_CASES.map((c) => (
+            {REAL_SITUATIONS.map((c) => (
               <button
-                key={c.title}
+                key={c.question}
                 type="button"
                 className={styles.caseCard}
                 onClick={() => run(c.question)}
               >
-                <span className={styles.caseTitle}>{c.title}</span>
-                <span className={styles.caseQuestion}>â€œ{c.question}â€</span>
+                <div className={styles.caseCardMedia}>
+                  <img src={c.image} alt={c.question} loading="lazy" />
+                </div>
+                <div className={styles.caseCardBody}>
+                  <span className={styles.caseQuestion}>{c.question}</span>
+                </div>
               </button>
             ))}
           </div>
         </div>
       </section>
 
-      {/* HOW IT WORKS */}
-      <section id="process" className={styles.flowSection}>
+      {/* HOW IT WORKS (01 TO 05 PROGRESSION) */}
+      <section id="process" className={`${styles.flowSection} ${styles.revealOnScroll}`}>
         <div className="container">
-          <div className="section-header">
-            <span className="section-kicker">How it works</span>
-            <h2 className="section-title">From â€œIâ€™m not sureâ€ to â€œI can decideâ€</h2>
-            <p className="section-lede">
-              No spreadsheets, no workflows. Just a question and an
-              evidence-backed answer.
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionKicker}>How it works</span>
+            <h2 className={styles.sectionTitle}>From a question to a clear answer.</h2>
+            <p className={styles.sectionLede}>
+              A simple process. Real evidence. Greater confidence.
             </p>
           </div>
           <ol className={styles.flowGrid}>
-            {PROCESS_STEPS.map((step) => (
+            {PROCESS_STEPS.map((step, idx) => (
               <li key={step.n} className={styles.flowCard}>
-                <span className={styles.flowNumber}>{step.n}</span>
+                <span className={styles.flowNumberBadge}>{step.n}</span>
                 <h3 className={styles.flowCardTitle}>{step.title}</h3>
                 <p className={styles.flowCardText}>{step.detail}</p>
+                {idx < PROCESS_STEPS.length - 1 && (
+                  <span className={styles.flowArrow} aria-hidden="true">&rarr;</span>
+                )}
               </li>
             ))}
           </ol>
         </div>
       </section>
 
-      {/* DECISION MOMENTS */}
-      <section className={styles.decideSection}>
-        <div className="container">
-          <div className="section-header">
-            <span className="section-kicker">Real-life decisions</span>
-            <h2 className="section-title">
-              Before you click. Before you buy. Before you believe.
-            </h2>
-          </div>
-          <div className={styles.decideList}>
-            {DECISION_MOMENTS.map((d) => (
-              <div key={d.before} className={styles.decideRow}>
-                <span className={styles.decideBefore}>{d.before}</span>
-                <span className={styles.decideArrow}>â†’</span>
-                <span className={styles.decideAction}>investigate</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* SUPPORTING IMAGES */}
-      <section className={styles.photoBand}>
-        <div className={`container ${styles.photoBandGrid}`}>
-          <figure>
-            <img src={MEDIA.shopping} alt={MEDIA.shoppingAlt} loading="lazy" />
-            <figcaption>Is this seller legitimate?</figcaption>
-          </figure>
-          <figure>
-            <img src={MEDIA.website} alt={MEDIA.websiteAlt} loading="lazy" />
-            <figcaption>Can I trust this website?</figcaption>
-          </figure>
-          <figure>
-            <img src={MEDIA.joboffer} alt={MEDIA.jobofferAlt} loading="lazy" />
-            <figcaption>Is this job offer genuine?</figcaption>
-          </figure>
-          <figure>
-            <img src={MEDIA.document} alt={MEDIA.documentAlt} loading="lazy" />
-            <figcaption>Does this document look suspicious?</figcaption>
-          </figure>
-        </div>
-      </section>
-
-      {/* INVESTIGATION EXAMPLE */}
-      <section id="evidence" className={styles.exampleSection}>
+      {/* ASSESSMENT DEMONSTRATION EXAMPLE */}
+      <section id="example" className={`${styles.exampleSection} ${styles.revealOnScroll}`}>
         <div className={`container ${styles.exampleGrid}`}>
           <div className={styles.exampleFlow}>
-            <span className="section-kicker">Example</span>
-            <h2 className="heading-xl">What does an assessment look like?</h2>
-            <p className="text-muted">
-              Question â†’ Investigation â†’ Evidence â†’ Cross-check â†’ Assessment. A
-              product demonstration, not a testimonial.
+            <span className={styles.sectionKicker}>Example</span>
+            <h2 className={styles.sectionTitle}>What does an assessment look like?</h2>
+            <p className={styles.sectionLede}>
+              Question &rarr; Investigation &rarr; Evidence &rarr; Cross-check &rarr; Assessment.
+              A product demonstration, not a testimonial.
             </p>
             <ol className={styles.exampleSteps}>
-              <li>Question</li>
-              <li>Investigation</li>
-              <li>Evidence</li>
-              <li>Cross-check</li>
-              <li>Assessment</li>
+              {DEMO_STAGES.map((stage, idx) => (
+                <li key={stage.id}>
+                  <button
+                    type="button"
+                    onClick={() => setDemoStageIndex(idx)}
+                    className={`${styles.exampleStepBtn} ${demoStageIndex === idx ? styles.exampleStepActive : ""}`}
+                    aria-pressed={demoStageIndex === idx}
+                  >
+                    <span>{stage.label}</span>
+                    <span className={styles.stepIndicator}>{demoStageIndex === idx ? "●" : "○"}</span>
+                  </button>
+                </li>
+              ))}
             </ol>
           </div>
 
           <div className={styles.resultCard}>
-            <p className={styles.resultQ}>â€œIs this online seller legitimate?â€</p>
-            <div className={styles.resultVerdict}>
-              <span className={styles.verdictBadge}>SUSPICIOUS</span>
-              <span className={styles.verdictConfidence}>91% confidence</span>
+            <div className={styles.resultHeader}>
+              <span className={`${styles.verdictBadge} ${styles[`verdict_${currentStage.badgeType}`]}`}>
+                {currentStage.badge}
+              </span>
+              <span className={styles.verdictConfidence}>{currentStage.confidence}</span>
             </div>
             <div className={styles.verdictBars}>
               <div className={styles.barRow}>
-                <span>Supporting evidence</span>
+                <span className={styles.barLabel}>Supporting evidence ({currentStage.supporting}%)</span>
                 <div className={styles.barTrack}>
-                  <div className={styles.barSupporting} />
+                  <div className={styles.barSupporting} style={{ width: `${currentStage.supporting}%` }} />
                 </div>
               </div>
               <div className={styles.barRow}>
-                <span>Contradictory evidence</span>
+                <span className={styles.barLabel}>Contradictory evidence ({currentStage.contradictory}%)</span>
                 <div className={styles.barTrack}>
-                  <div className={styles.barContradictory} />
+                  <div className={styles.barContradictory} style={{ width: `${currentStage.contradictory}%` }} />
                 </div>
               </div>
               <div className={styles.barRow}>
-                <span>Could not verify</span>
+                <span className={styles.barLabel}>Could not verify ({currentStage.unknown}%)</span>
                 <div className={styles.barTrack}>
-                  <div className={styles.barUnknown} />
+                  <div className={styles.barUnknown} style={{ width: `${currentStage.unknown}%` }} />
                 </div>
               </div>
             </div>
             <p className={styles.resultNote}>
-              Not every answer is true or false. Inconclusive. Some evidence
-              conflicts. What we couldnâ€™t verify stays visible.
+              {currentStage.note}
             </p>
-            <Link href="/investigate" className="btn btn-primary">
-              Start an Investigation â†’
+            <Link href="/investigate" className={styles.exampleCtaBtn}>
+              See full example <span className={styles.btnArrow}>&rarr;</span>
             </Link>
           </div>
         </div>
       </section>
 
-      {/* EVIDENCE-FIRST */}
-      <section className={styles.evidenceSection}>
+      {/* EVIDENCE-FIRST DIFFERENTIATOR */}
+      <section id="evidence" className={`${styles.evidenceSection} ${styles.revealOnScroll}`}>
         <div className="container">
-          <div className="section-header centered">
-            <span className="section-kicker">Evidence first</span>
-            <h2 className="section-title">Donâ€™t just get an answer. See why.</h2>
-            <p className="section-lede">
-              Every conclusion comes with the evidence behind it â€” what supports
+          <div className={`${styles.sectionHeader} ${styles.sectionHeaderCentered}`}>
+            <span className={styles.sectionKicker}>Evidence first</span>
+            <h2 className={styles.sectionTitle}>Don’t just get an answer. See why.</h2>
+            <p className={styles.sectionLede}>
+              Every conclusion comes with the evidence behind it — what supports
               it, what contradicts it, and what remains unknown.
             </p>
           </div>
           <div className={styles.evidenceCols}>
             <div className={styles.evidenceCol}>
-              <span className={styles.evidenceIcon}>ï¼‹</span>
+              <span className={styles.evidenceIcon}>+</span>
               <h3>What supports the conclusion</h3>
               <p>Cited findings and sources back up the assessment.</p>
             </div>
             <div className={styles.evidenceCol}>
-              <span className={styles.evidenceIcon}>âˆ’</span>
+              <span className={styles.evidenceIcon}>&minus;</span>
               <h3>What contradicts it</h3>
               <p>Conflicting signals are called out, not hidden.</p>
             </div>
@@ -354,62 +513,67 @@ function HomePageContent() {
         </div>
       </section>
 
-      {/* x402 */}
-      <section id="x402" className={styles.x402Section}>
+      {/* RESTRAINED X402 / ALGORAND SECTION */}
+      <section id="x402" className={`${styles.x402Section} ${styles.revealOnScroll}`}>
         <div className={`container ${styles.x402Grid}`}>
           <div className={styles.x402Flow}>
-            <span>Investigation</span>
-            <span className={styles.x402Step}>â†“</span>
-            <span>x402</span>
-            <span className={styles.x402Step}>â†“</span>
-            <span>Algorand</span>
-            <span className={styles.x402Step}>â†“</span>
-            <span>USDC</span>
-            <span className={styles.x402Step}>â†“</span>
-            <span>Result</span>
+            <div className={styles.x402FlowStep}>
+              <span>1. Submit Question</span>
+            </div>
+            <div className={styles.x402FlowStepArrow}>&darr;</div>
+            <div className={styles.x402FlowStep}>
+              <span>2. x402 Micropayment Request</span>
+            </div>
+            <div className={styles.x402FlowStepArrow}>&darr;</div>
+            <div className={styles.x402FlowStep}>
+              <span>3. Algorand On-Chain Settlement</span>
+            </div>
+            <div className={styles.x402FlowStepArrow}>&darr;</div>
+            <div className={styles.x402FlowStep}>
+              <span>4. Evidence Dossier Delivered</span>
+            </div>
           </div>
           <div>
-            <span className="section-kicker">Pay per investigation</span>
-            <h2 className="heading-xl">Pay only for the investigation you use.</h2>
-            <p className="text-muted">
-              Each investigation capability is a pay-per-request service.
-              Payments use x402 with USDC on Algorand. You explore first â€” a
+            <span className={styles.sectionKicker}>Pay per investigation</span>
+            <h2 className={styles.sectionTitle}>Pay only for the investigation you use.</h2>
+            <p className={styles.sectionLede}>
+              Each investigation capability is an independent pay-per-request service.
+              Payments use x402 with USDC on Algorand. You explore first — a
               wallet is only needed when a real payment is required, and you
               authorize each payment yourself in your Algorand wallet.
             </p>
             <div className={styles.walletSteps}>
-              <span>Payment required</span>
-              <span className={styles.x402Step}>â†“</span>
-              <span>Connect Algorand wallet</span>
-              <span className={styles.x402Step}>â†“</span>
-              <span>Authorize</span>
-              <span className={styles.x402Step}>â†“</span>
-              <span>Continue</span>
+              <span className={styles.walletStepBadge}>Payment required</span>
+              <span>&rarr;</span>
+              <span className={styles.walletStepBadge}>Connect Algorand wallet</span>
+              <span>&rarr;</span>
+              <span className={styles.walletStepBadge}>Authorize</span>
+              <span>&rarr;</span>
+              <span className={styles.walletStepBadge}>Verified dossier</span>
             </div>
           </div>
         </div>
       </section>
 
       {/* FINAL CTA */}
-      <section className={styles.ctaSection}>
+      <section className={`${styles.ctaSection} ${styles.revealOnScroll}`}>
         <div className="container">
           <div className={styles.ctaCard}>
             <div>
+              <span className={styles.sectionKicker} style={{ color: "var(--color-orange)" }}>
+                READY TO INVESTIGATE?
+              </span>
               <h2 className={styles.ctaCardTitle}>
-                Something youâ€™re unsure about? Investigate it.
+                Turn your questions into verified answers.
               </h2>
               <p className={styles.ctaCardSub}>
-                Bring a claim, image, video, document, website, or data. See the
-                evidence. Decide with more context.
+                Evidence-backed. AI-powered. On-chain.
               </p>
             </div>
             <div className={styles.ctaButtons}>
-              <Link href="/investigate" className="btn btn-primary btn-lg">
-                Start an Investigation â†’
+              <Link href="/investigate" className={styles.ctaPrimaryBtn}>
+                Start an investigation <span className={styles.btnArrow}>&rarr;</span>
               </Link>
-              <a href="/#process" className="btn btn-secondary btn-lg">
-                See How It Works
-              </a>
             </div>
           </div>
         </div>

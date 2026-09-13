@@ -38,6 +38,10 @@
   color: #ffffff;
 }
 
+.inverted .mark img {
+  mix-blend-mode: screen;
+}
+
 .inverted .mark svg rect {
   fill: var(--color-orange);
 }

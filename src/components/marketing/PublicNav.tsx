@@ -10,6 +10,7 @@ import styles from "./PublicNav.module.css";
 export function PublicNav() {
   const [user, setUser] = useState<{ name: string } | null>(null);
   const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
     apiFetch(`${API_BASE}/api/auth/me`)
@@ -18,14 +19,32 @@ export function PublicNav() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 20);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    if (open) {
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }
+  }, [open]);
+
   const close = () => setOpen(false);
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap} ${scrolled ? styles.wrapScrolled : ""}`}>
       <header className={styles.header}>
         <div className={`container ${styles.inner}`}>
           <span className={styles.logoPill}>
-            <Logo href="/" />
+            <Logo href="/" inverted={true} />
           </span>
 
           <nav className={styles.nav} aria-label="Primary">

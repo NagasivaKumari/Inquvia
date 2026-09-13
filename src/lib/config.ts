@@ -204,10 +204,10 @@ export const NAV_ITEMS = [
   { href: "/settings", label: "Settings" },
 ] as const;
 
-/** Public site navigation — used by header, footer, and mobile drawer. */
 export const PUBLIC_NAV = [
   { href: "/how-it-works", label: "How It Works" },
   { href: "/#capabilities", label: "What You Can Check" },
+  { href: "/#capabilities", label: "Pricing" },
 ] as const;
 
 export const FOOTER_COLUMNS = [

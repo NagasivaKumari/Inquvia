@@ -3,12 +3,19 @@
   top: 0;
   z-index: 100;
   background: var(--color-navy);
-  box-shadow: var(--shadow-xs);
+  box-shadow: 0 4px 20px rgba(0, 31, 127, 0.18);
+  transition: box-shadow 0.25s ease, background-color 0.25s ease;
+}
+
+.wrapScrolled {
+  background: #00338d;
+  box-shadow: 0 8px 24px rgba(0, 20, 70, 0.28);
 }
 
 .header {
-  background: var(--color-navy);
+  background: linear-gradient(180deg, #003da5 0%, #002f82 100%);
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  transition: padding 0.25s ease;
 }
 
 .inner {
@@ -17,18 +24,17 @@
   justify-content: space-between;
   height: var(--header-height);
   gap: var(--space-6);
+  transition: height 0.25s ease;
+}
+
+.wrapScrolled .inner {
+  height: 62px;
 }
 
 .logoPill {
   color: #ffffff;
-}
-
-.nav {
   display: flex;
   align-items: center;
-  gap: 2px;
-  flex: 1;
-  justify-content: center;
 }
 
 .logoPill a {
@@ -42,7 +48,7 @@
 .nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-2);
   flex: 1;
   justify-content: center;
 }
@@ -50,16 +56,16 @@
 .navLink {
   font-size: 0.9375rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(255, 255, 255, 0.88);
   background: transparent;
   padding: 8px 16px;
   border-radius: var(--radius-sm);
-  transition: color var(--transition-fast), opacity var(--transition-fast);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
 }
 
 .navLink:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .cta {
@@ -75,25 +81,31 @@
   font-size: 0.9rem;
   padding: 8px 16px;
   border-radius: var(--radius-sm);
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
 }
 
 .login:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   text-decoration: none;
 }
 
 .cta .primaryBtn {
   background: #ffffff;
-  border-color: #ffffff;
+  border: 1px solid #ffffff;
   color: var(--color-navy);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.55rem 1.25rem;
+  transition: background-color var(--transition-fast), transform var(--transition-fast);
 }
 
 .cta .primaryBtn:hover {
-  background: var(--color-navy-hover);
-  border-color: var(--color-navy-hover);
-  color: #ffffff;
+  background: #f1f5f9;
+  border-color: #f1f5f9;
+  color: var(--color-navy-hover);
+  transform: translateY(-1px);
 }
 
 .burger {
@@ -103,14 +115,14 @@
   width: 40px;
   height: 40px;
   color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: var(--radius-sm);
-  background: transparent;
-  transition: background var(--transition-fast);
+  background: rgba(255, 255, 255, 0.08);
+  transition: background-color var(--transition-fast);
 }
 
 .burger:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .burgerIcon {
@@ -124,7 +136,7 @@
   flex-direction: column;
   padding: var(--space-4) var(--space-6) var(--space-6);
   border-top: 1px solid rgba(255, 255, 255, 0.12);
-  background: var(--color-navy);
+  background: #00286e;
   gap: 2px;
 }
 
@@ -132,8 +144,13 @@
   padding: 12px 0;
   font-size: 0.95rem;
   font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-decoration: none;
+}
+
+.mobileLink:hover {
   color: #ffffff;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .mobileCta {
@@ -146,14 +163,15 @@
 
 .mobileCta .btn-secondary {
   color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.5);
-  background: transparent;
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .mobileCta .btn-primary {
   background: #ffffff;
   border-color: #ffffff;
   color: var(--color-navy);
+  font-weight: 700;
 }
 
 @media (max-width: 900px) {
@@ -166,5 +184,31 @@
   }
   .mobileDrawer {
     display: flex;
+    animation: drawerSlide 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@keyframes drawerSlide {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrap,
+  .inner,
+  .navLink,
+  .login,
+  .cta .primaryBtn,
+  .burger,
+  .mobileDrawer {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
   }
 }
