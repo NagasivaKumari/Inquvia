@@ -13,7 +13,7 @@ export type InputType =
 // InvestigationStatus is defined in the Evidence Acquisition section below
 // (single source of truth for the state machine).
 
-export type EvidenceSignal = "supporting" | "contradictory" | "uncertain";
+export type EvidenceSignal = "supporting" | "contradictory" | "uncertain" | "observed";
 
 export type RiskLevel = "low" | "moderate" | "high" | "unknown";
 
@@ -350,6 +350,7 @@ export const SIGNAL_LABELS: Record<EvidenceSignal, string> = {
   supporting: "Supporting",
   contradictory: "Contradictory",
   uncertain: "Uncertain",
+  observed: "Observed",
 };
 
 /* ─────────────────────────────────────────────────────────────

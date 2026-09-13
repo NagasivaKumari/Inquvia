@@ -66,3 +66,7 @@
 .uncertain {
   border-left: 3px solid var(--color-uncertain);
 }
+
+.observed {
+  border-left: 3px solid var(--color-info);
+}

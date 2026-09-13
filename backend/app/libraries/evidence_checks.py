@@ -386,6 +386,7 @@ async def _transcription_record(inp: dict, label: str, extract: dict) -> dict | 
     return {
         "finding": f"Audio transcription ({label}): {text[:12000]}",
         "metadata": meta,
+        "signal": "observed",
     }
 
 

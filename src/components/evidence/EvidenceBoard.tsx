@@ -51,6 +51,7 @@ function SignalBadge({ signal }: { signal: EvidenceItem["signal"] }) {
     supporting: "badge-success",
     contradictory: "badge-warning",
     uncertain: "badge-neutral",
+    observed: "badge-info",
   };
   return (
     <span className={`badge ${classMap[signal]}`}>
