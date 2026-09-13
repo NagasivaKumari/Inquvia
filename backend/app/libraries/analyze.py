@@ -6,7 +6,7 @@ VALID_CONCLUSIONS = [
     "insufficient_evidence", "inconclusive", "answered",
 ]
 VALID_RISKS = ["low", "moderate", "high", "unknown"]
-VALID_SIGNALS = ["supporting", "contradictory", "uncertain"]
+VALID_SIGNALS = ["supporting", "contradictory", "uncertain", "observed"]
 
 
 def redundant_evidence_ids(inv: dict, evidence: list[dict]) -> set:
@@ -206,6 +206,18 @@ def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
                       "evidenceLevel": sub.get("evidenceLevel") or "unknown"})
         edges.append({"from": claim_id, "to": sid, "relation": "requires"})
 
+    # Deterministic computation node: connects the question (claim) through
+    # the calculation to the computed evidence, so a calculation that directly
+    # establishes the answer is never shown as 0 supporting.
+    calc_id = None
+    computation = inv.get("computation") or {}
+    if computation.get("metrics"):
+        calc_id = "node_calculation"
+        label = f"Calculation: {computation.get('parser') or 'structured'} analysis of {computation.get('source') or 'document'} ({computation.get('recordsProcessed')}/{computation.get('recordsAvailable')} records)"
+        nodes.append({"id": calc_id, "kind": "calculation", "label": label,
+                      "complete": bool(computation.get("complete"))})
+        edges.append({"from": claim_id, "to": calc_id, "relation": "requires"})
+
     for e in evidence:
         eid = e.get("id")
         source_id = f"node_source_{eid}"
@@ -241,6 +253,10 @@ def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
                 edges.append({"from": ev_id, "to": claim_id, "relation": relation})
         else:
             edges.append({"from": ev_id, "to": claim_id, "relation": relation})
+        # Computation-derived evidence is produced by a deterministic
+        # calculation over the source, which itself answers the question.
+        if (e.get("metadata") or {}).get("origin") == "computation" and calc_id:
+            edges.append({"from": ev_id, "to": calc_id, "relation": "produced_by"})
 
     # Assessment node connected to the conclusion
     conclusion = inv.get("conclusion") or "unknown"

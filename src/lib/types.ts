@@ -232,6 +232,9 @@ export interface Investigation {
   capability?: string;
   /** Price paid for the atomic capability, in whole USDC (merchant fee). */
   capabilityPriceUsdc?: number;
+  /** When set, this investigation was created by reinvestigating an earlier
+   * case owned by the same user, reusing its uploaded evidence. */
+  reinvestigationOf?: string;
   /** Idempotency key supplied by the client, to avoid duplicate charges. */
   idempotencyKey?: string;
   /** Sources actually used by the investigation (evidence services, inspections, AI). */
@@ -279,6 +282,30 @@ export interface Investigation {
   };
   /** Web inspection result for URL inputs. */
   webInspection?: WebInspection;
+  /** Deterministic full-document computation trace (large structured files). */
+  computation?: ComputationTrace;
+}
+
+/** Deterministic full-document computation trace (structured log/CSV/JSON). */
+export interface ComputationMetric {
+  name: string;
+  description?: string;
+  function: string;
+  field?: string;
+  groupBy?: string;
+  population?: string;
+  recordsIncluded?: number;
+  result: number | string | { group: string; value: number }[];
+}
+
+export interface ComputationTrace {
+  source?: string;
+  parser?: string;
+  recordsAvailable: number;
+  recordsProcessed: number;
+  unparsedLines: number;
+  complete: boolean;
+  metrics: ComputationMetric[];
 }
 
 export interface DashboardStats {

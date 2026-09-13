@@ -1,7 +1,10 @@
 """Capability analyzer registry (mirrors investigation/analyzers.ts)."""
 import base64
+import secrets
+from datetime import datetime, timezone
 
 from ..libraries import storage, ai as ai_lib, signals as signals_lib, document_extract
+from ..libraries import compute_structured
 from ..libraries.video_processor import (
     VideoProcessor,
     frame_payload_bytes,
@@ -71,7 +74,10 @@ def _apply_evidence_signals(evidence: list[dict], signals) -> None:
     retrieval) is the floor: the AI can upgrade uncertain→supporting or
     uncertain→contradictory, but must not downgrade supporting→uncertain.
     This prevents the AI from mislabeling a successful retrieval as uncertain
-    merely because the answer to the question is uncertain."""
+    merely because the answer to the question is uncertain.
+    
+    An 'observed' signal (file-level metadata observation) is kept as-is: the
+    observation is a fact, not an interpretation. The AI cannot change it."""
     if not signals:
         return
     by_id = {
@@ -89,6 +95,10 @@ def _apply_evidence_signals(evidence: list[dict], signals) -> None:
         # The check set 'supporting' because retrieval succeeded; that fact
         # does not change based on whether the AI can answer the question.
         if current == "supporting" and sig == "uncertain":
+            continue
+        # Never change an 'observed' signal (file-level metadata observation).
+        # Observed facts remain observed regardless of their relevance to the answer.
+        if current == "observed":
             continue
         e["signal"] = sig
 
@@ -686,8 +696,23 @@ async def _run_document_analysis(inv, evidence, system_prompt, context_parts) ->
     # from counting every page record. Zero on both sides = no relationship was
     # established, represented accurately (never forced).
     items = [i for i in (raw.get("evidenceItems") or []) if isinstance(i, dict)]
-    supporting = [i for i in items if i.get("relationship") == "supporting"]
-    contradicting = [i for i in items if i.get("relationship") == "contradictory"]
+    
+    # Correctly group status codes: successful = 2xx, unsuccessful = 4xx/5xx. 3xx must be excluded.
+    def is_successful(item):
+        status = item.get("status")
+        if status is not None and isinstance(status, int):
+            return 200 <= status < 300
+        return item.get("relationship") == "supporting"
+
+    def is_unsuccessful(item):
+        status = item.get("status")
+        if status is not None and isinstance(status, int):
+            return 400 <= status < 600
+        return item.get("relationship") == "contradictory"
+
+    supporting = [i for i in items if is_successful(i)]
+    contradicting = [i for i in items if is_unsuccessful(i)]
+    
     if items:
         result["evidenceRelationships"] = {
             "supporting": len(supporting),
@@ -697,12 +722,115 @@ async def _run_document_analysis(inv, evidence, system_prompt, context_parts) ->
     return result
 
 
+async def _compute_document_analysis(inv, evidence, input_) -> dict | None:
+    """Deterministic full-file computation for structured sources.
+
+    When the user's question needs aggregate statistics over the WHOLE file
+    (counts, averages, sums, groupings, ranks, comparisons...), the uploaded
+    source is parsed and aggregated deterministically (streaming, never fed to
+    the model in full). The model receives schema + computed results + trace +
+    samples and explains them. Returns None when the document is prose (the
+    caller falls back to page-extraction analysis).
+    """
+    question = (inv.get("question") or "").strip()
+    if not compute_structured.requires_full_compute(question):
+        return None
+    if not input_ or not input_.get("filePath"):
+        return None
+    extraction = input_.get("documentExtraction") or {}
+    if extraction.get("extractionSource") not in ("plain_text", "text_layer"):
+        return None
+    data = signals_lib.load_bytes(input_["filePath"])
+    if not data:
+        return None
+    filename = input_.get("fileName") or input_.get("content") or "uploaded file"
+    mime = input_.get("mimeType")
+    profile = compute_structured._scan(data, mime, filename)
+    if not profile:
+        return None
+    profile["source"] = filename
+
+    try:
+        sys_prompt, parts = compute_structured.build_plan_prompt(question, profile)
+        raw_plan = await ai_lib.call_ai_with_parts(sys_prompt, parts)
+        plan = compute_structured.parse_plan(raw_plan)
+    except Exception:
+        plan = []
+
+    computation = compute_structured.execute(data, profile, plan)
+
+    now = datetime.now(timezone.utc).isoformat()
+    for rec in compute_structured.computation_evidence_records(computation, filename):
+        ev = {
+            "id": f"ev_calc_{secrets.token_urlsafe(6)[:8]}",
+            "type": "document",
+            "source": f"Inquvia computation: {filename}",
+            "finding": rec["finding"],
+            "signal": rec["signal"],
+            "status": "collected",
+            "confidence": None,
+            "timestamp": now,
+            "metadata": {"origin": "computation", "checkCapability": "document_compute",
+                         **rec["metadata"]},
+        }
+        evidence.append(ev)
+        inv.setdefault("evidence", []).append(ev)
+
+    inv["computation"] = computation
+
+    system, parts = compute_structured.build_reasoning_prompt(question, profile, computation)
+    raw = ai_lib.parse_ai_json(await ai_lib.call_ai_with_parts(system, parts)) or {}
+    if raw:
+        result = _merge_ai_raw(inv, evidence, raw)
+    else:
+        # Deterministic fallback answer when the reasoning model returns nothing.
+        result = heuristic_analysis(inv, evidence)
+        result["conclusion"] = "answered" if computation["complete"] else "inconclusive"
+        result["confidence"] = 80 if computation["complete"] else 40
+        summary = "; ".join(
+            f"{m['name']} = {m['result']}" for m in computation["metrics"]
+            if not isinstance(m["result"], list)
+        )
+        prefix = (f"A complete analysis of all {computation['recordsProcessed']} records in "
+                  f"{filename}." if computation["complete"]
+                  else f"An analysis of only {computation['recordsProcessed']} of "
+                       f"{computation['recordsAvailable']} records in {filename}.")
+        result["answer"] = f"{prefix} {summary}"
+        result["conclusionText"] = "Answer: " + result["answer"]
+        result["assessmentReasoning"] = (
+            f"Deterministic computation over the uploaded document "
+            f"({computation['recordsProcessed']} records, {computation['unparsedLines']} unparsed)."
+        )
+    result["computation"] = computation
+    result["sourcesUsed"] = result.get("sourcesUsed") or [filename]
+    if not computation["complete"]:
+        result["limitations"] = (result.get("limitations") or []) + [
+            f"Only {computation['recordsProcessed']} of {computation['recordsAvailable']} records "
+            f"could be processed ({computation['unparsedLines']} lines unparsed); the analysis is "
+            "partial, not a whole-file claim."
+        ]
+    if computation.get("skippedMetrics"):
+        reasons = sorted({m["name"] for m in computation["skippedMetrics"]})
+        result["limitations"] = (result.get("limitations") or []) + [
+            f"Requested metric(s) could not be computed (field not present in the source): "
+            f"{', '.join(reasons)}"
+        ]
+    return result
+
+
 async def _document_analyzer(inv, evidence):
     input_ = _find_input(inv, "document")
     pages = await _load_document_pages(inv, input_)
     if not pages:
         # No readable document content → honest insufficiency, never fabricated.
         return heuristic_analysis(inv, evidence)
+
+    # Structured/deterministic path: when the question needs whole-file
+    # statistics over a record-structured source, compute over every record
+    # instead of sending only a truncatable excerpt to the model.
+    computed = await _compute_document_analysis(inv, evidence, input_)
+    if computed is not None:
+        return computed
 
     extraction_source = (input_.get("documentExtraction") or {}).get("extractionSource") or "mixed"
     page_block = _page_text_block(pages)
