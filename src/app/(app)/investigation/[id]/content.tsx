@@ -100,6 +100,9 @@ export default function InvestigationPage() {
   const id = params.id as string;
   const [inv, setInv] = useState<Investigation | null>(null);
   const [error, setError] = useState("");
+  const [showPlan, setShowPlan] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  const [showDiscovery, setShowDiscovery] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -161,11 +164,6 @@ export default function InvestigationPage() {
   const graph: EvidenceGraph | undefined = inv.evidenceGraph;
   const stage = inv.currentStage;
   const date = new Date(inv.createdAt).toLocaleString();
-
-  // Drawers state
-  const [showPlan, setShowPlan] = useState(false);
-  const [showActivity, setShowActivity] = useState(false);
-  const [showDiscovery, setShowDiscovery] = useState(false);
 
   // Group evidence items
   const evidenceList = inv.evidence ?? [];
