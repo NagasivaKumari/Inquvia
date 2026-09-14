@@ -1,5 +1,33 @@
-from typing import TypedDict, List, Dict, Optional, Literal
+from typing import TypedDict, List, Dict, Optional, Literal, Protocol, Any, Union
 from dataclasses import dataclass, field
+from enum import Enum
+
+class CheckStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+    SKIPPED = "SKIPPED"
+    PENDING_MIGRATION = "PENDING_MIGRATION"
+
+class EvidenceResult(TypedDict, total=False):
+    checkId: str
+    status: CheckStatus
+    evidence: Dict[str, Any]
+    findings: List[Dict[str, Any]]
+    confidence: float
+    limitations: List[str]
+    errors: List[str]
+
+class EvidenceCheck(Protocol):
+    name: str
+    
+    def can_run(self, input_data: Dict[str, Any]) -> bool:
+        ...
+
+    async def run(self, input_data: Dict[str, Any]) -> EvidenceResult:
+        ...
 
 class ExtractionQuality(TypedDict):
     method: Literal["direct", "ocr", "fallback"]
@@ -25,19 +53,3 @@ class EvidenceRecord:
             "confidence": self.confidence,
             "rationale": self.rationale
         }
-
-@dataclass
-class EvidenceResult:
-    id: str
-    source_type: str  # "url", "document", "audio", "video", "structured"
-    status: Literal["pending", "retrieved", "extracted", "failed"]
-    content: Optional[str] = None
-    extraction_quality: Optional[ExtractionQuality] = None
-    confidence_metrics: Dict[str, float] = field(default_factory=dict)
-    
-    def is_usable(self) -> bool:
-        return self.status == "extracted" and self.extraction_quality is not None and self.extraction_quality["success"]
-
-    def get_confidence_score(self) -> float:
-        # Placeholder for structured confidence calculation
-        return self.confidence_metrics.get("overall", 0.0)
