@@ -107,10 +107,10 @@ def image_contract() -> EndpointContract:
         method="POST",
         required_inputs=[
             FieldSpec(name="file", type="file", required=True,
-                     description="Image file to analyze",
+                     description="Image file to analyze (up to 2 for comparison)",
                      accepted_mimetypes=ALLOWED_IMAGE_MIME,
                      max_size_mb=MAX_UPLOAD_SIZE_MB,
-                     allow_multiple=False),
+                     allow_multiple=True),
             FieldSpec(name="claim", type="string", required=False,
                      description="Optional claim or question about the image",
                      max_length=1000),

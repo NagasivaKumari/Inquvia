@@ -9,6 +9,9 @@ x402-avm[extensions]
 cryptography
 Pillow
 PyMuPDF
+opencv-python-headless
+pyzbar
+numpy
 
 # Browser rendering
 playwright

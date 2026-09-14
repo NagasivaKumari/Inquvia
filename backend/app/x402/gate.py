@@ -49,7 +49,7 @@ def _discovery_extensions(cap: dict) -> dict | None:
     base_input = {"question": "Is this seller legitimate?"}
     props = {"question": {"type": "string"}}
     required = ["question"]
-    if cap_id in ("image-investigation", "video-investigation", "document-investigation"):
+    if cap_id in ("image-investigation", "image-batch-investigation", "video-investigation", "document-investigation"):
         body_type = "form-data"
         props["files"] = {"type": "array", "items": {"type": "string"}}
     else:

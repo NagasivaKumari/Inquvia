@@ -77,6 +77,126 @@
   margin-bottom: var(--space-6);
 }
 
+.verdicts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.verdict {
+  padding: var(--space-5);
+}
+
+.verdictLabel {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-2);
+}
+
+.verdictValue {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-2);
+}
+
+.verdictConfidence {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  margin-bottom: var(--space-3);
+}
+
+.verdictReasoning {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.toneAuthentic,
+.toneAccurate {
+  color: var(--color-success);
+}
+
+.toneManipulated,
+.toneMisleading,
+.toneFalse {
+  color: var(--color-danger);
+}
+
+.toneAiGenerated {
+  color: var(--color-warning);
+}
+
+.toneUnknown {
+  color: var(--color-uncertain);
+}
+
+.trace,
+.externalEvidence,
+.forensics,
+.evidenceSection {
+  margin-bottom: var(--space-6);
+}
+
+.traceList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.traceStatus {
+  font-family: var(--font-mono, monospace);
+  color: var(--color-accent);
+}
+
+.evidenceSections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.evidenceSection ul,
+.externalEvidence ul,
+.forensics ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.evidenceMeta {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.provenance {
+  margin-bottom: var(--space-6);
+}
+
+.provenance h3 {
+  margin-bottom: var(--space-3);
+}
+
+.provenance a {
+  color: var(--color-accent);
+}
+
+.provenance .conclusionText {
+  border-top: none;
+  padding-top: 0;
+  margin-bottom: var(--space-2);
+}
+
 .findings h3 {
   margin-bottom: var(--space-3);
 }

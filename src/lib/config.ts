@@ -100,6 +100,14 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     inputTypes: ["image"],
   },
   {
+    id: "image-batch-investigation",
+    title: "Batch Image Investigation",
+    endpoint: "/api/x402/image-batch-investigation",
+    description:
+      "Investigate many images for duplicates, clusters, and common sources.",
+    inputTypes: ["image"],
+  },
+  {
     id: "video-investigation",
     title: "Video Investigation",
     endpoint: "/api/x402/video-investigation",

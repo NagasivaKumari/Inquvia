@@ -10,6 +10,23 @@ class ExtractionQuality(TypedDict):
     metrics: Dict[str, object]
 
 @dataclass
+class EvidenceRecord:
+    finding: str
+    type: Literal["observed", "verified", "inferred", "unknown", "contradiction"]
+    source: Dict[str, object]  # {"name": str, "url": str, "type": str, "verified": bool}
+    confidence: int  # 0-100
+    rationale: str
+    
+    def to_dict(self) -> Dict:
+        return {
+            "finding": self.finding,
+            "type": self.type,
+            "source": self.source,
+            "confidence": self.confidence,
+            "rationale": self.rationale
+        }
+
+@dataclass
 class EvidenceResult:
     id: str
     source_type: str  # "url", "document", "audio", "video", "structured"

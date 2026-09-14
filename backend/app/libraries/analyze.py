@@ -194,7 +194,8 @@ def build_evidence_graph(inv: dict, evidence: list[dict]) -> dict:
                     continue
                 level = sub.get("evidenceLevel") or ""
                 # image metadata/provenance → observed/inferred sub-objectives
-                if cap in ("image_provenance", "image_metadata") and level in ("observed", "inferred"):
+                if cap in ("image_provenance", "image_metadata",
+                           "image_manipulation", "image_reverse_search") and level in ("observed", "inferred"):
                     edges.append({"from": ev_id, "to": sub_node_ids[i], "relation": relation})
                     matched = True
                     break

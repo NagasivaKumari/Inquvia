@@ -65,6 +65,9 @@ def init_db_indexes():
         get_collection("investigations").create_index("createdAt")
         get_collection("payments").create_index("userId")
         get_collection("payments").create_index("investigationId")
+        get_collection("image_analyses").create_index([("userId", 1), ("createdAt", -1)])
+        get_collection("image_analyses").create_index("investigationId")
+        get_collection("image_analyses").create_index("flags.privacy_sensitive")
     except Exception:
         pass
 
@@ -374,6 +377,38 @@ def get_reset(token: str) -> dict | None:
 
 def mark_reset_used(token: str) -> None:
     get_collection("resets").update_one({"_id": token}, {"$set": {"used": True}})
+
+
+# ── Image analyses (denormalized image-investigation results) ──
+def replace_image_analysis(doc: dict) -> None:
+    """Upsert one (investigation × image) analysis document."""
+    get_collection("image_analyses").replace_one({"_id": doc["_id"]}, doc, upsert=True)
+
+
+def list_image_analyses(user_id: str, *, limit: int = 50, cap: str = "",
+                        flag: str = "", investigation_id: str = ""):
+    """Query persisted image analyses, owner-scoped.
+    ``cap``/``flag`` filter to images where that check ran / that flag is set."""
+    query: dict = {"userId": user_id}
+    if investigation_id:
+        query["investigationId"] = investigation_id
+    if cap:
+        query[f"checks.{cap}"] = {"$exists": True}
+    if flag:
+        query[f"flags.{flag}"] = True
+    return (
+        list(get_collection("image_analyses")
+             .find(query)
+             .sort("createdAt", -1)
+             .limit(min(max(int(limit), 1), 500)))
+    )
+
+
+def count_image_analyses(user_id: str, *, flag: str = "") -> int:
+    query: dict = {"userId": user_id}
+    if flag:
+        query[f"flags.{flag}"] = True
+    return get_collection("image_analyses").count_documents(query)
 
 
 # ── Stats ──

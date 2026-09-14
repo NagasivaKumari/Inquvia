@@ -369,6 +369,62 @@ def artifacts_dir(file_path: str) -> Path:
     return config.STORAGE_PATH / "media-cache" / digest
 
 
+def _content_fingerprint(source_path: str) -> str | None:
+    """Fast file fingerprint for cross-investigation caching: size + first/last
+    64KB. Collision-resistant enough for a local cache key; full-content hash
+    would be too expensive for large videos."""
+    try:
+        size = os.path.getsize(source_path)
+        h = hashlib.sha256(str(size).encode())
+        with open(source_path, "rb") as f:
+            h.update(f.read(65536))  # first 64KB
+            if size > 65536:
+                f.seek(max(0, size - 65536))
+                h.update(f.read(65536))  # last 64KB
+        return h.hexdigest()[:24]
+    except OSError:
+        return None
+
+
+def _manifest_path(fingerprint: str) -> Path:
+    return config.STORAGE_PATH / "media-cache" / "manifests" / f"{fingerprint}.json"
+
+
+def load_extraction_manifest(source_path: str) -> dict | None:
+    """Load cached AI results (frameObservations, transcript) for a video that
+    was previously analyzed in another investigation. Returns the cached dict
+    or None. Caller applies the results to the extract dict."""
+    fp = _content_fingerprint(source_path)
+    if not fp:
+        return None
+    manifest = _manifest_path(fp)
+    if not manifest.is_file():
+        return None
+    try:
+        return json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def save_extraction_manifest(source_path: str, extract: dict) -> None:
+    """Persist expensive AI results to disk so a future investigation of the
+    same video skips the frame observation and transcription model calls.
+    Only saves the expensive-to-reproduce keys, not binary frame data."""
+    fp = _content_fingerprint(source_path)
+    if not fp:
+        return
+    manifest = _manifest_path(fp)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    for key in ("frameObservations", "transcript", "transcriptSegments", "limitations"):
+        if extract.get(key):
+            data[key] = extract[key]
+    try:
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def materialize_source(file_path: str) -> str:
     """Return a path on disk ffmpeg/ffprobe can read: the local uploaded file
     when it is already on disk (GridFS-backed deployments fall back to one
@@ -460,18 +516,29 @@ def prepare_video(input_: dict) -> dict:
             "processing bound; frames/audio were skipped. File-level metadata is still reported."
         )
     else:
+        import concurrent.futures
         frames_dir = artifacts_dir(file_path) / "frames"
-        extract["frames"] = processor.extract_frames(
-            source, str(frames_dir), duration=duration)
+        # Run frame extraction and audio extraction concurrently —
+        # both are independent ffmpeg passes on the same source.
+        _T = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        frames_fut = _T.submit(
+            processor.extract_frames,
+            source, str(frames_dir), duration=duration,
+        )
+        audio_path = str(artifacts_dir(file_path) / "audio.wav") if extract["inspection"].get("hasAudio") else None
+        audio_fut = _T.submit(
+            processor.extract_audio,
+            source, audio_path,
+            max_seconds=max(1, config.AUDIO_TRANSCRIPT_WINDOW_SECONDS),
+        ) if audio_path else None
+        extract["frames"] = frames_fut.result(timeout=config.VIDEO_FFMPEG_TIMEOUT + 30)
         if not extract["frames"]:
             extract["limitations"].append(
                 "Frame extraction produced no frames; visual evidence is unavailable (no fabricated frames)."
             )
-        if extract["inspection"].get("hasAudio"):
-            wav = str(artifacts_dir(file_path) / "audio.wav")
-            max_seconds = max(1, config.AUDIO_TRANSCRIPT_WINDOW_SECONDS)
-            extract["audio"] = processor.extract_audio(source, wav)
-            extract["transcriptWindowSeconds"] = max_seconds if duration > max_seconds else duration
+        if audio_fut:
+            extract["audio"] = audio_fut.result(timeout=config.VIDEO_FFMPEG_TIMEOUT + 30)
+            extract["transcriptWindowSeconds"] = max(1, config.AUDIO_TRANSCRIPT_WINDOW_SECONDS) if duration > config.AUDIO_TRANSCRIPT_WINDOW_SECONDS else duration
             if not extract["audio"]:
                 extract["limitations"].append(
                     "Audio stream was detected but could not be extracted; transcription unavailable."
@@ -479,6 +546,20 @@ def prepare_video(input_: dict) -> dict:
         else:
             extract["audio"] = None
             extract["transcript"] = None
+
+    # Cross-investigation cache: a manifest from analyzing this same video in
+    # a previous investigation carries the expensive AI results (frame
+    # observations, transcript). Loading them here means _observe_frames and
+    # _transcription_record short-circuit and no model call runs.
+    cached_ai = load_extraction_manifest(source)
+    if cached_ai:
+        for key in ("frameObservations", "transcript", "transcriptSegments", "limitations"):
+            if key == "limitations":
+                for lim in cached_ai.get(key) or []:
+                    if lim not in extract["limitations"]:
+                        extract["limitations"].append(lim)
+            elif cached_ai.get(key):
+                extract[key] = cached_ai[key]
 
     input_["mediaExtraction"] = extract
     return extract
@@ -502,5 +583,20 @@ if __name__ == "__main__":  # self-check
     assert plan_frames(0, 16)[1] == 0
     assert _showinfo_timestamps("n:0 pts_time:0.000000 n:1") == [0.0]
     assert _showinfo_timestamps("n:0 pts_time:2.500000 x\nn:1 pts_time:7.000") == [2.5, 7.0]
+    # manifest round-trip: same file fingerprint reads back its own manifest
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as td:
+        src = _os.path.join(td, "clip.bin")
+        with open(src, "wb") as f:
+            f.write(b"x" * 70000 + b"tail")
+        _orig = config.STORAGE_PATH
+        config.STORAGE_PATH = Path(td)
+        try:
+            assert load_extraction_manifest(src) is None  # fresh cache
+            save_extraction_manifest(src, {"transcript": "hello", "frameObservations": [{"ts": 1}]})
+            got = load_extraction_manifest(src)
+            assert got and got["transcript"] == "hello", got
+        finally:
+            config.STORAGE_PATH = _orig
     _lock_local_ok = _locate("FFPROBE_PATH", "ffprobe")  # warm the cache (may be None — fine)
     print("video_processor self-check OK")

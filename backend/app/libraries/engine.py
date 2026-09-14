@@ -7,6 +7,7 @@ from .. import db, config
 from ..libraries import gateway as gateway_mod
 from ..libraries.analyze import heuristic_analysis, build_evidence_graph
 from ..libraries import analyzers
+from ..libraries import image_analytics
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,10 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
         ]
         inv["updatedAt"] = _now_iso()
         db.save_investigation(inv)
+        try:
+            image_analytics.persist(inv)
+        except Exception:
+            logger.exception("image analytics persistence failed")
         return inv
 
     inv["status"] = "analyzing"
@@ -156,7 +161,11 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     # its reasoning, the selected passages (with page provenance + nature), and
     # explicit gaps. Only present when the analyzer produced them.
     for key in ("answer", "assessmentReasoning", "evidenceItems",
-                "missingInformation", "additionalSourcesNeeded", "objectCounts"):
+                "missingInformation", "additionalSourcesNeeded", "objectCounts",
+                "mediaAuthenticity", "contextualAccuracy", "provenance",
+                "observedDirectly", "externallyVerified", "inferred", "couldNotVerify",
+                "forensicFindings", "investigationTrace", "externalEvidence",
+                "evidenceAssessment", "batchAnalysis", "medicalInvestigation"):
         if result.get(key) not in (None, "", []):
             inv[key] = result[key]
 
@@ -235,6 +244,10 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     inv["updatedAt"] = _now_iso()
     _emit(inv, "assessment_generated", "Assessment generated for capability investigation")
     db.save_investigation(inv)
+    try:
+        image_analytics.persist(inv)
+    except Exception:
+        logger.exception("image analytics persistence failed")
     return inv
 
 
@@ -355,10 +368,20 @@ async def run_investigation(request: dict) -> dict:
         _emit(inv, "investigation_created", "Investigation created")
 
     if inv["status"] in ("created", "planning"):
-        from ..libraries.planner import EvidencePlanner
-        requirements = EvidencePlanner()._plan_fallback(
-            inv.get("question", ""), [i.get("type") for i in (inv.get("inputs") or [])]
-        )
+        from ..libraries import planner
+        
+        inputs = inv.get("inputs") or []
+        input_types = [i.get("type") for i in inputs]
+        
+        if "image" in input_types:
+            requirements = planner.plan_image_investigation(
+                inv.get("question", ""), image_count=len([i for i in inputs if i.get("type") == "image"])
+            )
+        else:
+            requirements = planner.EvidencePlanner()._plan_fallback(
+                inv.get("question", ""), input_types
+            )
+            
         inv = plan_capability(inv, requirements)
 
     if inv["status"] == "discovering":

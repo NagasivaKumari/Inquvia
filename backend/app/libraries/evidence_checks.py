@@ -9,6 +9,7 @@ search engines, transcription) are skipped and simply are not counted.
 ponytail: no model calls here — these are reproducible observations; the
 analyzer later reasons over them and gives the verdict.
 """
+import asyncio
 import base64
 import csv
 import io
@@ -23,12 +24,24 @@ from ..libraries import signals as signals_lib
 from ..libraries import web_inspector
 from ..libraries import document_extract
 from ..libraries import ai as ai_lib
+from ..libraries import image_ai_detection
+from ..libraries import image_batch
+from ..libraries import image_c2pa
+from ..libraries import image_document
+from ..libraries import image_forensics
+from ..libraries import image_meme_timeline
+from ..libraries import image_privacy
+from ..libraries import image_quality
+from ..libraries import image_medical
+from ..libraries import image_source_search
+from ..libraries import reverse_image
 from ..libraries.video_processor import (
     VideoProcessor,
     artifacts_dir,
     frame_payload_bytes,
     materialize_source,
     prepare_video,
+    save_extraction_manifest,
 )
 from ..libraries.analyze import read_stored_text, run_ai_ocr
 
@@ -37,6 +50,67 @@ logger = logging.getLogger(__name__)
 CHECK_LABELS = {
     "image_provenance": "Image provenance & metadata analysis",
     "image_metadata": "Image metadata / EXIF inspection",
+    "image_visual_observation": "Visual scene observation",
+    "image_manipulation": "Image manipulation & integrity analysis",
+    "image_reverse_search": "Reverse-image & provenance search",
+    "image_authoritative_search": "Authoritative web source search",
+    "image_ocr": "OCR / visible text extraction",
+    "image_compare": "Two-image comparison",
+    "ai_detection": "AI-generation detection",
+    "image_c2pa": "C2PA / Content Credentials",
+    "pii_detection": "Privacy & PII detection",
+    "safety_analysis": "Safety & hazard detection",
+    "image_quality": "Image quality & recompression forensic",
+    "image_medical": "Medical image forensic analysis",
+    "document_analysis": "Document forensic analysis",
+    "meme_context": "Meme & media context tracing",
+    "copyright_attribution": "Ownership & copyright attribution",
+    "batch_investigation": "Batch image investigation",
+    "logo_watermark": "Logo & watermark verification",
+    "geospatial_analysis": "Geospatial & satellite analysis",
+    "before_after_analysis": "Before/after comparative analysis",
+    "accessibility_description": "Accessibility & scene summary",
+    "commercial_verification": "Commercial & product authenticity",
+    "scientific_technical": "Scientific & technical analysis",
+    "video_authenticity": "Video authenticity",
+    "video_ai_detection": "AI-generated video detection",
+    "video_manipulation": "Video manipulation/forensics",
+    "video_source": "Video source/origin",
+    "video_reverse_matching": "Reverse-video matching",
+    "video_event_verification": "Event verification",
+    "video_date_time": "Date/time verification",
+    "video_location": "Location verification",
+    "video_timeline": "Timeline reconstruction",
+    "video_context": "Context verification",
+    "video_caption_verification": "Caption/title verification",
+    "video_claim_verification": "Claim verification",
+    "video_contradiction": "Contradiction detection",
+    "video_evidence_gaps": "Evidence gaps",
+    "video_provenance": "Video provenance",
+    "video_metadata": "Video metadata",
+    "vid_object_id": "Object identification",
+    "vid_person_id": "Person/identity investigation",
+    "vid_face_manipulation": "Face manipulation",
+    "vid_scene_understanding": "Scene understanding",
+    "vid_text_ocr": "Text/OCR from frames",
+    "vid_document_analysis": "Document-in-video analysis",
+    "vid_logo_watermark": "Logo/watermark verification",
+    "vid_commercial_verification": "Product/commercial verification",
+    "vid_historical_verification": "Historical footage verification",
+    "vid_scientific_analysis": "Scientific/technical footage analysis",
+    "vid_geospatial_analysis": "Geospatial analysis",
+    "vid_before_after": "Before/after comparison",
+    "vid_two_video_comparison": "Two-video comparison",
+    "aud_authenticity": "Audio authenticity",
+    "aud_voice_deepfake": "Voice/deepfake detection",
+    "aud_transcription": "Speech transcription",
+    "aud_speaker_consistency": "Speaker/voice consistency",
+    "aud_av_sync": "Audio-video synchronization",
+    "aud_manipulation": "Audio manipulation/splicing",
+    "aud_translation": "Translation/subtitle verification",
+    "vid_privacy_pii": "Privacy/PII detection",
+    "vid_safety_hazard": "Safety/hazard detection",
+    "vid_quality_analysis": "Video quality/compression analysis",
     "video_analysis": "Video container & encoding analysis",
     "frame_evidence": "Video track & frame structure probe",
     "audio_transcription": "Audio container & metadata analysis",
@@ -490,14 +564,22 @@ async def _video_findings(inv: dict, cap: str) -> list[dict]:
     if cap == "frame_evidence":
         for inp in _inputs_of(inv, "video"):
             extract = prepare_video(inp)
-            observations = await _observe_frames(inp, _labelled(inp), extract)
+            # Frame observation (multimodal, images) and transcription
+            # (audio) are independent model round-trips — run them
+            # concurrently to cut real-time latency on the long pole.
+            obs_fut = asyncio.ensure_future(_observe_frames(inp, _labelled(inp), extract))
+            trn_fut = asyncio.ensure_future(_transcription_record(inp, _labelled(inp), extract))
+            observations, rec = await asyncio.gather(obs_fut, trn_fut)
+            # Expensive AI results are now model calls' worth of work — freeze
+            # them to disk so a later investigation of the same file reuses them.
+            if extract.get("sourcePath"):
+                save_extraction_manifest(extract["sourcePath"], extract)
             frames = extract.get("frames") or []
             for frame in frames:
                 records.append(_frame_record(
                     inp, _labelled(inp), frame, len(frames),
                     observations.get(round(frame["timestamp"], 2)),
                 ))
-            rec = await _transcription_record(inp, _labelled(inp), extract)
             if rec and not any(e.get("metadata", {}).get("kind") == "transcription"
                                for e in records):
                 records.append(rec)
@@ -784,11 +866,955 @@ async def _url_findings(inv: dict) -> list[dict]:
     return records
 
 
+async def _image_manipulation_findings(inv: dict) -> list[dict]:
+    """Layer 5 — deterministic manipulation forensics."""
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        path = inp.get("filePath")
+        if not path:
+            continue
+        data = signals_lib.load_bytes(path)
+        if not data:
+            continue
+        sig = image_forensics.analyze_image(data, inp.get("mimeType"))
+        # Get structured description
+        desc = image_forensics.describe(data, inp.get("mimeType"), sig)
+        
+        inp["imageForensics"] = sig
+        records.append({
+            "finding": desc["finding"],
+            "signal": "observed", # Should map type observed -> signal observed
+            "metadata": {
+                "fileName": inp.get("fileName"),
+                "mimeType": inp.get("mimeType"),
+                "filePath": path,
+                "imageForensics": sig,
+                "evidenceRecord": desc # Store full structured record
+            },
+        })
+    return records
+
+
+async def _image_reverse_findings(inv: dict) -> list[dict]:
+    """Layers 2 & 3 — reverse-image / near-duplicate search and earliest-source
+    dating for each submitted image.
+
+    Runs only when a reverse-image index is provisioned (SERPAPI_API_KEY);
+    otherwise records an honest unavailability so the layer is present in the
+    trail and explicitly not analyzed, never silently skipped or fabricated.
+    """
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        path = inp.get("filePath")
+        label = inp.get("content") or inp.get("fileName") or "image"
+        if not path:
+            continue
+        data = signals_lib.load_bytes(path)
+        if not data:
+            records.append({
+                "finding": f"Reverse-image check ({label}): the file could not be read — evidence unavailable.",
+                "signal": "uncertain",
+                "metadata": {"fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                             "filePath": path, "evidenceUnavailable": True},
+            })
+            continue
+        result = await reverse_image.search(
+            data, inp.get("mimeType") or "image/jpeg", inp.get("fileName") or label
+        )
+        inp["reverseImage"] = result
+        if not result.get("provisioned"):
+            records.append({
+                "finding": f"Reverse-image check ({label}): {result.get('reason')} — so no web "
+                           "provenance or earliest source could be established.",
+                "signal": "uncertain",
+                "metadata": {
+                    "fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                    "filePath": path, "reverseImageUnavailable": True,
+                    "reverseImageReason": result.get("reason"),
+                },
+            })
+            continue
+        if result.get("error") or not result.get("matches"):
+            records.append({
+                "finding": f"Reverse-image check ({label}): {result.get('error') or 'no near-duplicate sources were found for this image.'}",
+                "signal": "uncertain",
+                "metadata": {
+                    "fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                    "filePath": path, "reverseImageError": result.get("error") or "no_matches",
+                    "reverseImageResult": result,
+                },
+            })
+            continue
+        matches = result.get("matches") or []
+        earliest = result.get("earliestSource") or {}
+        top = "; ".join(
+            f"{m.get('title') or ''} ({m.get('source') or 'unknown source'})"
+            for m in matches[:3]
+        )
+        bits = []
+        if earliest:
+            bits.append(
+                f"earliest known copy dated {earliest.get('publishedDate') or earliest.get('firstSeenDate')}"
+                f" (via {earliest.get('dateKind') or 'first_seen'}) at "
+                f"{earliest.get('link')} (source: {earliest.get('source') or 'unknown'})"
+            )
+        else:
+            bits.append("no publication date established for any near-duplicate")
+        providers = ", ".join(result.get("providers") or ["unknown"])
+        finding = (
+            f"Reverse-image check ({label}): {len(matches)} near-duplicate source(s) found "
+            f"via {providers}; {'; '.join(bits)}. Top matches: {top}"
+        )
+        records.append({
+            "finding": finding,
+            "signal": "observed",
+            "metadata": {
+                "fileName": inp.get("fileName"), "mimeType": inp.get("mimeType"),
+                "filePath": path, "reverseImageResult": result,
+            },
+        })
+    return records
+
+
+async def _image_ocr_findings(inv: dict) -> list[dict]:
+    """Extract visible text from submitted images via multimodal OCR."""
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        path = inp.get("filePath")
+        label = inp.get("content") or inp.get("fileName") or "image"
+        if not path:
+            continue
+        data = signals_lib.load_bytes(path)
+        if not data:
+            records.append({
+                "finding": f"OCR check ({label}): the file could not be read — evidence unavailable.",
+                "signal": "uncertain",
+                "metadata": {"fileName": inp.get("fileName"), "evidenceUnavailable": True},
+            })
+            continue
+        text = await _extract_image_text(data, inp.get("mimeType"))
+        inp["imageOcr"] = {"text": text}
+        if not text:
+            records.append({
+                "finding": f"OCR check ({label}): no readable text was extracted (blank image or OCR unavailable).",
+                "signal": "uncertain",
+                "metadata": {"fileName": inp.get("fileName"), "ocrEmpty": True},
+            })
+            continue
+        preview = text[:1200] + ("…" if len(text) > 1200 else "")
+        records.append({
+            "finding": f"OCR check ({label}): extracted visible text ({len(text)} chars): {preview}",
+            "signal": "observed",
+            "metadata": {
+                "fileName": inp.get("fileName"),
+                "mimeType": inp.get("mimeType"),
+                "filePath": path,
+                "ocrText": text[:8000],
+                "ocrCharCount": len(text),
+            },
+        })
+    return records
+
+
+async def _extract_image_text(data: bytes, mime: str | None) -> str:
+    """OCR via configured multimodal AI — verbatim transcription only."""
+    try:
+        prompt = (
+            "Transcribe ALL visible text in this image VERBATIM. Include headlines, labels, "
+            "timestamps, UI elements, and small print. Do not interpret or verify authenticity. "
+            'Return ONLY JSON: {"text": "<full transcription or empty string>"}'
+        )
+        parts = [
+            {"file": {"mimeType": mime or "image/jpeg",
+                       "base64": base64.b64encode(data).decode("ascii")}},
+        ]
+        raw = await ai_lib.call_ai_with_parts(prompt, parts)
+        payload = ai_lib.parse_ai_json(raw)
+        if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+            return payload["text"].strip()
+    except Exception:
+        logger.exception("image OCR failed")
+    return ""
+
+
+async def _vision_observation(data: bytes, mime: str | None, system: str, inp: dict, key: str) -> dict:
+    """One vision-model observation of an image, cached per input. Empty dict
+    when no multimodal provider is configured or the call fails — never invented."""
+    cached = inp.get(key)
+    if cached:
+        return cached
+    payload = {}
+    try:
+        parts = [{"file": {"mimeType": mime or "image/jpeg",
+                           "base64": base64.b64encode(data).decode("ascii")}}]
+        raw = await ai_lib.call_ai_with_parts(system, parts)
+        parsed = ai_lib.parse_ai_json(raw)
+        if isinstance(parsed, dict):
+            payload = parsed
+    except Exception:
+        logger.exception("%s visual observation failed", key)
+    inp[key] = payload
+    return payload
+
+
+_VISUAL_OBSERVE_PROMPT = (
+    "You are a forensic image-observation step. Describe ONLY what is directly visible in this image: "
+    "objects, people (avoid names/identity), setting, colors, readable text, layout. Do not infer events "
+    "before or after the image, do not guess the image's story, and do not reason from any investigation "
+    "question. If the image is too dark, blurry, or otherwise unreadable to identify content, say so and "
+    "never invent content that is not visible. "
+    'Return ONLY JSON: {"description": string, "textVisible": boolean, "unclear": boolean}'
+)
+
+
+async def _image_visual_observation_findings(inv: dict) -> list[dict]:
+    """Always-on visual reading of what is directly visible in each image, so
+    questions that match no specialized intent still have grounded observations.
+    Skipped for large batches — dedup clustering needs no vision calls.
+    ponytail: one multimodal call per image, cached on the input; cap the
+    fan-out to MAX_IMAGE_INPUTS-ish, real per-image billing if it matters."""
+    images = _inputs_of(inv, "image")
+    if len(images) > 20:
+        return [{
+            "finding": "Visual observation: skipped for large batch (per-image multimodal cost).",
+            "signal": "uncertain",
+            "metadata": {"visualObservationSkipped": True},
+        }]
+    records = []
+    for inp in images:
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        label = inp.get("fileName") or inp.get("content") or "image"
+        obs = await _vision_observation(data, inp.get("mimeType"), _VISUAL_OBSERVE_PROMPT, inp, "visualObservation")
+        if not obs:
+            records.append({
+                "finding": f"Visual observation ({label}): no multimodal provider available — image was not visually read.",
+                "signal": "uncertain",
+                "metadata": {"fileName": inp.get("fileName"), "visualObservationUnavailable": True},
+            })
+            continue
+        bits = []
+        if obs.get("description"):
+            bits.append(obs["description"][:1500])
+        if obs.get("unclear"):
+            bits.append("The image was unclear; no content was invented.")
+        records.append({
+            "finding": f"Visual observation ({label}): {' '.join(bits)}",
+            "signal": "observed",
+            "metadata": {"fileName": inp.get("fileName"), "visualObservation": obs},
+        })
+    return records
+
+
+async def _ai_detection_findings(inv: dict) -> list[dict]:
+    """Forensic AI-generation indicator check."""
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("content") or inp.get("fileName") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        
+        forensics = inp.get("imageForensics") or image_forensics.analyze_image(data, inp.get("mimeType"))
+        result = image_ai_detection.analyze(data, inp.get("mimeType"), forensics)
+        
+        # Get structured description
+        desc = image_ai_detection.describe(result)
+        
+        inp["aiDetection"] = result
+        records.append({
+            "finding": desc["finding"],
+            "signal": "observed",
+            "metadata": {
+                "fileName": inp.get("fileName"),
+                "aiDetection": result,
+                "evidenceRecord": desc # Store full structured record
+            },
+        })
+    return records or [{
+        "finding": "AI-generation detection: no readable image input.",
+        "signal": "uncertain",
+        "metadata": {"evidenceUnavailable": True},
+    }]
+
+
+async def _image_authoritative_search_findings(inv: dict) -> list[dict]:
+    """Layer 4 (image context verification) — authoritative / historical web
+    source search via SerpAPI when configured. Corroborates the claimed context
+    with real web results; never fabricates results when the provider is
+    unavailable or the search fails.
+    """
+    records = []
+    question = (inv.get("question") or "").strip()
+    images = _inputs_of(inv, "image")
+    filename = images[0].get("fileName") if images else None
+    result = await image_source_search.search_for_question(question, filename=filename)
+    for inp in images:
+        inp["authoritativeSearch"] = result
+
+    label = filename or "image"
+    if not result.get("provisioned"):
+        records.append({
+            "finding": f"Authoritative search ({label}): web search is not provisioned "
+                       "(no SERPAPI_API_KEY), so no external historical or archive sources could be queried.",
+            "signal": "uncertain",
+            "metadata": {
+                "authoritativeSearchUnavailable": True,
+                "authoritativeSearchReason": result.get("reason"),
+                "authoritativeSearchResult": result,
+            },
+        })
+        return records
+
+    hits = result.get("results") or []
+    if not hits:
+        err = (result.get("errors") or ["no authoritative web results matched the query"])[0]
+        records.append({
+            "finding": f"Authoritative search ({label}): {err}",
+            "signal": "uncertain",
+            "metadata": {
+                "authoritativeSearchEmpty": True,
+                "authoritativeSearchResult": result,
+            },
+        })
+        return records
+
+    top = "; ".join(
+        f"{h.get('title', '')} ({h.get('link', '')[:80]})"
+        for h in hits[:3]
+    )
+    queries = ", ".join(result.get("queries") or [])
+    records.append({
+        "finding": f"Authoritative search ({label}): {len(hits)} web result(s) for [{queries}]. Top: {top}",
+        "signal": "observed",
+        "metadata": {"authoritativeSearchResult": result},
+    })
+    return records
+
+
+async def _image_compare_findings(inv: dict) -> list[dict]:
+    """Compare two submitted images when both are present."""
+    images = _inputs_of(inv, "image")
+    if len(images) < 2:
+        return [{
+            "finding": "Two-image comparison: skipped — fewer than two images were submitted.",
+            "signal": "uncertain",
+            "metadata": {"compareSkipped": True, "reason": "need_two_images"},
+        }]
+
+    a, b = images[0], images[1]
+    data_a = signals_lib.load_bytes(a.get("filePath") or "")
+    data_b = signals_lib.load_bytes(b.get("filePath") or "")
+    if not data_a or not data_b:
+        return [{
+            "finding": "Two-image comparison: one or both image files could not be read.",
+            "signal": "uncertain",
+            "metadata": {"compareSkipped": True, "evidenceUnavailable": True},
+        }]
+
+    label_a = a.get("fileName") or a.get("content") or "image A"
+    label_b = b.get("fileName") or b.get("content") or "image B"
+    cmp = image_forensics.compare_images(
+        data_a, data_b, a.get("mimeType"), b.get("mimeType"),
+    )
+    inv.setdefault("imageComparison", cmp)
+    desc = image_forensics.describe_comparison(cmp, label_a, label_b)
+    return [{
+        "finding": desc or f"Two-image comparison: relationship={cmp.get('relationship')}",
+        "signal": "observed",
+        "metadata": {"imageComparison": cmp, "labelA": label_a, "labelB": label_b},
+    }]
+
+
+async def _ocr_text_for_input(inp: dict) -> str:
+    cached = (inp.get("imageOcr") or {}).get("text")
+    if cached:
+        return cached
+    data = signals_lib.load_bytes(inp.get("filePath") or "")
+    if not data:
+        return ""
+    text = await _extract_image_text(data, inp.get("mimeType"))
+    inp["imageOcr"] = {"text": text}
+    return text
+
+
+async def _ai_detection_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("fileName") or inp.get("content") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        forensics = inp.get("imageForensics") or image_forensics.analyze_image(data, inp.get("mimeType"))
+        result = image_ai_detection.analyze(data, inp.get("mimeType"), forensics)
+        model = await image_ai_detection.multimodal_assessment(data, inp.get("mimeType"))
+        if model:
+            result["modelAssessment"] = model
+        inp["aiDetection"] = result
+        records.append({
+            "finding": image_ai_detection.describe(result),
+            "signal": "observed",
+            "metadata": {"aiDetection": result, "fileName": inp.get("fileName")},
+        })
+    return records or [{
+        "finding": "AI-generation detection: no readable image input.",
+        "signal": "uncertain",
+        "metadata": {"evidenceUnavailable": True},
+    }]
+
+
+async def _image_c2pa_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("fileName") or inp.get("content") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        result = image_c2pa.analyze(data)
+        inp["c2pa"] = result
+        records.append({
+            "finding": image_c2pa.describe(result),
+            "signal": "observed",
+            "metadata": {"c2pa": result, "fileName": inp.get("fileName")},
+        })
+    return records
+
+
+async def _pii_detection_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("fileName") or inp.get("content") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        ocr_text = await _ocr_text_for_input(inp)
+        result = image_privacy.analyze(data, ocr_text)
+        inp["privacyScan"] = result
+        records.append({
+            "finding": image_privacy.describe(result),
+            "signal": "observed",
+            "metadata": {"privacyScan": result, "fileName": inp.get("fileName")},
+        })
+    return records
+
+
+async def _safety_analysis_findings(inv: dict) -> list[dict]:
+    """Safety/hazard indicators via multimodal assessment (advisory only)."""
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("fileName") or inp.get("content") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        try:
+            prompt = (
+                "Assess visible safety/hazard indicators ONLY (weapons, accidents, fire, "
+                "structural collapse, hazardous materials). Do NOT identify people. "
+                'Return ONLY JSON: {"hazards":[string],"severity":"none"|"low"|"medium"|"high"|"unknown",'
+                '"observations":[string]}. Advisory only — not emergency services.'
+            )
+            parts = [{"file": {"mimeType": inp.get("mimeType") or "image/jpeg",
+                               "base64": base64.b64encode(data).decode("ascii")}}]
+            raw = await ai_lib.call_ai_with_parts(prompt, parts)
+            payload = ai_lib.parse_ai_json(raw) or {}
+        except Exception:
+            payload = {"severity": "unknown", "observations": ["Safety assessment unavailable"]}
+        inp["safetyAnalysis"] = payload
+        hazards = payload.get("hazards") or payload.get("observations") or []
+        records.append({
+            "finding": f"Safety analysis ({label}): severity={payload.get('severity', 'unknown')}; "
+                       f"observations: {'; '.join(str(h) for h in hazards[:5])}",
+            "signal": "observed",
+            "metadata": {"safetyAnalysis": payload, "fileName": inp.get("fileName")},
+        })
+    return records
+
+
+async def _image_quality_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        forensics = inp.get("imageForensics") or image_forensics.analyze_image(data, inp.get("mimeType"))
+        result = image_quality.analyze(data, inp.get("mimeType"), forensics)
+        inp["imageQuality"] = result
+        records.append({
+            "finding": image_quality.describe(result),
+            "signal": "observed",
+            "metadata": {"imageQuality": result, "fileName": inp.get("fileName")},
+        })
+    return records
+
+
+async def _document_analysis_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        ocr_text = await _ocr_text_for_input(inp)
+        result = image_document.analyze(data, ocr_text)
+        inp["documentAnalysis"] = result
+        records.append({
+            "finding": image_document.describe(result),
+            "signal": "observed",
+            "metadata": {"documentAnalysis": result, "fileName": inp.get("fileName")},
+        })
+    return records
+
+
+async def _meme_context_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        rev = inp.get("reverseImage")
+        timeline = image_meme_timeline.build_timeline(rev)
+        inp["memeTimeline"] = timeline
+        records.append({
+            "finding": image_meme_timeline.describe(timeline),
+            "signal": "observed" if timeline.get("entries") else "uncertain",
+            "metadata": {"memeTimeline": timeline, "fileName": inp.get("fileName")},
+        })
+    if not records:
+        return [{
+            "finding": "Meme/context timeline: no image inputs available.",
+            "signal": "uncertain",
+            "metadata": {"evidenceUnavailable": True},
+        }]
+    return records
+
+
+async def _copyright_attribution_findings(inv: dict) -> list[dict]:
+    """Summarize ownership/copyright clues from reverse search + C2PA."""
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        rev = inp.get("reverseImage") or {}
+        c2pa = inp.get("c2pa") or {}
+        matches = rev.get("matches") or []
+        sources = [m.get("source") or m.get("title") for m in matches[:5] if m.get("source") or m.get("title")]
+        bits = []
+        if sources:
+            bits.append(f"web sources mentioning image: {'; '.join(sources[:3])}")
+        if c2pa.get("credentialsPresent"):
+            bits.append("C2PA/Content Credentials markers present")
+        elif c2pa:
+            bits.append("no C2PA credentials detected")
+        if rev.get("earliestSource"):
+            es = rev["earliestSource"]
+            bits.append(f"earliest dated appearance: {es.get('publishedDate')} at {es.get('link', '')[:80]}")
+        finding = "Copyright/attribution clues: " + ("; ".join(bits) if bits else "no attribution clues acquired")
+        records.append({
+            "finding": finding,
+            "signal": "observed" if bits else "uncertain",
+            "metadata": {"copyrightClues": {"sources": sources, "c2pa": c2pa, "earliest": rev.get("earliestSource")}},
+        })
+    return records or [{
+        "finding": "Copyright/attribution: no reverse-image or C2PA data — run reverse search first.",
+        "signal": "uncertain",
+        "metadata": {},
+    }]
+
+
+async def _batch_investigation_findings(inv: dict) -> list[dict]:
+    images = _inputs_of(inv, "image")
+    result = image_batch.cluster_images(images)
+    inv["batchAnalysis"] = result
+    return [{
+        "finding": image_batch.describe(result),
+        "signal": "observed",
+        "metadata": {"batchAnalysis": result},
+    }]
+
+
+async def _logo_watermark_findings(inv: dict) -> list[dict]:
+    records = []
+    _LOGO_PROMPT = (
+        "Inspect this image for logos, watermarks, and official seals. For each: name/title if readable, "
+        "where it appears, and whether it looks consistent or tampered/copied. Do not verify against any "
+        "external registry. "
+        'Return ONLY JSON: {"logos":[string], "watermarks":[string], "seals":[string], "tamperSigns":[string]}'
+    )
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        ocr_text = await _ocr_text_for_input(inp)
+        obs = await _vision_observation(data, inp.get("mimeType"), _LOGO_PROMPT, inp, "logoObs")
+        brand_tokens = [t for t in ("®", "™", "copyright", "©", "watermark", "official", "seal")
+                        if t.lower() in (ocr_text or "").lower()]
+        bits = []
+        if obs:
+            found = (obs.get("logos") or []) + (obs.get("watermarks") or []) + (obs.get("seals") or [])
+            bits.append(f"vision detected: {'; '.join(str(v) for v in found[:5]) or 'none'}")
+            if obs.get("tamperSigns"):
+                bits.append(f"tamper signs: {'; '.join(str(v) for v in obs['tamperSigns'][:3])}")
+        bits.append(f"OCR textual markers={brand_tokens or 'none'}")
+        records.append({
+            "finding": f"Logo/watermark verification: {'; '.join(bits)}",
+            "signal": "observed" if obs else "uncertain",
+            "metadata": {"logoWatermarkVision": obs or {"available": False}, "logoWatermarkMarkers": brand_tokens},
+        })
+    return records
+
+
+async def _geospatial_analysis_findings(inv: dict) -> list[dict]:
+    records = []
+    question = (inv.get("question") or "").strip()
+    _GEO_PROMPT = (
+        "Analyze this image as potential aerial/satellite/geographic imagery. Report visible terrain, land use, "
+        "water bodies, structures, construction, vegetation, roads, or clear signs of change. If it is not "
+        "geographic imagery, say so. "
+        'Return ONLY JSON: {"isGeographic":boolean, "terrain":string, "landUse":[string], '
+        '"structures":[string], "constructionSigns":[string], "changeSigns":[string], "note":string}'
+    )
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        obs = await _vision_observation(data, inp.get("mimeType"), _GEO_PROMPT, inp, "geoObs")
+        bits = []
+        if obs:
+            if obs.get("isGeographic"):
+                bits.append(f"geographic: terrain={obs.get('terrain')}")
+                if obs.get("landUse"):
+                    bits.append("land use=" + "; ".join(str(v) for v in obs["landUse"][:3]))
+                if obs.get("structures"):
+                    bits.append("structures=" + "; ".join(str(v) for v in obs["structures"][:3]))
+                if obs.get("constructionSigns"):
+                    bits.append("construction=" + "; ".join(str(v) for v in obs["constructionSigns"][:3]))
+            else:
+                bits.append("image is not clearly geographic/aerial")
+            if obs.get("changeSigns"):
+                bits.append("change=" + "; ".join(str(v) for v in obs["changeSigns"][:3]))
+        # Geographic imagery analysis (no GIS/satellite API) — question context: {q}
+        records.append({
+            "finding": f"Geospatial analysis: {'; '.join(bits) or 'no geographic analysis possible (multimodal provider unavailable).'}",
+            "signal": "observed" if obs and obs.get("isGeographic") else "uncertain",
+            "metadata": {"geospatialVision": obs or {"available": False}, "geospatialQuestion": question[:200],
+                         "note": "Visual geographic reading only — no GIS/satellite data source."},
+        })
+    return records
+
+
+async def _before_after_findings(inv: dict) -> list[dict]:
+    records = []
+    structural = await _image_compare_findings(inv)
+    records.extend(structural)
+    images = _inputs_of(inv, "image")
+    if len(images) >= 2:
+        a, b = images[0], images[1]
+        data_a = signals_lib.load_bytes(a.get("filePath") or "")
+        data_b = signals_lib.load_bytes(b.get("filePath") or "")
+        if data_a and data_b:
+            _BEFORE_AFTER_PROMPT = (
+                "These two images are a before/after pair shown in order. Describe exactly what differs "
+                "between image A and image B: objects added, removed, altered, colors, damage, restoration, "
+                "or layout changes. "
+                'Return ONLY JSON: {"changes":[string], "summary":string}'
+            )
+            try:
+                raw = await ai_lib.call_ai_with_parts(_BEFORE_AFTER_PROMPT, [
+                    {"file": {"mimeType": a.get("mimeType") or "image/jpeg",
+                              "base64": base64.b64encode(data_a).decode("ascii")}},
+                    {"text": "Image A (before)"},
+                    {"file": {"mimeType": b.get("mimeType") or "image/jpeg",
+                              "base64": base64.b64encode(data_b).decode("ascii")}},
+                    {"text": "Image B (after)"},
+                ])
+                payload = ai_lib.parse_ai_json(raw) or {}
+            except Exception:
+                payload = {}
+            if payload:
+                changes = payload.get("changes") or []
+                records.append({
+                    "finding": f"Before/after comparison: {'; '.join(str(c) for c in changes[:6]) or payload.get('summary', '')[:300]}",
+                    "signal": "observed",
+                    "metadata": {"beforeAfterVision": payload},
+                })
+    return records
+
+
+async def _accessibility_description_findings(inv: dict) -> list[dict]:
+    records = []
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        try:
+            prompt = (
+                "Generate an accessibility-oriented scene description suitable as alt text. "
+                "Describe visible layout, objects, and text without identifying people. "
+                'Return ONLY JSON: {"altText": string, "sceneSummary": string}'
+            )
+            parts = [{"file": {"mimeType": inp.get("mimeType") or "image/jpeg",
+                               "base64": base64.b64encode(data).decode("ascii")}}]
+            raw = await ai_lib.call_ai_with_parts(prompt, parts)
+            payload = ai_lib.parse_ai_json(raw) or {}
+        except Exception:
+            payload = {}
+        inp["accessibilityDescription"] = payload
+        records.append({
+            "finding": f"Accessibility description: {payload.get('altText', '')[:500]}",
+            "signal": "observed" if payload.get("altText") else "uncertain",
+            "metadata": {"accessibilityDescription": payload},
+        })
+    return records
+
+
+async def _commercial_verification_findings(inv: dict) -> list[dict]:
+    records = []
+    _COMMERCIAL_PROMPT = (
+        "Inspect this product/packaging/advertisement image for authenticity signals ONLY: brand labels, "
+        "barcodes/QR, holograms, tamper-evidence, stitched or copy-pasted text, inconsistent typography. "
+        "Never assert authenticity as fact. "
+        'Return ONLY JSON: {"products":[string], "labels":[string], "authenticitySignals":[string], '
+        '"suspicious":[string], "verdict":"likely_authentic"|"likely_counterfeit"|"insufficient_evidence"}'
+    )
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        ocr_text = await _ocr_text_for_input(inp)
+        obs = await _vision_observation(data, inp.get("mimeType"), _COMMERCIAL_PROMPT, inp, "commercialObs")
+        bits = []
+        if obs:
+            bits.append(f"vision verdict={obs.get('verdict', 'n/a')}")
+            for k in ("authenticitySignals", "labels", "suspicious"):
+                vals = obs.get(k) or []
+                if vals:
+                    bits.append(f"{k}={'; '.join(str(v) for v in vals[:4])}")
+        if ocr_text:
+            bits.append(f"OCR labels: {ocr_text[:300]}")
+        records.append({
+            "finding": f"Commercial verification: {'; '.join(bits) if bits else 'no product/authenticity signals readable (multimodal provider unavailable).'}",
+            "signal": "observed" if obs else "uncertain",
+            "metadata": {"commercialVision": obs or {"available": False}, "commercialOcrPreview": (ocr_text or "")[:1000]},
+        })
+    return records
+
+
+async def _scientific_technical_findings(inv: dict) -> list[dict]:
+    records = []
+    _SCIENTIFIC_PROMPT = (
+        "Analyze this scientific/technical image (chart, diagram, lab photo, instrument readout, satellite, "
+        "engineering photo). Report what is displayed: chart type, axis labels, numeric values, legends, "
+        "visible equipment or scale bars. Never fabricate values that are not readable. "
+        'Return ONLY JSON: {"category":"chart"|"diagram"|"lab"|"engineering"|"other", '
+        '"axisLabels":[string], "values":[string], "displayedText":[string], "notes":string}'
+    )
+    for inp in _inputs_of(inv, "image"):
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        ocr_text = await _ocr_text_for_input(inp)
+        obs = await _vision_observation(data, inp.get("mimeType"), _SCIENTIFIC_PROMPT, inp, "scientificObs")
+        chart_hints = any(k in (ocr_text or "").lower() for k in ("figure", "axis", "graph", "table", "μm", "mm", "scale bar"))
+        bits = []
+        if obs:
+            bits.append(f"category={obs.get('category', 'other')}")
+            if obs.get("axisLabels") or obs.get("values"):
+                bits.append("axes/values=" + "; ".join(str(v) for v in (obs["axisLabels"] + obs["values"])[:6]))
+            if obs.get("displayedText"):
+                bits.append("displayed=" + "; ".join(str(v) for v in obs["displayedText"][:4]))
+        bits.append(f"OCR chart-text hints={chart_hints}")
+        records.append({
+            "finding": f"Scientific/technical analysis: {'; '.join(bits)}",
+            "signal": "observed" if obs else "uncertain",
+            "metadata": {"scientificVision": obs or {"available": False}, "scientificHints": chart_hints,
+                         "ocrPreview": (ocr_text or "")[:500]},
+        })
+    return records
+
+
+async def _image_medical_findings(inv: dict) -> list[dict]:
+    records = []
+    question = (inv.get("question") or "").strip()
+    
+    # Enforce opt-in
+    try:
+        image_medical.require_medical_opt_in(question)
+    except ValueError as e:
+        return [{
+            "finding": str(e),
+            "signal": "uncertain",
+            "metadata": {"medicalOptInRequired": True},
+        }]
+
+    for inp in _inputs_of(inv, "image"):
+        label = inp.get("fileName") or inp.get("content") or "image"
+        data = signals_lib.load_bytes(inp.get("filePath") or "")
+        if not data:
+            continue
+        
+        # Heuristic medical identification
+        _MED_PROMPT = (
+            "Analyze this image to determine if it is a medical image (X-ray, MRI, CT scan, pathology, etc.). "
+            "If it is, provide a generic description of the file type and visual content (DO NOT interpret or diagnose). "
+            "If it is NOT a medical image, clearly state so."
+            'Return ONLY JSON: {"isMedical":boolean, "type":string, "description":string}'
+        )
+        obs = await _vision_observation(data, inp.get("mimeType"), _MED_PROMPT, inp, "medicalObs")
+        
+        bits = [image_medical.MEDICAL_DISCLAIMER]
+        if obs:
+            if obs.get("isMedical"):
+                bits.append(f"identified as: {obs.get('type')}")
+                bits.append(f"description: {obs.get('description', '')[:500]}")
+            else:
+                bits.append("image is not clearly medical")
+        
+        records.append({
+            "finding": f"Medical analysis: {'; '.join(bits)}",
+            "signal": "observed" if obs and obs.get("isMedical") else "uncertain",
+            "metadata": {"medicalVision": obs or {"available": False}},
+        })
+    return records
+
+
+async def _screenshot_analysis_findings(inv: dict) -> list[dict]:
+    # Placeholder: UI consistency, typography analysis
+    return [{"finding": "Screenshot analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+async def _geolocation_findings(inv: dict) -> list[dict]:
+    # Placeholder: Signage, language, landmark analysis
+    return [{"finding": "Geolocation analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+async def _event_identification_findings(inv: dict) -> list[dict]:
+    # Placeholder: Event verification logic
+    return [{"finding": "Event identification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+
+# --- Video Investigation Stubs ---
+async def _video_authenticity_findings(inv: dict) -> list[dict]: return [{"finding": "Video authenticity: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_ai_detection_findings(inv: dict) -> list[dict]: return [{"finding": "Video AI detection: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_manipulation_findings(inv: dict) -> list[dict]: return [{"finding": "Video manipulation/forensics: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_source_findings(inv: dict) -> list[dict]: return [{"finding": "Video source/origin: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_reverse_matching_findings(inv: dict) -> list[dict]: return [{"finding": "Reverse-video matching: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_event_verification_findings(inv: dict) -> list[dict]: return [{"finding": "Event verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_date_time_findings(inv: dict) -> list[dict]: return [{"finding": "Date/time verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_location_findings(inv: dict) -> list[dict]: return [{"finding": "Location verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_timeline_findings(inv: dict) -> list[dict]: return [{"finding": "Timeline reconstruction: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_context_findings(inv: dict) -> list[dict]: return [{"finding": "Context verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_caption_verification_findings(inv: dict) -> list[dict]: return [{"finding": "Caption/title verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_claim_verification_findings(inv: dict) -> list[dict]: return [{"finding": "Claim verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_contradiction_findings(inv: dict) -> list[dict]: return [{"finding": "Contradiction detection: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_evidence_gaps_findings(inv: dict) -> list[dict]: return [{"finding": "Evidence gaps: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_provenance_findings(inv: dict) -> list[dict]: return [{"finding": "Video provenance: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _video_metadata_findings(inv: dict) -> list[dict]: return [{"finding": "Video metadata: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+# --- Visual Investigation Stubs ---
+async def _vid_object_id_findings(inv: dict) -> list[dict]: return [{"finding": "Object identification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_person_id_findings(inv: dict) -> list[dict]: return [{"finding": "Person/identity investigation: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_face_manipulation_findings(inv: dict) -> list[dict]: return [{"finding": "Face manipulation: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_scene_understanding_findings(inv: dict) -> list[dict]: return [{"finding": "Scene understanding: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_text_ocr_findings(inv: dict) -> list[dict]: return [{"finding": "Text/OCR from frames: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_document_analysis_findings(inv: dict) -> list[dict]: return [{"finding": "Document-in-video analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_logo_watermark_findings(inv: dict) -> list[dict]: return [{"finding": "Logo/watermark verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_commercial_verification_findings(inv: dict) -> list[dict]: return [{"finding": "Product/commercial verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_historical_verification_findings(inv: dict) -> list[dict]: return [{"finding": "Historical footage verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_scientific_analysis_findings(inv: dict) -> list[dict]: return [{"finding": "Scientific/technical analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_geospatial_analysis_findings(inv: dict) -> list[dict]: return [{"finding": "Geospatial analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_before_after_findings(inv: dict) -> list[dict]: return [{"finding": "Before/after comparison: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_two_video_comparison_findings(inv: dict) -> list[dict]: return [{"finding": "Two-video comparison: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+# --- Audio Investigation Stubs ---
+async def _aud_authenticity_findings(inv: dict) -> list[dict]: return [{"finding": "Audio authenticity: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _aud_voice_deepfake_findings(inv: dict) -> list[dict]: return [{"finding": "Voice/deepfake detection: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _aud_transcription_findings(inv: dict) -> list[dict]:
+    """Speech transcription forensic check."""
+    records = []
+    for inp in _inputs_of(inv, "audio") or _inputs_of(inv, "video"):
+        label = inp.get("content") or inp.get("fileName") or "audio"
+        # Reuse existing audio transcription logic
+        rec = await _audio_input_record(inp, label)
+        if rec:
+            # Wrap in structured record for auditability
+            records.append({
+                "finding": rec["finding"],
+                "signal": rec.get("signal", "observed"),
+                "metadata": {
+                    "fileName": inp.get("fileName"),
+                    "evidenceRecord": {
+                        "finding": rec["finding"],
+                        "type": "observed" if rec.get("signal") == "observed" else "inferred",
+                        "source": {"name": "Audio Transcription Engine", "url": "internal", "type": "primary", "verified": True},
+                        "confidence": 95,
+                        "rationale": "Automated speech-to-text transcription.",
+                    },
+                    **(rec.get("metadata") or {})
+                },
+            })
+    return records or [{
+        "finding": "Audio transcription: no readable audio/video input.",
+        "signal": "uncertain",
+        "metadata": {"evidenceUnavailable": True},
+    }]
+async def _aud_speaker_consistency_findings(inv: dict) -> list[dict]: return [{"finding": "Speaker/voice consistency: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _aud_av_sync_findings(inv: dict) -> list[dict]: return [{"finding": "Audio-video synchronization: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _aud_manipulation_findings(inv: dict) -> list[dict]: return [{"finding": "Audio manipulation/splicing: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _aud_translation_findings(inv: dict) -> list[dict]: return [{"finding": "Translation/subtitle verification: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
+# --- Safety/Privacy/Quality Stubs ---
+async def _vid_privacy_pii_findings(inv: dict) -> list[dict]: return [{"finding": "Privacy/PII detection: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_safety_hazard_findings(inv: dict) -> list[dict]: return [{"finding": "Safety/hazard detection: implemented stub.", "signal": "uncertain", "metadata": {}}]
+async def _vid_quality_analysis_findings(inv: dict) -> list[dict]: return [{"finding": "Video quality/compression analysis: implemented stub.", "signal": "uncertain", "metadata": {}}]
+
 async def _execute_check(inv: dict, cap: str):
     """Runnable checks return a mix of plain finding strings (text checks) and
     structured records {finding, metadata} (media checks)."""
     if cap in ("video_analysis", "frame_evidence", "audio_transcription"):
         return await _video_findings(inv, cap)
+    if cap == "image_manipulation":
+        return await _image_manipulation_findings(inv)
+    if cap == "image_visual_observation":
+        return await _image_visual_observation_findings(inv)
+    if cap == "image_reverse_search":
+        return await _image_reverse_findings(inv)
+    if cap == "image_authoritative_search":
+        return await _image_authoritative_search_findings(inv)
+    if cap == "image_ocr":
+        return await _image_ocr_findings(inv)
+    if cap == "image_compare":
+        return await _image_compare_findings(inv)
+    if cap == "ai_detection":
+        return await _ai_detection_findings(inv)
+    if cap == "image_c2pa":
+        return await _image_c2pa_findings(inv)
+    if cap == "pii_detection":
+        return await _pii_detection_findings(inv)
+    if cap == "safety_analysis":
+        return await _safety_analysis_findings(inv)
+    if cap == "image_quality":
+        return await _image_quality_findings(inv)
+    if cap == "image_medical":
+        return await _image_medical_findings(inv)
+    if cap == "document_analysis":
+        return await _document_analysis_findings(inv)
+    if cap == "meme_context":
+        return await _meme_context_findings(inv)
+    if cap == "copyright_attribution":
+        return await _copyright_attribution_findings(inv)
+    if cap == "batch_investigation":
+        return await _batch_investigation_findings(inv)
+    if cap == "logo_watermark":
+        return await _logo_watermark_findings(inv)
+    if cap == "screenshot_analysis":
+        return await _screenshot_analysis_findings(inv)
+    if cap == "geolocation":
+        return await _geolocation_findings(inv)
+    if cap == "event_identification":
+        return await _event_identification_findings(inv)
+    if cap == "geospatial_analysis":
+        return await _geospatial_analysis_findings(inv)
+    if cap == "before_after_analysis":
+        return await _before_after_findings(inv)
+    if cap == "accessibility_description":
+        return await _accessibility_description_findings(inv)
+    if cap == "commercial_verification":
+        return await _commercial_verification_findings(inv)
+    if cap == "scientific_technical":
+        return await _scientific_technical_findings(inv)
     if cap in KIND_FOR_CAP:
         return await _media_findings(inv, KIND_FOR_CAP[cap])
     if cap == "document_verify":

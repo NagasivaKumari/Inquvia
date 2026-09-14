@@ -284,7 +284,124 @@ export interface Investigation {
   webInspection?: WebInspection;
   /** Deterministic full-document computation trace (large structured files). */
   computation?: ComputationTrace;
+  /** Layered image investigation: file- vs context-level verdicts. */
+  mediaAuthenticity?: MediaAuthenticityVerdict;
+  contextualAccuracy?: ContextualAccuracyVerdict;
+  provenance?: ImageProvenance;
+  subObjectives?: ImageSubObjective[];
+  /** Structured evidence-quality sections (image investigations). */
+  observedDirectly?: string[];
+  externallyVerified?: string[];
+  inferred?: string[];
+  couldNotVerify?: string[];
+  forensicFindings?: string[];
+  externalEvidence?: ExternalEvidenceRecord[];
+  investigationTrace?: InvestigationTraceEntry[];
+  evidenceAssessment?: EvidenceAssessment;
+  batchAnalysis?: BatchAnalysis;
+  medicalInvestigation?: boolean;
+  answer?: string;
+  assessmentReasoning?: string;
 }
+
+export interface BatchAnalysis {
+  imageCount: number;
+  clusterCount: number;
+  duplicateClusterCount: number;
+  threshold?: number;
+  clusters?: {
+    clusterId: number;
+    memberCount: number;
+    suspiciousDuplicateCluster?: boolean;
+    members?: { label?: string; fileName?: string; perceptualHash?: string }[];
+  }[];
+  note?: string;
+}
+
+export interface ExternalEvidenceRecord {
+  sourceName: string;
+  url?: string | null;
+  sourceType: string;
+  finding: string;
+  relevance: string;
+  confidence?: string | null;
+}
+
+export interface InvestigationTraceEntry {
+  check: string;
+  capability: string;
+  status: "completed" | "unavailable" | "not_run";
+  detail?: string;
+}
+
+export interface EvidenceAssessment {
+  observed?: string[];
+  externallyVerified?: string[];
+  inferred?: string[];
+  unknown?: string[];
+  contradictions?: string[];
+}
+
+export type MediaAuthenticityVerdictValue =
+  | "authentic"
+  | "manipulated"
+  | "ai_generated"
+  | "unknown";
+
+export type ContextualAccuracyVerdictValue =
+  | "accurate"
+  | "misleading"
+  | "false"
+  | "unknown";
+
+export interface VersionedVerdict {
+  verdict: string;
+  confidence?: number;
+  reasoning: string;
+  layersConsidered?: string[];
+}
+
+export interface MediaAuthenticityVerdict extends VersionedVerdict {
+  verdict: MediaAuthenticityVerdictValue;
+}
+
+export interface ContextualAccuracyVerdict extends VersionedVerdict {
+  verdict: ContextualAccuracyVerdictValue;
+}
+
+/** Layers 2-3 of image investigation: reverse-image provenance (from
+ * SERPAPI when provisioned — absent means "not provisioned", never guessed). */
+export interface ImageProvenance {
+  nearDuplicatesFound: number | null;
+  provenanceEstablished: boolean;
+  note: string;
+  earliestSource?: {
+    date: string | null;
+    source: string | null;
+    link: string | null;
+  } | null;
+}
+
+export interface ImageSubObjective {
+  objective: string;
+  status: "answered" | "inconclusive" | "insufficient_evidence";
+  evidenceLevel: "observed" | "inferred" | "external_required";
+  finding: string;
+}
+
+export const MEDIA_AUTHENTICITY_LABELS: Record<MediaAuthenticityVerdictValue, string> = {
+  authentic: "No evidence of manipulation",
+  manipulated: "Signs of manipulation",
+  ai_generated: "Likely AI-generated",
+  unknown: "Cannot determine",
+};
+
+export const CONTEXTUAL_ACCURACY_LABELS: Record<ContextualAccuracyVerdictValue, string> = {
+  accurate: "Content matches its context",
+  misleading: "Context is misleading",
+  false: "Content is false in this context",
+  unknown: "Cannot verify context",
+};
 
 /** Deterministic full-document computation trace (structured log/CSV/JSON). */
 export interface ComputationMetric {

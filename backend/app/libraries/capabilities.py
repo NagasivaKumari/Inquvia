@@ -2,11 +2,12 @@
 import secrets
 from datetime import datetime, timezone
 
-from .. import db
+from .. import db, config
 from ..libraries import engine
 from ..libraries import web_inspector
 from ..libraries import evidence_checks
-from ..libraries.planner import EvidencePlanner
+from ..libraries.planner import EvidencePlanner, plan_image_investigation, plan_video_investigation
+from ..libraries import image_medical
 
 
 class InputError(Exception):
@@ -126,16 +127,58 @@ async def run_claim_investigation(args):
 
 async def run_image_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await EvidencePlanner().plan(question, ["image"])
+    inputs = args.get("inputs") or []
+    image_inputs = [i for i in inputs if i.get("type") == "image"]
+    if len(image_inputs) > config.MAX_IMAGE_INPUTS:
+        raise InputError(
+            f"Image investigation accepts at most {config.MAX_IMAGE_INPUTS} image(s); "
+            f"{len(image_inputs)} were submitted."
+        )
+    try:
+        image_medical.require_medical_opt_in(
+            question, explicit_flag=bool(args.get("medicalOptIn")),
+        )
+    except ValueError as exc:
+        raise InputError(str(exc)) from exc
+
+    async def before(inv):
+        if image_medical.is_medical_question(question) and image_medical.medical_opt_in(
+            question, explicit_flag=bool(args.get("medicalOptIn")),
+        ):
+            inv["medicalInvestigation"] = True
+            inv.setdefault("limitations", []).append(image_medical.MEDICAL_DISCLAIMER)
+            db.save_investigation(inv)
+
+    reqs = plan_image_investigation(question, image_count=len(image_inputs))
     return await run_capability(
         "image-investigation", args, reqs,
         "Image Investigation",
+        before_discover=before,
+    )
+
+
+async def run_image_batch_investigation(args):
+    question = (args.get("question") or "").strip() or "Batch image investigation"
+    inputs = args.get("inputs") or []
+    image_inputs = [i for i in inputs if i.get("type") == "image"]
+    if len(image_inputs) < 2:
+        raise InputError("Batch image investigation requires at least 2 images.")
+    if len(image_inputs) > config.MAX_BATCH_IMAGE_INPUTS:
+        raise InputError(
+            f"Batch investigation accepts at most {config.MAX_BATCH_IMAGE_INPUTS} images; "
+            f"{len(image_inputs)} were submitted."
+        )
+    reqs = plan_image_investigation(question, image_count=len(image_inputs), batch=True)
+    return await run_capability(
+        "image-batch-investigation", args, reqs,
+        "Batch Image Investigation",
     )
 
 
 async def run_video_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await EvidencePlanner().plan(question, ["video"])
+    video_count = sum(1 for i in (args.get("inputs") or []) if i.get("type") == "video")
+    reqs = plan_video_investigation(question, video_count=video_count)
     background_tasks = args.get("background_tasks")
     
     # Initialize with 'queued' status
@@ -243,6 +286,7 @@ async def run_audio_investigation(args):
 CAPABILITY_RUNNERS = {
     "claim-investigation": run_claim_investigation,
     "image-investigation": run_image_investigation,
+    "image-batch-investigation": run_image_batch_investigation,
     "video-investigation": run_video_investigation,
     "document-investigation": run_document_investigation,
     "source-investigation": run_source_investigation,

@@ -591,6 +591,28 @@ async def api_investigation_evidence(inv_id: str, request: Request):
     return JSONResponse({"evidence": (investigation or {}).get("evidence") or []})
 
 
+# ── Persisted image analyses (per-image results for all image verticals) ──
+@app.get("/api/analyses/images")
+async def api_analyses_images(request: Request, investigation_id: str = "",
+                              cap: str = "", flag: str = "", limit: int = 50):
+    """Query persisted per-image analyses: owner-scoped, optional filters by
+    investigation, capability (checks.<id>), or flag (flags.<id>)."""
+    user = _resolve_user(request)
+    if not user:
+        return _unauthorized()
+    if investigation_id and not _owns(user, investigation_id):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    from .libraries import image_analytics
+    rows = image_analytics.list_for_user(
+        user["id"], limit=limit, cap=cap, flag=flag, investigation_id=investigation_id
+    )
+    return JSONResponse({
+        "analyses": rows,
+        "count": len(rows),
+        "filters": {"capability": cap, "flag": flag, "investigationId": investigation_id},
+    })
+
+
 @app.get("/api/investigations/{inv_id}/files/{file_name}")
 async def api_investigation_file(inv_id: str, file_name: str, request: Request):
     """Serve a file the user uploaded to this investigation (owner-only)."""
@@ -1086,6 +1108,11 @@ async def claim_investigation(request: Request):
 @app.post("/api/x402/image-investigation")
 async def image_investigation(request: Request):
     return await _handle_atomic_capability(request, "image-investigation")
+
+
+@app.post("/api/x402/image-batch-investigation")
+async def image_batch_investigation(request: Request):
+    return await _handle_atomic_capability(request, "image-batch-investigation")
 
 
 @app.post("/api/x402/video-investigation")

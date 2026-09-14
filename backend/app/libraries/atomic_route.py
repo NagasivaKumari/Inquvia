@@ -28,7 +28,11 @@ async def parse_body(body: dict | None, files: list) -> dict:
     url = (body or {}).get("url") or ""
     text = storage.sanitize_text((body or {}).get("text") or "")
     service_name = storage.sanitize_text((body or {}).get("serviceName") or "")
-    return {"question": question, "url": url, "text": text, "serviceName": service_name, "files": files}
+    medical_opt_in = str((body or {}).get("medicalOptIn") or "").lower() in ("1", "true", "yes")
+    return {
+        "question": question, "url": url, "text": text, "serviceName": service_name,
+        "files": files, "medicalOptIn": medical_opt_in,
+    }
 
 
 def mime_to_base64(mime: str, data: bytes) -> str:
@@ -156,6 +160,33 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     # only for video, text-or-PDF for documents, ...). Catches mismatched
     # uploads before anything is paid for or run.
     allowed = ALLOWED_INPUT_TYPES.get(capability_id)
+    if capability_id == "image-investigation":
+        image_count = sum(1 for i in inputs if i.get("type") == "image")
+        if image_count > config.MAX_IMAGE_INPUTS:
+            return {"status": 400, "content": {
+                "error": f"image-investigation accepts at most {config.MAX_IMAGE_INPUTS} image(s); "
+                         f"{image_count} were submitted.",
+                "errorCode": "TOO_MANY_FILES",
+                "field": "files",
+                "maxImages": config.MAX_IMAGE_INPUTS,
+            }}
+    if capability_id == "image-batch-investigation":
+        image_count = sum(1 for i in inputs if i.get("type") == "image")
+        if image_count < 2:
+            return {"status": 400, "content": {
+                "error": "image-batch-investigation requires at least 2 images.",
+                "errorCode": "TOO_FEW_FILES",
+                "field": "files",
+            }}
+        if image_count > config.MAX_BATCH_IMAGE_INPUTS:
+            return {"status": 400, "content": {
+                "error": f"image-batch-investigation accepts at most {config.MAX_BATCH_IMAGE_INPUTS} images; "
+                         f"{image_count} were submitted.",
+                "errorCode": "TOO_MANY_FILES",
+                "field": "files",
+                "maxImages": config.MAX_BATCH_IMAGE_INPUTS,
+            }}
+
     bad = [i for i in inputs if i.get("type") not in allowed]
     if bad:
         kinds = ", ".join(sorted(allowed))
@@ -185,6 +216,7 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
             "id": case_id, "userId": user["id"],
             "question": (parsed.get("question") or "").strip(),
             "inputs": inputs, "idempotencyKey": idempotency_key,
+            "medicalOptIn": parsed.get("medicalOptIn", False),
         }
         if capability_id == "video-investigation" and background_tasks:
             run_args["background_tasks"] = background_tasks

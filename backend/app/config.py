@@ -137,6 +137,7 @@ def mime_input_type(mime: str) -> str:
 ATOMIC_INPUT_TYPES = {
     "claim-investigation": {"text", "url", "document"},
     "image-investigation": {"image"},
+    "image-batch-investigation": {"image"},
     "video-investigation": {"video"},
     "document-investigation": {"document", "text"},
     "source-investigation": {"url"},
@@ -165,6 +166,13 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or ""
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 EXPLABS_API_KEY = os.getenv("EXPLABS_API_KEY") or ""
+# Reverse-image / near-duplicate search (optional). When unset the
+# image_reverse_search evidence layer reports "not provisioned" honestly
+# instead of fabricating hits.
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY") or ""
+# Maximum images per image-investigation (two-image comparison).
+MAX_IMAGE_INPUTS = int(os.getenv("MAX_IMAGE_INPUTS", "2"))
+MAX_BATCH_IMAGE_INPUTS = int(os.getenv("MAX_BATCH_IMAGE_INPUTS", "200"))
 
 # Model IDs - override via env if needed; defaults are free-tier models
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -205,6 +213,10 @@ PAID_CAPABILITIES = [
     {"id": "image-investigation", "title": "Image Investigation",
         "endpoint": "/api/x402/image-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate an image for context, provenance, and evidence.",
+     "inputTypes": ["image"]},
+    {"id": "image-batch-investigation", "title": "Batch Image Investigation",
+        "endpoint": "/api/x402/image-batch-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
+     "description": "Investigate many images for duplicates, clusters, and common sources.",
      "inputTypes": ["image"]},
     {"id": "video-investigation", "title": "Video Investigation",
         "endpoint": "/api/x402/video-investigation", "priceUsdc": VIDEO_INVESTIGATION_PRICE_USDC,

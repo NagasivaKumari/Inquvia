@@ -20,6 +20,7 @@ from ..libraries.analyze import (
     read_stored_file_base64,
     run_ai_ocr,
 )
+from ..libraries import image_investigation_helpers as img_inv_helpers
 
 REGISTRY = {}
 
@@ -170,6 +171,18 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
         "missingInformation",
         "additionalSourcesNeeded",
         "objectCounts",
+        "mediaAuthenticity",
+        "contextualAccuracy",
+        "subObjectives",
+        "provenance",
+        "observedDirectly",
+        "externallyVerified",
+        "inferred",
+        "couldNotVerify",
+        "forensicFindings",
+        "investigationTrace",
+        "externalEvidence",
+        "evidenceAssessment",
     ):
         if raw.get(key) not in (None, "", []):
             result[key] = raw.get(key)
@@ -300,6 +313,15 @@ _IMAGE_EVIDENCE_RULES = (
     "   Do NOT use 'uncertain' as a generic fallback. Do NOT force every investigation into 'answered'.\n"
     "8. CROSS-CHECK: Before returning your answer, verify every factual statement against the "
     "evidence. Remove or qualify any statement not traceable to acquired evidence.\n"
+    "9. EXTERNAL EVIDENCE HONESTY: If reverse-image or authoritative web search evidence says "
+    "'not provisioned', 'no matches', or 'no results', you MUST NOT claim that external sources "
+    "were verified, cross-checked, or consulted. Say explicitly: 'No independent external "
+    "evidence was acquired.' Never write 'no material contradictions across verified sources' "
+    "when no external sources were acquired.\n"
+    "10. MISSING METADATA IS NOT FAKE: Absent EXIF/GPS/editor tags is common after social-media "
+    "uploads and is NOT evidence of forgery. State it as a fact, not an authenticity signal.\n"
+    "11. IMAGE vs CONTEXT: A genuine file can carry a false caption. Report mediaAuthenticity "
+    "and contextualAccuracy separately.\n"
 )
 
 # Generic object-counting / distinct-object rules for image questions. These
@@ -387,8 +409,16 @@ async def _image_analyzer(inv, evidence):
     the question, evidence is evaluated per sub-objective, and the final answer
     is cross-checked against the evidence before returning.
     """
+    from ..libraries import image_medical
+
+    medical_block = ""
+    if inv.get("medicalInvestigation") or image_medical.is_medical_question(inv.get("question") or ""):
+        medical_block = (
+            image_medical.MEDICAL_DISCLAIMER + "\n"
+            "Do NOT provide medical diagnosis. Limit findings to generic file/visual observations.\n\n"
+        )
     system_prompt = (
-        _QUESTION_RULE + _IMAGE_EVIDENCE_RULES + _IMAGE_COUNTING_RULES +
+        _QUESTION_RULE + _IMAGE_EVIDENCE_RULES + _IMAGE_COUNTING_RULES + medical_block +
         "You are Inquvia's image analyst. Answer the user's question by analyzing the provided "
         "image(s) and any acquired evidence. Apply the EVIDENCE GROUNDING RULES strictly.\n\n"
         "PROCESS (follow in order):\n"
@@ -398,32 +428,28 @@ async def _image_analyzer(inv, evidence):
         "   a) Answerable from direct visual observation\n"
         "   b) Answerable by inference from visual evidence (label as inference)\n"
         "   c) Requires external evidence not available from the image alone\n"
-        "3. ANSWER each sub-objective independently using the appropriate evidence level.\n"
-        "4. If any sub-objective requires counting a category of objects, run the OBJECT "
-        "COUNTING RULES and record the per-instance enumeration in 'objectCounts'.\n"
-        "5. CROSS-CHECK: Before finalizing, verify every factual statement in your answer "
-        "against the evidence. Detect unsupported statements and remove or qualify them. "
-        "Detect contradictions between your answer and the evidence. For every count, the "
-        "number in your answer must match the instances enumerated in 'objectCounts'.\n"
-        "6. SYNTHESIZE: Combine sub-objective results into a coherent overall answer. "
-        "Do not let success on one sub-objective mask failure on another.\n"
-        "7. ASSIGN evidenceSignals for each acquired evidence item based on what it actually supports.\n"
-        "8. SET confidence to reflect the weakest sub-objective.\n\n"
+        "3. EVIDENCE-DRIVEN ANALYSIS (use ONLY checks found in ACQUIRED EVIDENCE):\n"
+        "   - METADATA: ('Image metadata' evidence).\n"
+        "   - FORENSICS: ('Image manipulation', 'AI-generation detection' evidence). Report observed numbers.\n"
+        "   - PROVENANCE/SEARCH: ('Reverse-image search', 'Authoritative web source search' evidence). Use for earliest-source dating and context verification.\n"
+        "   - SPECIALIZED: ('Privacy/Safety', 'Commercial', 'Document', 'Scientific', 'Geospatial' evidence).\n"
+        "4. ANSWER each sub-objective independently using the appropriate evidence level.\n"
+        "5. If any sub-objective requires counting a category of objects, run the OBJECT COUNTING RULES and record in 'objectCounts'.\n"
+        "6. CROSS-CHECK: Verify every factual statement in your answer against the evidence. Detect unsupported statements and remove or qualify them.\n"
+        "7. SYNTHESIZE: Combine sub-objective results into a coherent overall answer.\n"
+        "8. DISTINGUISH VERDICTS: Distinguish 'Media Authenticity' (file genuineness) from 'Contextual Accuracy' (content truthfulness). If external sources were NOT acquired, explicitly state: 'No independent external evidence was acquired. This assessment is limited to the submitted image and internal file analysis.'\n"
+        "9. ASSIGN evidenceSignals for each acquired evidence item based on what it actually supports.\n"
+        "10. SET confidence to reflect the weakest sub-objective.\n\n"
         "Return ONLY JSON with this exact schema:\n"
-        "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|"
-        "'insufficient_evidence'|'inconclusive', "
+        "{ conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', "
         "confidence: number 0-100, "
-        "answer: string (direct answer to the user's question, or explicit insufficiency statement), "
-        "assessmentReasoning: string (explain sub-objective decomposition and evidence used), "
-        "subObjectives: [{objective: string, status: 'answered'|'inconclusive'|'insufficient_evidence', "
-        "evidenceLevel: 'observed'|'inferred'|'external_required', finding: string}], "
-        "objectCounts (only when the question asks for a count): "
-        "[{category: string, count: number|null, countCertain: boolean, "
-        "instances: [{id: string, description: string, location: string, "
-        "visibility: 'fully_visible'|'partially_visible'}], uncertainty: string}], "
-        "findings: string[], contradictions: string[], limitations: string[], "
-        "uncertainty: string (specific reason if uncertain, empty string if not), "
-        "sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
+        "answer: string, assessmentReasoning: string, "
+        "mediaAuthenticity: {verdict: 'authentic'|'manipulated'|'ai_generated'|'unknown', reasoning: string}, "
+        "contextualAccuracy: {verdict: 'accurate'|'misleading'|'false'|'unknown', reasoning: string}, "
+        "forensicFindings: {visualObservations: string[], externallyVerifiedFacts: string[], inferences: string[], couldNotVerify: string[], contradictions: string[]}, "
+        "subObjectives: [{objective: string, status: 'answered'|'inconclusive'|'insufficient_evidence', evidenceLevel: 'observed'|'inferred'|'external_required', finding: string}], "
+        "objectCounts: [{category: string, count: number|null, countCertain: boolean, instances: [{id: string, description: string, location: string, visibility: 'fully_visible'|'partially_visible'}], uncertainty: string}], "
+        "limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
         "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }"
     )
     images = [i for i in (inv.get("inputs") or []) if i.get("type") == "image"]
@@ -447,6 +473,8 @@ async def _image_analyzer(inv, evidence):
             "confidence": 0,
             "answer": f"Unable to analyze image content: the following image file(s) could not be accessed from storage: {', '.join(missing_images)}",
             "assessmentReasoning": "Visual analysis requires direct access to the submitted image bytes. File retrieval from storage failed, so no visual observations could be made.",
+            "mediaAuthenticity": {"verdict": "unknown", "reasoning": "Could not access image."},
+            "contextualAccuracy": {"verdict": "unknown", "reasoning": "Could not access image."},
             "subObjectives": [],
             "findings": [],
             "contradictions": [],
@@ -462,6 +490,8 @@ async def _image_analyzer(inv, evidence):
             "confidence": 0,
             "answer": "No image was submitted for analysis.",
             "assessmentReasoning": "The investigation requires an image input, but none was provided.",
+            "mediaAuthenticity": {"verdict": "unknown", "reasoning": "No image submitted."},
+            "contextualAccuracy": {"verdict": "unknown", "reasoning": "No image submitted."},
             "subObjectives": [],
             "findings": [],
             "contradictions": [],
@@ -480,6 +510,7 @@ async def _image_analyzer(inv, evidence):
         result["objectCounts"] = counted
         if count_notes:
             result["limitations"] = (result.get("limitations") or []) + count_notes
+    result = img_inv_helpers.finalize_image_investigation(inv, evidence, result)
     # Persist sub-objectives so the evidence graph can use them
     raw_sub = result.pop("subObjectives", None)
     if raw_sub and isinstance(raw_sub, list):
@@ -493,6 +524,34 @@ async def _video_analyzer(inv, evidence):
         "using ONLY the provided evidence (file-level signals, timestamped frames with "
         "visual observations, audio transcript with segment timestamps, and any acquired "
         "evidence). Do not use internal knowledge to fill gaps.\n\n"
+        "FIRST, classify the user's question into its category, then answer using ONLY "
+        "the evidence that category depends on (categories generalize; never rely on a "
+        "specific wording):\n"
+        "- SCENE/EVENT SUMMARY ('what is happening', describe the video): scenes, objects, "
+        "actions, people, sequence across frames + transcript.\n"
+        "- OBJECT/ENTITY ID ('what car', 'what object', identify a thing): frames showing the "
+        "object + visual features; name it only if a frame actually shows it.\n"
+        "- SPEECH CONTENT ('what does the person say'): the transcript and its segments only. "
+        "Quote verbatim.\n"
+        "- VISIBLE TEXT/OCR ('what is written on the board', 'read the text'): frame "
+        "observations that mention readable text; transcribe only text that is visible.\n"
+        "- COUNTING/TRACKING ('how many people', 'did the person enter'): count/track people "
+        "across multiple timestamped frames; give the timestamps used.\n"
+        "- TEMPORAL ORDER ('what happened first'): use frame timestamps + transcript segment "
+        "order to establish the sequence.\n"
+        "- AUDIO/VIDEO SYNC: use transcript segment timing against frame timestamps; flag "
+        "only observable mismatches.\n"
+        "- MANIPULATION/EDITS ('was anything edited out'): frame continuity + forensic signals.\n"
+        "- AI-GENERATED/DEEPFAKE: frames, motion, faces, audio and forensic signals together.\n"
+        "- LOCATION ('where/which location'): visible signs, landmarks, architecture, environment.\n"
+        "- DATE/TIME ('which date'): on-screen text, screens, embedded timestamps, metadata, clues.\n"
+        "- DOCUMENT IN VIDEO: extract the document's content from the relevant frames (OCR).\n"
+        "- PRODUCT ('which product'): frames showing the product + visible features.\n"
+        "- TWO-VIDEO COMPARISON ('are these the same', 'what changed'): compare frames, audio, "
+        "timing and metadata across the submitted videos.\n"
+        "- CLAIM VERIFICATION ('is the claim true'): FIRST determine what the video itself "
+        "shows/says from the evidence; only then, if external verification is required, note "
+        "that it requires outside evidence you do not have.\n\n"
         "Read the user's question carefully and determine what kind of answer is needed:\n"
         "- If the question asks to EXTRACT, TRANSCRIBE, DESCRIBE, SUMMARIZE, or LIST "
         "content: provide a direct answer from the evidence. Use conclusion 'answered' "
@@ -512,11 +571,15 @@ async def _video_analyzer(inv, evidence):
         "confidence: number 0-100, "
         "answer: string (your direct answer to the user's question, or explicit statement that evidence cannot answer it), "
         "assessmentReasoning: string (explain how the evidence supports your answer, distinguishing spoken words from visual observations from inference), "
+        "questionCategory: string (one of: scene_summary|object_entity|speech_content|visible_text|count_track|temporal_order|audio_video_sync|manipulation|ai_generated|location|date_time|document|product|comparison|claim_verification), "
         "findings: string[], contradictions: string[], limitations: string[], "
         "uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', "
         "evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }"
     )
     videos = [i for i in (inv.get("inputs") or []) if i.get("type") == "video"]
+    from ..libraries.planner import video_question_needs_frames
+    question = (inv.get("question") or "").strip()
+    needs_frames = video_question_needs_frames(question)
     parts = []
     for input_ in videos:
         label = input_.get("content") or input_.get("fileName") or "video"
@@ -534,16 +597,20 @@ async def _video_analyzer(inv, evidence):
             if extract.get("frameObservations") is None and extract.get("state") == "ok":
                 await checks_lib._observe_frames(input_, label, extract)
                 observations = checks_lib.frame_observations_by_time(extract)
+            if needs_frames:
+                for frame in frames:
+                    raw = frame_payload_bytes(frame)
+                    if raw:
+                        parts.append({
+                            "file": {
+                                "mimeType": "image/jpeg",
+                                "base64": base64.b64encode(raw).decode("ascii"),
+                            }
+                        })
+                        parts.append({"text": f"FRAME at t={frame['timestamp']:.2f}s"})
+            # Observation text is cheap and always useful, even for
+            # speech-only questions; only the binary frames are omitted.
             for frame in frames:
-                raw = frame_payload_bytes(frame)
-                if raw:
-                    parts.append({
-                        "file": {
-                            "mimeType": "image/jpeg",
-                            "base64": base64.b64encode(raw).decode("ascii"),
-                        }
-                    })
-                    parts.append({"text": f"FRAME at t={frame['timestamp']:.2f}s"})
                 obs = observations.get(round(frame["timestamp"], 2))
                 if obs and obs.get("visibleContent"):
                     parts.append({
@@ -577,7 +644,7 @@ async def _video_analyzer(inv, evidence):
             parts.append({"text": f"VIDEO_CONTEXT: {context}"})
     if len(videos) > 1:
         parts.append({"text": f"NOTE: {len(videos)} videos were submitted -- compare them against each other."})
-    parts.append({"text": f"USER_QUESTION: {inv.get('question')}"})
+    parts.append({"text": f"USER_QUESTION: {question}"})
     return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
 
 
@@ -1021,6 +1088,7 @@ def json_dumps(obj):
 
 register_analyzer("claim-investigation", _claim_analyzer)
 register_analyzer("image-investigation", _image_analyzer)
+register_analyzer("image-batch-investigation", _image_analyzer)
 register_analyzer("video-investigation", _video_analyzer)
 register_analyzer("document-investigation", _document_analyzer)
 register_analyzer("source-investigation", _source_analyzer)
