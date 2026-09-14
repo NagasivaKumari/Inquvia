@@ -74,6 +74,7 @@ def start_capability_investigation(input_: dict) -> dict:
 def plan_capability(inv: dict, requirements: list[dict]) -> dict:
     inv2 = db.get_investigation(inv["id"])
     inv2["status"] = "planning"
+    _set_stage(inv2, "created", "completed")
     _set_stage(inv2, "planning", "active")
     db.save_investigation(inv2)
     inv2["evidenceRequirements"] = requirements or []
@@ -258,6 +259,8 @@ async def analyze_investigation(investigation_id: str) -> dict:
         raise ValueError("Investigation not found")
 
     _set_stage(inv, "discovering", "completed")
+    _set_stage(inv, "awaiting_payment", "completed")
+    _set_stage(inv, "payment_pending", "completed")
     _set_stage(inv, "evidence_requested", "completed")
     _set_stage(inv, "evidence_received", "completed")
     _emit(inv, "internal_analysis_started", "Analyzing submitted data with Inquvia tools")

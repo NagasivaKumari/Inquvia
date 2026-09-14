@@ -489,7 +489,10 @@ export default function InvestigationPage() {
             Reinvestigate
           </Link>
         )}
-        <Link href="/investigate" className="btn btn-secondary">
+        <Link
+          href={inv.capability ? `/investigate?cap=${inv.capability}` : "/investigate"}
+          className="btn btn-secondary"
+        >
           New Investigation
         </Link>
       </div>
