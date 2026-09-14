@@ -15,6 +15,7 @@ def redundant_evidence_ids(inv: dict, evidence: list[dict]) -> set:
 
 
 def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
+    """Shared analysis building blocks (mirrors investigation/analyze.ts)."""
     # De-weight duplicate/dependent evidence: it stays in the trail but is not
     # counted as independent confirmation (see redundant_evidence_ids).
     redundant = redundant_evidence_ids(inv, evidence)
@@ -55,12 +56,31 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     # Use actual evidence service confidence if available (over non-redundant
     # items only, so copied/dependent evidence can't inflate the answer)
     item_confidences = [float(e.get("confidence", 0)) for e in effective if e.get("confidence") is not None and float(e.get("confidence", 0)) > 0]
-    if item_confidences:
+    
+    # --- AUGMENTED CALIBRATION ---
+    # Weigh directness and reliability (Additive enhancement)
+    rel_weights = {"high": 1.0, "moderate": 0.7, "low": 0.3, "unknown": 0.5}
+    direct_weights = {"direct": 1.0, "indirect": 0.5}
+    
+    calibrated_confidences = []
+    for e in effective:
+        meta = e.get("metadata") or {}
+        # Service-provided metadata vs heuristic fallback
+        rel = rel_weights.get(meta.get("reliability", "unknown"), 0.5)
+        direc = direct_weights.get(meta.get("directness", "indirect"), 0.5)
+        # Combine service confidence with calibration
+        base = float(e.get("confidence") or 50) / 100
+        calibrated_confidences.append(base * rel * direc * 100)
+    
+    if calibrated_confidences:
+        confidence = round(sum(calibrated_confidences) / len(calibrated_confidences))
+    elif item_confidences:
         confidence = round(sum(item_confidences) / len(item_confidences))
     elif supporting:
         confidence = round(max(0, min(100, (len(supporting) / max(1, len(effective))) * 100)))
     else:
         confidence = 0
+    # -----------------------------
 
     # Collect findings across all observations and facts (the full trail, including
     # de-weighted items)
@@ -68,20 +88,23 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
     for e in evidence:
         src = e.get("source", "Evidence Service")
         meta = e.get("metadata") or {}
+        
+        # --- AUGMENTED FINDINGS ---
+        passage = meta.get("passage") or e.get("finding", "")
+        reference = meta.get("reference") or "N/A"
+        finding_entry = f"{src}: {passage} [{reference}]"
+        
         obs = meta.get("observations") or []
         facts = meta.get("facts") or []
-        if obs:
-            for o in obs:
-                t = o.get("text") if isinstance(o, dict) else str(o)
-                if t and f"{src}: {t}" not in findings:
-                    findings.append(f"{src}: {t}")
-        elif facts:
-            for f in facts:
-                t = f.get("text") if isinstance(f, dict) else str(f)
+        if obs or facts:
+            for item in (obs + facts):
+                t = item.get("text") if isinstance(item, dict) else str(item)
                 if t and f"{src}: {t}" not in findings:
                     findings.append(f"{src}: {t}")
         else:
-            findings.append(f"{src}: {e.get('finding', '')}")
+            if finding_entry not in findings:
+                findings.append(finding_entry)
+        # --------------------------
 
     # Collect limitations from evidence items
     limitations = []

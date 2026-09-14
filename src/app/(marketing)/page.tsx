@@ -229,7 +229,7 @@ function HomePageContent() {
             <div className={styles.heroBadges}>
               <div className={styles.heroBadgeItem}>
                 <span className={styles.heroBadgeIcon}>✓</span>
-                <span>$0.50 per investigation</span>
+                <span>{prices["claim-investigation"] ? `$${prices["claim-investigation"]} per investigation` : "Pay per investigation"}</span>
               </div>
               <div className={styles.heroBadgeItem}>
                 <span className={styles.heroBadgeIcon}>⚡</span>

@@ -210,7 +210,9 @@ function InvestigateForm() {
 
   useEffect(() => {
     const onWalletSigning = () => {
-      setPaymentStatus("Pera approval requested — approve the $0.50 USDC payment in the Pera window…");
+      const cap = capabilities?.find((c) => c.path === detectedCap);
+      const amount = price ?? (cap ? `$${cap.priceUsdc} USDC` : "USDC");
+      setPaymentStatus(`Pera approval requested — approve the ${amount} payment in the Pera window…`);
     };
     const onDiagnostic = (e: Event) => {
       const d = (e as CustomEvent<{ step: string; connected?: boolean; message?: string }>)?.detail;
@@ -540,7 +542,7 @@ function InvestigateForm() {
           <div className={styles.paymentStatus} role="status">
             <strong>Wallet approval required</strong>
             <span>{paymentStatus}</span>
-            <span className={styles.paymentAmount}>{price ?? "$0.50 USDC"}</span>
+            <span className={styles.paymentAmount}>{price}</span>
           </div>
         )}
       </form>
