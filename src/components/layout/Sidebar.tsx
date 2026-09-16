@@ -37,6 +37,7 @@ export function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function Sidebar({
       .then((r) => r.json())
       .then((d) => {
         setUser(d.user);
+        setIsAdmin(Boolean(d.isAdmin));
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
@@ -112,6 +114,18 @@ export function Sidebar({
           </span>
           Settings
         </Link>
+        {isAdmin && (
+          <Link
+            href="/admin"
+            className={`${styles.navLink} ${isActive("/admin") ? styles.active : ""}`}
+            onClick={onNavigate}
+          >
+            <span className={styles.navIcon}>
+              <NavIcon name="admin" />
+            </span>
+            Admin
+          </Link>
+        )}
       </nav>
 
       <div className={styles.userBox}>

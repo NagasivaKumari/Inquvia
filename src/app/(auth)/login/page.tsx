@@ -7,6 +7,12 @@ import { API_BASE } from "@/lib/config";
 import { invalidateAuthCache } from "@/lib/api";
 import styles from "../auth.module.css";
 
+function base64(u8: Uint8Array): string {
+  let bin = "";
+  u8.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+}
+
 /** Same-origin path after login. Hard-navigate so the session cookie is sent. */
 function postLoginPath(raw: string | null): string {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("://")) {
@@ -38,6 +44,8 @@ function LoginForm() {
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletError, setWalletError] = useState("");
 
   // If the user already has an active session, redirect to the dashboard immediately
   useEffect(() => {
@@ -86,6 +94,44 @@ function LoginForm() {
       console.error("handleSubmit: error occurred", err);
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
+    }
+  };
+
+  const handleAdminWallet = async () => {
+    setWalletLoading(true);
+    setWalletError("");
+    try {
+      const { connectPera, signChallenge } = await import("@/lib/wallet/pera");
+      const w = await connectPera();
+      const message = `Admin sign-in to Inquvia at ${Date.now()}`;
+      const { signature, authenticatorData, message: signedMessage } = await signChallenge(
+        w.address,
+        message,
+        window.location.origin
+      );
+      const res = await fetch(`${API_BASE}/api/auth/wallet-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({
+          providerId: "pera",
+          address: w.address,
+          message: signedMessage,
+          authenticatorData: base64(authenticatorData),
+          signatureB64: base64(signature),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Admin wallet login failed");
+
+      localStorage.setItem("token", data.token);
+      invalidateAuthCache();
+      window.location.href = "/admin";
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : "Admin wallet login failed");
+    } finally {
+      setWalletLoading(false);
     }
   };
 
@@ -169,6 +215,20 @@ function LoginForm() {
       <p className={styles.footer}>
         Don&apos;t have an account? <Link href="/signup">Register</Link>
       </p>
+
+      <div className={styles.orDivider}>
+        <span>Admin access</span>
+      </div>
+
+      <div className={styles.formBox}>
+        {walletError && <div className={styles.error} role="alert">{walletError}</div>}
+        <button type="button" className="btn btn-secondary btn-lg" disabled={walletLoading} onClick={handleAdminWallet}>
+          {walletLoading ? "Connecting wallet…" : "Sign in with wallet"}
+        </button>
+        <p className={styles.footer}>
+          Connect a Pera wallet authorized on the server to open the admin dashboard.
+        </p>
+      </div>
     </>
   );
 }

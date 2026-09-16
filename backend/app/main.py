@@ -18,6 +18,7 @@ from . import config, db
 from .auth import (
     signup,
     login,
+    login_or_create_admin,
     create_jwt,
     verify_jwt,
     to_public_user,
@@ -424,6 +425,49 @@ async def api_signup(request: Request):
     return JSONResponse({"user": user}, status_code=201)
 
 
+@app.post("/api/auth/wallet-login")
+async def api_wallet_login(request: Request):
+    """Admin sign-in: connect a Pera wallet that is listed in ADMIN_WALLETS.
+
+    The wallet proves control via an ARC-60 AUTH signature (same challenge as
+    /api/wallet/connect, which regular users use to attach a wallet to their
+    account). No email/password involved.
+    """
+    body = await _json(request)
+    address = ((body or {}).get("address") or "").strip()
+    message = (body or {}).get("message") or ""
+    signature = (body or {}).get("signatureB64") or ""
+    auth_data = (body or {}).get("authenticatorData") or ""
+
+    import re as _re
+    if not _re.fullmatch(r"[A-Z2-7]{58}", address):
+        return JSONResponse({"error": "Invalid Algorand address"}, status_code=400)
+    if address not in config.ADMIN_WALLETS:
+        return JSONResponse({"error": "This wallet is not authorized to access the admin dashboard."}, status_code=403)
+    if not message or not signature or not auth_data:
+        return JSONResponse({"error": "Missing signed challenge. Real wallet signing required."}, status_code=400)
+
+    import base64 as _b64
+    data_b64 = _b64.b64encode(message.encode("utf-8")).decode()
+    if not await _verify_algorand_signature(address, data_b64, auth_data, signature):
+        return JSONResponse({"error": "Signature verification failed"}, status_code=400)
+
+    admin = login_or_create_admin(address)
+    token = create_jwt(admin["id"])
+    session = create_user_session(admin["id"], True)
+    resp = JSONResponse({"user": to_public_user(admin), "token": token, "isAdmin": True}, status_code=200)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        session["id"],
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=int(SESSION_DURATION_MS / 1000),
+        path="/",
+    )
+    return resp
+
+
 @app.post("/api/auth/login")
 async def api_login(request: Request):
     client_ip = request.client.host if request.client else "unknown"
@@ -459,7 +503,7 @@ async def api_login(request: Request):
 async def api_me(request: Request):
     user = _resolve_user(request)
     return JSONResponse(
-        {"user": to_public_user(user) if user else None},
+        {"user": to_public_user(user) if user else None, "isAdmin": _is_admin(user)},
         headers={"Cache-Control": "no-store"},
     )
 
@@ -937,6 +981,38 @@ def _b32decode_algorand(addr: str) -> bytes | None:
 @app.get("/api/wallet/providers")
 async def api_wallet_providers():
     return JSONResponse({"wallets": WALLET_PROVIDERS})
+
+
+def _is_admin(user: dict | None) -> bool:
+    if not user:
+        return False
+    email = (user.get("email") or "").strip().lower()
+    wallet = (user.get("walletAddress") or "").strip()
+    return email in config.ADMIN_EMAILS or wallet in config.ADMIN_WALLETS
+
+
+@app.get("/api/admin/users")
+async def api_admin_users(request: Request):
+    user = _resolve_user(request)
+    if not _is_admin(user):
+        return _unauthorized()
+    stats = db.get_user_activity_stats()
+    users = []
+    for u in db.list_users():
+        s = stats.get(u.get("id")) or {}
+        users.append({
+            "id": u.get("id"),
+            "name": u.get("name"),
+            "email": u.get("email"),
+            "walletAddress": u.get("walletAddress"),
+            "walletNetwork": u.get("walletNetwork"),
+            "createdAt": u.get("createdAt"),
+            "investigationCount": s.get("investigationCount", 0),
+            "lastSeenAt": s.get("lastSeenAt"),
+            "totalSpend": s.get("totalSpend", 0.0),
+        })
+    users.sort(key=lambda x: x["lastSeenAt"] or "", reverse=True)
+    return JSONResponse({"users": users})
 
 
 @app.post("/api/wallet/connect")

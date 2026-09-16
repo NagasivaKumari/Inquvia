@@ -18,6 +18,20 @@ def _env_num(name: str) -> float:
         return 0.0
 
 
+# Comma-separated emails allowed to access the admin dashboard.
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.getenv("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
+
+# Comma-separated Algorand wallet addresses allowed to sign in as admin via Pera.
+ADMIN_WALLETS = {
+    a.strip()
+    for a in os.getenv("ADMIN_WALLETS", "").split(",")
+    if a.strip()
+}
+
 APP_NAME = os.getenv("APP_NAME", "Inquvia")
 TAGLINE = os.getenv("TAGLINE", "Investigate before you decide.")
 SUBHEADLINE = os.getenv(

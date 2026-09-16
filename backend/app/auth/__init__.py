@@ -98,6 +98,24 @@ def login(input_: dict) -> dict:
     return {"ok": True, "data": user}
 
 
+def login_or_create_admin(address: str) -> dict:
+    """Return the admin user for a verified admin wallet, creating it on first login."""
+    user = db.get_user_by_wallet(address)
+    if user:
+        return user
+    user = {
+        "id": f"usr_{_nanoid(12)}",
+        "name": "Admin",
+        "walletAddress": address,
+        "walletNetwork": config.ALGORAND_NETWORK,
+        "createdAt": db.utcnow_iso(),
+        "updatedAt": db.utcnow_iso(),
+        "paymentPrefs": dict(config.DEFAULT_PAYMENT_PREFS),
+    }
+    db.create_user(user)
+    return user
+
+
 def create_user_session(user_id: str, remember: bool) -> dict:
     db.delete_expired_sessions()
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)

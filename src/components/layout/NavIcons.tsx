@@ -56,6 +56,13 @@ export function NavIcon({ name }: { name: string }) {
           <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
         </svg>
       );
+    case "admin":
+      return (
+        <svg {...props}>
+          <path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z" />
+          <path d="M9 12l2 2 4-4" />
+        </svg>
+      );
     case "facilitator":
       return (
         <svg {...props}>

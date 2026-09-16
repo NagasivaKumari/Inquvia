@@ -98,6 +98,12 @@ def get_user_by_email(email: str) -> dict | None:
     return get_collection("users").find_one({"email": email})
 
 
+def get_user_by_wallet(address: str) -> dict | None:
+    if not address:
+        return None
+    return get_collection("users").find_one({"walletAddress": address})
+
+
 def update_user(user_id: str, updates: dict) -> dict | None:
     if not user_id:
         return None
@@ -124,6 +130,26 @@ def update_user(user_id: str, updates: dict) -> dict | None:
 
 def update_user_prefs(user_id: str, prefs: dict) -> dict | None:
     return update_user(user_id, {"paymentPrefs": prefs})
+
+
+def list_users(limit: int = 500) -> list[dict]:
+    return list(get_collection("users").find().sort("createdAt", -1).limit(limit))
+
+
+def get_user_activity_stats() -> dict[str, dict]:
+    """Per-user usage stats: investigation count, last activity, settled spend."""
+    stats: dict[str, dict] = {}
+    for inv in get_collection("investigations").find({}, {"userId": 1, "createdAt": 1}):
+        uid = str(inv.get("userId"))
+        s = stats.setdefault(uid, {"investigationCount": 0, "lastSeenAt": None, "totalSpend": 0.0})
+        s["investigationCount"] += 1
+        created = inv.get("createdAt")
+        if created and (not s["lastSeenAt"] or created > s["lastSeenAt"]):
+            s["lastSeenAt"] = created
+    for p in get_collection("payments").find({"status": "settled"}, {"userId": 1, "amount": 1}):
+        s = stats.setdefault(str(p.get("userId")), {"investigationCount": 0, "lastSeenAt": None, "totalSpend": 0.0})
+        s["totalSpend"] = round(s["totalSpend"] + float(p.get("amount") or 0), 6)
+    return stats
 
 
 # ── Investigations ──
