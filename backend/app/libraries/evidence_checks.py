@@ -35,6 +35,7 @@ from ..libraries import image_quality
 from ..libraries import image_medical
 from ..libraries import image_source_search
 from ..libraries import reverse_image
+from ..libraries import audio_forensics
 from ..libraries.video_processor import (
     VideoProcessor,
     artifacts_dir,
@@ -52,18 +53,26 @@ _AUTHENTICITY_REASONING_PROMPT = (
     "You are an evidence reasoning engine. Analyze ONLY the structured forensic evidence supplied to you below. "
     "Do not claim that a check was performed unless the evidence contains a 'COMPLETED' result. "
     "Distinguish direct observations, forensic indicators, provenance evidence, external verification, inference, and unknowns. "
-    "Produce a final assessment of authenticity and explain your reasoning based strictly on the provided data. "
+    "Every factual claim made MUST be cited with its exact 'sourceLocator' (section, table, page, anchor). "
+    "If a source's extraction status is 'PARTIAL', reduce your confidence in claims derived from it and explicitly mention this limitation in the reasoning. "
+    "Produce a final assessment and explain your reasoning based strictly on the provided data. "
     "Return JSON: {"
     '"conclusion": "string", "confidence": number, '
     '"directObservations": "string", "forensicIndicators": ["string"], '
     '"provenance": "string", "externalVerification": "string", '
     '"contradictions": ["string"], "evidenceGaps": ["string"], '
-    '"evidenceHierarchy": [{"type": "string", "content": "string"}], '
+    '"evidenceHierarchy": [{"type": "string", "content": "string", "sourceLocator": object, "calculation": object}], '
     '"reasoning": "string"}'
 )
 
 from ..libraries.evidence_registry import EvidenceRegistry
 from ..libraries.evidence_types import CheckStatus
+from ..libraries.checks.image_metadata import ImageMetadataCheck
+from ..libraries.checks.image_manipulation import ImageManipulationCheck
+
+# Initialize Registry
+EvidenceRegistry.register("image_metadata", ImageMetadataCheck())
+EvidenceRegistry.register("image_manipulation", ImageManipulationCheck())
 
 # ... (rest of imports)
 
@@ -326,7 +335,7 @@ async def _gemini_multimodal_transcribe(data: bytes) -> str | None:
         raw = await ai_lib.call_ai_with_parts(system, [
             {"text": "Transcribe this audio track verbatim."},
             {"file": {"mimeType": "audio/wav", "base64": base64.b64encode(data).decode("ascii")}},
-        ], temperature=0.2, text_fallback=False)
+        ], temperature=0.2, text_fallback=False, task="transcribe")
         obj = ai_lib.parse_ai_json(raw) or {}
         text = (obj.get("transcript") or "").strip()
         return text or None
@@ -506,7 +515,7 @@ async def _observe_frames(inp: dict, label: str, extract: dict, question: str = 
             parts.append({"text": f"FRAME at t={f['timestamp']:.2f}s"})
     observations = {}
     if parts:
-        text = await ai_lib.call_ai_with_parts(prompt, parts, text_fallback=False)
+        text = await ai_lib.call_ai_with_parts(prompt, parts, text_fallback=False, task="video")
         payload = ai_lib.parse_ai_json(text)
         for item in (payload or {}).get("frames") or []:
             if not isinstance(item, dict) or not isinstance(item.get("timestamp"), (int, float)):
@@ -949,14 +958,16 @@ async def _url_findings(inv: dict) -> list[dict]:
         else:
             signal = "uncertain"
 
-        # Determine evidence status based on retrieval and rendering
         evidence_status = "retrieved"
+        extraction_status = ExtractionStatus.FULL
         if blocked or not is_online:
             evidence_status = "retrieval_failed"
         elif quality.get("completeness") == "empty":
             evidence_status = "content_unavailable"
+            extraction_status = ExtractionStatus.EMPTY
         elif quality.get("completeness") in ("partial", "sparse"):
             evidence_status = "content_incomplete"
+            extraction_status = ExtractionStatus.PARTIAL
 
         records.append({
             "finding": ", ".join(bits),
@@ -973,13 +984,13 @@ async def _url_findings(inv: dict) -> list[dict]:
                 "blocked": blocked,
                 "evidenceAvailable": is_online and not blocked,
                 "evidenceStatus": evidence_status,
+                "extractionStatus": extraction_status,
                 "renderMode": render_mode,
                 "renderAttempted": inspection.get("renderAttempted", False),
                 "renderError": inspection.get("renderError"),
                 "contentQuality": quality,
                 "retrievalTimestamp": inspection.get("retrievalTimestamp"),
                 "extractionTimestamp": inspection.get("extractionTimestamp"),
-                # Full extracted text so the analyzer can quote exact values.
                 "fullText": (inspection.get("fullText") or "")[:60000],
                 "bodySnippet": inspection.get("bodySnippet") or "",
                 "headings": inspection.get("headings") or [],
@@ -1154,7 +1165,7 @@ async def _extract_image_text(data: bytes, mime: str | None) -> str:
             {"file": {"mimeType": mime or "image/jpeg",
                        "base64": base64.b64encode(data).decode("ascii")}},
         ]
-        raw = await ai_lib.call_ai_with_parts(prompt, parts)
+        raw = await ai_lib.call_ai_with_parts(prompt, parts, task="document")
         payload = ai_lib.parse_ai_json(raw)
         if isinstance(payload, dict) and isinstance(payload.get("text"), str):
             return payload["text"].strip()
@@ -1173,7 +1184,7 @@ async def _vision_observation(data: bytes, mime: str | None, system: str, inp: d
     try:
         parts = [{"file": {"mimeType": mime or "image/jpeg",
                            "base64": base64.b64encode(data).decode("ascii")}}]
-        raw = await ai_lib.call_ai_with_parts(system, parts)
+        raw = await ai_lib.call_ai_with_parts(system, parts, task="image")
         parsed = ai_lib.parse_ai_json(raw)
         if isinstance(parsed, dict):
             payload = parsed
@@ -1442,7 +1453,7 @@ async def _safety_analysis_findings(inv: dict) -> list[dict]:
             )
             parts = [{"file": {"mimeType": inp.get("mimeType") or "image/jpeg",
                                "base64": base64.b64encode(data).decode("ascii")}}]
-            raw = await ai_lib.call_ai_with_parts(prompt, parts)
+            raw = await ai_lib.call_ai_with_parts(prompt, parts, task="image")
             payload = ai_lib.parse_ai_json(raw) or {}
         except Exception:
             payload = {"severity": "unknown", "observations": ["Safety assessment unavailable"]}
@@ -1647,7 +1658,7 @@ async def _before_after_findings(inv: dict) -> list[dict]:
                     {"file": {"mimeType": b.get("mimeType") or "image/jpeg",
                               "base64": base64.b64encode(data_b).decode("ascii")}},
                     {"text": "Image B (after)"},
-                ])
+                ], task="image")
                 payload = ai_lib.parse_ai_json(raw) or {}
             except Exception:
                 payload = {}
@@ -1675,7 +1686,7 @@ async def _accessibility_description_findings(inv: dict) -> list[dict]:
             )
             parts = [{"file": {"mimeType": inp.get("mimeType") or "image/jpeg",
                                "base64": base64.b64encode(data).decode("ascii")}}]
-            raw = await ai_lib.call_ai_with_parts(prompt, parts)
+            raw = await ai_lib.call_ai_with_parts(prompt, parts, task="image")
             payload = ai_lib.parse_ai_json(raw) or {}
         except Exception:
             payload = {}
@@ -2313,6 +2324,10 @@ async def run_evidence_checks(inv: dict) -> dict:
             continue
         for rec in _normalize_records(records):
             finding = rec.get("finding") or ""
+            if not isinstance(finding, str):
+                # A check returned a structured object where text is expected;
+                # serialize it rather than crash downstream slicing it.
+                finding = json.dumps(finding, ensure_ascii=False)
             # Document page records carry the passage text as evidence; allow
             # them more room than a one-line media observation.
             limit = 12000 if (rec.get("metadata") or {}).get("page") else 2000

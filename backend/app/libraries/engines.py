@@ -7,6 +7,7 @@ import json
 from typing import List, Dict, Any, Optional
 
 from .ai import call_ai_with_parts, parse_ai_json
+from .training import call_ai_votes, few_shot_block
 
 class DuplicateDependencyEngine:
     """Detects when separate evidence derives from the same underlying source."""
@@ -54,7 +55,7 @@ class ContradictionEngine:
         )
         parts = [{"text": json.dumps(evidence)}]
         
-        raw_result = await call_ai_with_parts(system_prompt, parts)
+        raw_result = await call_ai_with_parts(system_prompt + few_shot_block("contradictions"), parts, task="contradictions")
         result = parse_ai_json(raw_result)
         
         return result if isinstance(result, list) else []
@@ -72,7 +73,7 @@ class GapsEngine:
         )
         parts = [{"text": f"Objectives: {json.dumps(objectives)}\n\nEvidence: {json.dumps(evidence)}"}]
         
-        raw_result = await call_ai_with_parts(system_prompt, parts)
+        raw_result = await call_ai_with_parts(system_prompt, parts, task="gaps")
         result = parse_ai_json(raw_result)
         
         return result if isinstance(result, list) else []
@@ -95,7 +96,9 @@ class ClaimVerificationGate:
         )
         parts = [{"text": f"Claim: {claim}\n\nEvidence: {json.dumps(evidence)}\n\nReasoning: {reasoning}"}]
         
-        raw_result = await call_ai_with_parts(system_prompt, parts)
+        raw_result = await call_ai_votes(
+            system_prompt + few_shot_block("verify"), parts, task="verify", key="verified"
+        )
         result = parse_ai_json(raw_result)
         
         return result if isinstance(result, dict) else {"verified": False, "unsupported_claims": ["Error verifying claims"], "confidence_score": 0.0}

@@ -11,9 +11,28 @@ class CheckStatus(str, Enum):
     SKIPPED = "SKIPPED"
     PENDING_MIGRATION = "PENDING_MIGRATION"
 
+class ExtractionStatus(str, Enum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+    EMPTY = "EMPTY"
+
+class SourceLocator(TypedDict, total=False):
+    section: Optional[str]
+    table: Optional[str]
+    page: Optional[int]
+    anchor: Optional[str]
+
+class Calculation(TypedDict):
+    values: Dict[str, float]
+    formula: str
+    result: float
+
 class EvidenceResult(TypedDict, total=False):
     checkId: str
     status: CheckStatus
+    extractionStatus: ExtractionStatus
+    sourceLocator: SourceLocator
+    calculation: Optional[Calculation]
     evidence: Dict[str, Any]
     findings: List[Dict[str, Any]]
     confidence: float
@@ -44,6 +63,8 @@ class EvidenceRecord:
     source: Dict[str, object]  # {"name": str, "url": str, "type": str, "verified": bool}
     confidence: int  # 0-100
     rationale: str
+    sourceLocator: Optional[SourceLocator] = None
+    calculation: Optional[Calculation] = None
     
     def to_dict(self) -> Dict:
         return {
@@ -51,5 +72,7 @@ class EvidenceRecord:
             "type": self.type,
             "source": self.source,
             "confidence": self.confidence,
-            "rationale": self.rationale
+            "rationale": self.rationale,
+            "sourceLocator": self.sourceLocator,
+            "calculation": self.calculation
         }

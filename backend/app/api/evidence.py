@@ -83,12 +83,13 @@ def _persist(request: Request, operation: str, inputs: dict, result: dict) -> di
 
 
 async def _ai_finding(kind: str, claim: str, parts: list[dict]) -> dict:
+    from ..libraries.training import few_shot_block
     prompt = (
         f"You are Inquvia's {kind} evidence analyst. Analyze only the supplied input. "
         "Return JSON with finding (string), observations (array of strings), facts (array of strings), "
         "confidence (0 to 1), and limitations (array of strings). Do not claim certainty."
-    )
-    raw = ai.parse_ai_json(await ai.call_ai_with_parts(prompt, [{"text": f"CLAIM: {claim}"}, *parts]))
+    ) + few_shot_block(kind)
+    raw = ai.parse_ai_json(await ai.call_ai_with_parts(prompt, [{"text": f"CLAIM: {claim}"}, *parts], task=kind))
     return raw if isinstance(raw, dict) else {}
 
 

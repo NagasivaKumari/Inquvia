@@ -297,7 +297,7 @@ async def run_ai_ocr(data: bytes, mime: str | None, pages: list[dict]) -> dict:
             "is blank, transcribe it as an empty string. "
             'Return ONLY JSON: {"pages": [{"page": <number>, "text": "<verbatim transcription>"}, ...]}'
         )
-        raw = await ai_lib.call_ai_with_parts(prompt, parts)
+        raw = await ai_lib.call_ai_with_parts(prompt, parts, task="document")
         payload = ai_lib.parse_ai_json(raw)
         out = {}
         for item in (payload or {}).get("pages") or []:

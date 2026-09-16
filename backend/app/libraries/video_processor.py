@@ -103,14 +103,21 @@ def _run(binary: str, args: list[str], timeout: float) -> subprocess.CompletedPr
 # ── pure planning helpers (unit-testable without binaries) ────────────────
 
 def plan_frames(duration: float, max_frames: int = None, min_interval: float = 1.0):
-    """Adaptive sampling: short videos get dense 1s sampling, long videos stay
-    even-and-sparse so the whole video is represented within max_frames."""
+    """Adaptive sampling: short videos get dense sampling (down to min_interval), 
+    long videos stay even-and-sparse so the whole video is represented within 
+    max_frames."""
     max_frames = max(1, int(max_frames or config.VIDEO_MAX_FRAMES))
     duration = max(float(duration or 0), 0.0)
     if duration <= 0:
         return min_interval, 0
-    interval = max(duration / max_frames, min_interval)
-    count = min(int(duration // interval) + 1, max_frames)
+    
+    # Allow full frame-by-frame if min_interval is 0
+    if min_interval <= 0:
+        interval = duration / max(1, max_frames - 1) if max_frames > 1 else duration
+        count = max_frames
+    else:
+        interval = max(duration / max_frames, min_interval)
+        count = min(int(duration // interval) + 1, max_frames)
     return interval, count
 
 
@@ -223,7 +230,8 @@ class VideoProcessor:
         }
 
     def extract_frames(self, source: str, out_dir: str, max_frames: int = None,
-                       duration: float | None = None, interval: float | None = None) -> list[dict]:
+                       duration: float | None = None, interval: float | None = None,
+                       high_density: bool = False) -> list[dict]:
         """Extract evenly-spaced key visual frames as downscaled JPEGs — one
         quick ffmpeg seek per frame. Seeking before -i skips straight to each
         planned timestamp instead of decoding the whole movie, so hour-long
@@ -239,7 +247,8 @@ class VideoProcessor:
             except Exception:
                 return []
         if interval is None:
-            interval, _ = plan_frames(duration, max_frames)
+            min_interval = 0.0 if high_density else 1.0
+            interval, _ = plan_frames(duration, max_frames, min_interval=min_interval)
         if duration <= 0:
             return []
 
@@ -249,7 +258,7 @@ class VideoProcessor:
             old.unlink(missing_ok=True)
 
         frames = []
-        max_index = min(int(duration // interval) + 1, max_frames)
+        max_index = min(int(duration // interval) + 1, max_frames) if interval > 0 else max_frames
         for i in range(max_index):
             planned = round(i * interval, 3)
             if planned >= duration:
@@ -524,6 +533,7 @@ def prepare_video(input_: dict) -> dict:
         frames_fut = _T.submit(
             processor.extract_frames,
             source, str(frames_dir), duration=duration,
+            high_density=(duration < 10)
         )
         audio_path = str(artifacts_dir(file_path) / "audio.wav") if extract["inspection"].get("hasAudio") else None
         audio_fut = _T.submit(

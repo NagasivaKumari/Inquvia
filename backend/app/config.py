@@ -195,6 +195,43 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30
 EXPLABS_MODEL = os.getenv("EXPLABS_MODEL", "deepseek-v4.1-flash")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+# Per-task model chains across the free models we run. Each task picks the
+# best fit as primary, then falls back through cheaper/older free models.
+# Chains stay within the Gemini API here; if the whole chain fails,
+# call_ai_with_parts falls through to the other providers (Explabs,
+# OpenRouter, Groq), so those act as the last-resort nets.
+# - image/video/document/source/authenticity/audio report: multimodal,
+#   fill-light tasks → keep flash-class models first.
+# - claim/assess reasoning: heavier reasoning → pro models in the fallbacks.
+# - data/structured/compute plans: structured output needs a small fast
+#   model (lite class) that obeys JSON schemas reliably.
+# - transcribe: audio-to-text models handle raw audio, flash models are
+#   text-only fallbacks for transcript-of-transcript requests.
+# Live / TTS / robotics / image-generation free models can't do one-shot
+# JSON analysis over evidence, so they are intentionally not routed here.
+MODEL_TASKS: dict[str, list[str]] = {
+    "image": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemma-4-31b-it"],
+    "video": ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemma-4-26b-a4b-it"],
+    "audio": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemma-4-26b-a4b-it"],
+    "document": ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.7-flash", "gemini-pro-latest", "gemma-4-26b-a4b-it"],
+    "web source": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemma-4-31b-it"],
+    "source": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemma-4-31b-it"],
+    "authenticity": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.8-flash", "gemini-3.7-flash"],
+    "claim": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
+    "verify": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
+    "contradictions": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
+    "gaps": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.5-flash-lite"],
+    "plan": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "structured": ["gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
+    "data": ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
+    "transcribe": ["gemini-3.5-transcribe", "gemini-3.5-transcribe-live", "gemini-3.5-flash-lite"],
+}
+
+def model_chain(task: str = "") -> list[str]:
+    """Gemini models to try for a task (primary first). Unknown tasks use the default."""
+    chain = MODEL_TASKS.get(task or "")
+    return list(chain) if chain else [GEMINI_MODEL]
+
 ALGORAND_USDC_DECIMALS = 1_000_000  # 6 decimals
 
 INVESTIGATION_STAGES = [

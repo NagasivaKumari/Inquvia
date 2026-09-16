@@ -274,7 +274,7 @@ class EvidencePlanner:
             f"CATALOG:\n{catalog}"
         )
         user_text = f"QUESTION: {question}\nINPUT_TYPES: {', '.join(inputs)}"
-        raw = await ai_lib.call_ai_with_parts(system_prompt, [{"text": user_text}])
+        raw = await ai_lib.call_ai_with_parts(system_prompt, [{"text": user_text}], task="plan")
         data = json.loads(raw)
         checks = []
         for cap_id in data.get("checks", []):

@@ -21,6 +21,7 @@ from ..libraries.analyze import (
     run_ai_ocr,
 )
 from ..libraries import image_investigation_helpers as img_inv_helpers
+from ..libraries.training import call_ai_votes, few_shot_block
 
 REGISTRY = {}
 
@@ -189,7 +190,8 @@ def _merge_ai_raw(inv, evidence, raw) -> dict:
     return result
 
 
-async def _run_analysis(inv, evidence, system_prompt, context_parts, text_fallback: bool = True) -> dict:
+async def _run_analysis(inv, evidence, system_prompt, context_parts, text_fallback: bool = True, task: str | None = None, vote_key: str | None = None) -> dict:
+    system_prompt += few_shot_block(task)
     # Reason only over non-redundant evidence: duplicate/dependent copies
     # (provider-flagged) stay in the trail but must not be fed as if they were
     # extra independent confirmations.
@@ -217,7 +219,10 @@ async def _run_analysis(inv, evidence, system_prompt, context_parts, text_fallba
         # submitted input without buying evidence from another service.
         evidence_text = "No external evidence was acquired. Analyze only the submitted input and state limitations clearly."
     context_parts.append({"text": f"QUESTION: {inv.get('question')}\n\nACQUIRED EVIDENCE:\n{evidence_text}"})
-    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts, text_fallback=text_fallback)
+    if vote_key:
+        raw_text = await call_ai_votes(system_prompt, context_parts, task=task, key=vote_key)
+    else:
+        raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts, text_fallback=text_fallback, task=task)
     raw = ai_lib.parse_ai_json(raw_text)
     return _merge_ai_raw(inv, evidence, raw)
 
@@ -269,7 +274,7 @@ async def _claim_analyzer(inv, evidence):
                 f = read_stored_file_base64(inp["filePath"])
                 if f:
                     parts.append({"file": f})
-    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False, task="claim", vote_key="conclusion")
 
 
 # Evidence grounding rules for image investigations — generic, question-independent.
@@ -501,7 +506,7 @@ async def _image_analyzer(inv, evidence):
             "risk": "unknown",
             "evidenceSignals": [],
         }
-    result = await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    result = await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False, task="image")
     # Deterministic cross-check of category counts against the enumerated
     # instances: a reported count is only as reliable as the instance list that
     # backs it. Corrected/unverifiable counts surface as limitations.
@@ -645,7 +650,7 @@ async def _video_analyzer(inv, evidence):
     if len(videos) > 1:
         parts.append({"text": f"NOTE: {len(videos)} videos were submitted -- compare them against each other."})
     parts.append({"text": f"USER_QUESTION: {question}"})
-    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False, task="video")
 
 
 _DOCUMENT_RULES = (
@@ -733,7 +738,7 @@ async def _load_document_pages(inv, input_: dict | None) -> list[dict]:
     return []
 
 
-async def _run_document_analysis(inv, evidence, system_prompt, context_parts) -> dict:
+async def _run_document_analysis(inv, evidence, system_prompt, context_parts, task: str | None = None) -> dict:
     """Document-specific reasoning loop: the full page structure is the primary
     evidence body (comprehensive extraction), the user's question is the sole
     objective, and page provenance is preserved in the model output."""
@@ -756,7 +761,7 @@ async def _run_document_analysis(inv, evidence, system_prompt, context_parts) ->
         "text": f"INVESTIGATION_OBJECTIVE (the user's question -- your sole objective): {inv.get('question')}\n\n"
                 f"ACQUIRED EVIDENCE:\n{evidence_text}"
     })
-    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts)
+    raw_text = await ai_lib.call_ai_with_parts(system_prompt, context_parts, task=task)
     raw = ai_lib.parse_ai_json(raw_text) or {}
     result = _merge_ai_raw(inv, evidence, raw)
     # The document's relationship summary comes from the SELECTED passages, not
@@ -819,7 +824,7 @@ async def _compute_document_analysis(inv, evidence, input_) -> dict | None:
 
     try:
         sys_prompt, parts = compute_structured.build_plan_prompt(question, profile)
-        raw_plan = await ai_lib.call_ai_with_parts(sys_prompt, parts)
+        raw_plan = await ai_lib.call_ai_with_parts(sys_prompt, parts, task="structured")
         plan = compute_structured.parse_plan(raw_plan)
     except Exception:
         plan = []
@@ -846,7 +851,7 @@ async def _compute_document_analysis(inv, evidence, input_) -> dict | None:
     inv["computation"] = computation
 
     system, parts = compute_structured.build_reasoning_prompt(question, profile, computation)
-    raw = ai_lib.parse_ai_json(await ai_lib.call_ai_with_parts(system, parts)) or {}
+    raw = ai_lib.parse_ai_json(await ai_lib.call_ai_with_parts(system, parts, task="structured")) or {}
     if raw:
         result = _merge_ai_raw(inv, evidence, raw)
     else:
@@ -912,7 +917,7 @@ async def _document_analyzer(inv, evidence):
     if input_:
         parts.append({"text": f"DOCUMENT: {input_.get('content') or input_.get('fileName') or 'submitted document'} "
                              f"(extraction: {extraction_source}, {len(pages)} page(s))"})
-    return await _run_document_analysis(inv, evidence, system_prompt, parts)
+    return await _run_document_analysis(inv, evidence, system_prompt, parts, task="document")
 
 
 async def _source_analyzer(inv, evidence):
@@ -1008,7 +1013,7 @@ async def _source_analyzer(inv, evidence):
     else:
         context_parts.append({"text": f"URL: {url_str}\n\nNo live web inspection was performed."})
 
-    return await _run_analysis(inv, evidence, system_prompt, context_parts)
+    return await _run_analysis(inv, evidence, system_prompt, context_parts, task="source")
 
 
 async def _data_analyzer(inv, evidence):
@@ -1029,18 +1034,93 @@ async def _data_analyzer(inv, evidence):
     if input_ and input_.get("filePath"):
         content = read_stored_text(input_["filePath"], 30000)
     data_context = content or (input_.get("content") if input_ else None) or inv.get("question")
-    return await _run_analysis(inv, evidence, system_prompt, [{"text": f"DATA_CONTEXT:\n{data_context}"}])
+    return await _run_analysis(inv, evidence, system_prompt, [{"text": f"DATA_CONTEXT:\n{data_context}"}], task="data")
 
 
 async def _audio_analyzer(inv, evidence):
     system_prompt = _QUESTION_RULE + (
-        "You are Inquvia's audio analyst. Assess the submitted audio recording(s) using the extracted FILE_LEVEL_SIGNALS (container, sample rate, channels, bit depth, duration), the audio transcript with segment timestamps, and any acquired evidence. Do not use internal knowledge to fill gaps. If the question asks to transcribe, extract, describe, or summarize the audio: provide the transcript/content in 'answer' and use conclusion 'answered' if fully answered, 'inconclusive' if partial. If the question asks whether the audio is genuine/manipulated/AI-generated/risky: issue a forensic verdict ONLY when observable signals support it. In ALL cases: distinguish spoken words (from transcript + timestamps) from inference. Cite timestamps. If evidence only partially answers the question, explicitly state what IS answered and what is NOT. Use 'insufficient_evidence' or 'inconclusive' honestly. State limitations explicitly. Express confidence honestly (0-100). "
-        "When multiple recordings are provided, compare them against each other. "
-        "Express confidence honestly; explicit uncertainty is expected. "
-        "Return ONLY JSON: { conclusion: 'answered'|'likely_genuine'|'likely_misleading'|'suspicious'|'insufficient_evidence'|'inconclusive', confidence: number 0-100, answer: string, assessmentReasoning: string, transcript: string, findings: string[], contradictions: string[], limitations: string[], uncertainty: string, sourcesUsed: string[], risk: 'low'|'moderate'|'high'|'unknown', evidenceSignals: [{'id': string, 'signal': 'supporting'|'contradictory'|'uncertain'}] }."
+        "You are Inquvia's audio forensic analyst. Produce a comprehensive forensic report based ONLY on the "
+        "evidence records provided. Do not use internal knowledge to fill gaps. "
+        "Return ONLY JSON with this exact structure:\n"
+        "{\n"
+        '  "finalAssessment": "Human | Likely Human | Likely AI-Generated | Likely Manipulated | Inconclusive",\n'
+        '  "confidence": {\n'
+        '    "overall": 0-100,\n'
+        '    "breakdown": {\n'
+        '      "authenticitySignals": 0-100,\n'
+        '      "acousticConsistency": 0-100,\n'
+        '      "manipulationAnalysis": 0-100,\n'
+        '      "aiGenerationIndicators": 0-100,\n'
+        '      "provenance": 0-100,\n'
+        '      "evidenceLimitations": 0-100\n'
+        '    },\n'
+        '    "explanation": "Why this confidence score - what evidence supports each component"\n'
+        '  },\n'
+        '  "transcriptWithTimestamps": [\n'
+        '    {"start": 0.0, "end": 5.0, "text": "spoken text"}\n'
+        '  ],\n'
+        '  "speakerAnalysis": {\n'
+        '    "consistentWithSingleSpeaker": true/false,\n'
+        '    "voiceCharacteristics": "description of pitch, timbre, speaking style",\n'
+        '    "changesDetected": [{"timestamp": 0.0, "changeType": "pitch/timbre/style", "description": "..."}],\n'
+        '    "determinationMethod": "how single/multiple speaker was determined",\n'
+        '    "evidenceClassification": "direct_observation | forensic_indicator | inference | unknown"\n'
+        '  },\n'
+        '  "aiSyntheticVoiceAnalysis": {\n'
+        '    "syntheticLikelihood": "high | moderate | low | unknown",\n'
+        '    "indicators": [\n'
+        '      {"indicator": "name", "description": "...", "timestamp": 0.0, "confidence": 0-100, "evidenceType": "forensic_indicator"}\n'
+        '    ],\n'
+        '    "limitations": ["..."],\n'
+        '    "evidenceClassification": "forensic_indicator | inference | unknown"\n'
+        '  },\n'
+        '  "manipulationSplicingAnalysis": {\n'
+        '    "anomalies": [\n'
+        '      {"timestamp": 0.0, "type": "spectral_discontinuity|noise_floor_change|pitch_jump|clipping|duplication", "description": "...", "confidence": 0-100, "evidenceType": "forensic_indicator"}\n'
+        '    ],\n'
+        '    "suspiciousRegions": [{"start": 0.0, "end": 1.0, "reason": "..."}],\n'
+        '    "evidenceClassification": "forensic_indicator | direct_observation | inference"\n'
+        '  },\n'
+        '  "acousticAnalysis": {\n'
+        '    "pitchStatistics": {"meanHz": 0, "rangeHz": 0, "stdHz": 0, "voicedFraction": 0},\n'
+        '    "speakingRate": "words per minute or syllables per second",\n'
+        '    "volumeProfile": "description of RMS changes",\n'
+        '    "spectralCharacteristics": "description of spectral features",\n'
+        '    "backgroundNoise": "description of noise floor and changes",\n'
+        '    "pauses": [{"start": 0.0, "end": 0.5, "duration": 0.5}],\n'
+        '    "breathing": [{"start": 0.0, "end": 0.3, "duration": 0.3}],\n'
+        '    "clipping": [{"start": 0.0, "end": 0.01, "duration": 0.01}]\n'
+        '  },\n'
+        '  "metadataProvenance": {\n'
+        '    "container": "format info",\n'
+        '    "codec": "codec info",\n'
+        '    "sampleRate": 0,\n'
+        '    "duration": 0,\n'
+        '    "externalSources": "No external sources were acquired. The assessment is based on the submitted audio and internal audio analysis."\n'
+        '  },\n'
+        '  "suspiciousTimestamps": [\n'
+        '    {"timestamp": 0.0, "anomalyType": "...", "description": "...", "confidence": 0-100}\n'
+        '  ],\n'
+        '  "evidenceUsed": [\n'
+        '    {"finding": "...", "evidenceType": "direct_observation | forensic_indicator | inference | externally_verified | unknown", "source": "check name", "confidence": 0-100}\n'
+        '  ],\n'
+        '  "limitations": ["..."],\n'
+        '  "reasoning": "Step-by-step logical derivation of conclusion from evidence",\n'
+        '  "auditTrail": [\n'
+        '    {"check": "Audio authenticity", "status": "COMPLETED", "evidenceProduced": "summary", "confidence": 85},\n'
+        '    {"check": "Voice/deepfake detection", "status": "COMPLETED", "evidenceProduced": "summary", "confidence": 80}\n'
+        '  ]\n'
+        "}\n"
+        "\n"
+        "Classify EVERY finding in evidenceUsed as: direct_observation | forensic_indicator | inference | externally_verified | unknown\n"
+        "Do not claim a check was performed unless evidence contains a COMPLETED result.\n"
+        "If no external sources were used, state: 'No external sources were acquired. The assessment is based on the submitted audio and internal audio analysis.'\n"
+        "Be honest about uncertainty. Use 'Inconclusive' when evidence is insufficient."
     )
     audios = [i for i in (inv.get("inputs") or []) if i.get("type") == "audio"]
     parts = []
+    
+    # File-level signals
     for input_ in audios:
         if input_.get("filePath"):
             f = read_stored_file_base64(input_["filePath"])
@@ -1051,11 +1131,33 @@ async def _audio_analyzer(inv, evidence):
                 sig_text = signals_lib.inspect_text(input_["filePath"], "audio")
                 if sig_text:
                     parts.append({"text": sig_text})
-    if not any(p.get("file") for p in parts):
-        context = _first_text_input(inv) or ""
-        if context:
-            parts.append({"text": f"AUDIO_CONTEXT: {context}"})
-        # Include transcript evidence from evidence checks (cached on mediaExtraction)
+    
+    # Include ALL evidence from forensic checks
+    audio_evidence = [e for e in (evidence or []) if e.get("metadata", {}).get("checkCapability", "").startswith("aud_")]
+    for ev in audio_evidence:
+        cap = ev.get("metadata", {}).get("checkCapability", "")
+        label = ev.get("metadata", {}).get("fileName", "audio")
+        finding = ev.get("finding", "")
+        meta = ev.get("metadata", {})
+        evidence_record = meta.get("evidenceRecord", {})
+        
+        section_map = {
+            "aud_authenticity": "AUDIO_AUTHENTICITY_EVIDENCE",
+            "aud_voice_deepfake": "AI_SYNTHETIC_VOICE_EVIDENCE",
+            "aud_transcription": "TRANSCRIPTION_EVIDENCE",
+            "aud_speaker_consistency": "SPEAKER_CONSISTENCY_EVIDENCE",
+            "aud_av_sync": "AV_SYNC_EVIDENCE",
+            "aud_manipulation": "MANIPULATION_SPLICING_EVIDENCE",
+            "aud_translation": "TRANSLATION_EVIDENCE",
+        }
+        section = section_map.get(cap, "AUDIO_EVIDENCE")
+        parts.append({"text": f"{section} ({label}):\n{finding}"})
+        
+        # Include structured details if available
+        if evidence_record.get("details"):
+            parts.append({"text": f"{section}_DETAILS ({label}):\n{json_dumps(evidence_record['details'])}"})
+    
+    # Transcript from media extraction (for backward compat)
     from ..libraries import evidence_checks as checks_lib
     for input_ in audios:
         extract = input_.get("mediaExtraction") or {}
@@ -1063,19 +1165,122 @@ async def _audio_analyzer(inv, evidence):
         if transcript:
             window = extract.get("transcriptWindowSeconds")
             label_w = f" (transcribed window: first {window:.0f}s)" if window else ""
-            parts.append({"text": f"AUDIO_TRANSCRIPT{label_w}:\n{transcript[:6000]}"})
+            parts.append({"text": f"RAW_TRANSCRIPT{label_w}:\n{transcript[:6000]}"})
             segments = extract.get("transcriptSegments")
             if segments:
-                seg_text = "\n".join(f"[{s['start']:.2f}s?{s['end']:.2f}s] {s['text']}" for s in segments)
-                parts.append({"text": f"AUDIO_TRANSCRIPT_SEGMENTS:\n{seg_text[:4000]}"})
+                seg_text = "\n".join(f"[{s['start']:.2f}s–{s['end']:.2f}s] {s['text']}" for s in segments)
+                parts.append({"text": f"TRANSCRIPT_SEGMENTS:\n{seg_text[:4000]}"})
+    
     if not any(p.get("file") for p in parts):
         context = _first_text_input(inv) or ""
         if context:
             parts.append({"text": f"AUDIO_CONTEXT: {context}"})
+    
     if len(audios) > 1:
         parts.append({"text": f"NOTE: {len(audios)} audio recordings were submitted -- compare them against each other."})
+    
     parts.append({"text": f"USER_QUESTION: {inv.get('question')}"})
-    return await _run_analysis(inv, evidence, system_prompt, parts, text_fallback=False)
+    
+    # Use custom audio merge that produces the requested report format
+    from .ai import call_ai_with_parts, parse_ai_json
+    raw_text = await call_ai_with_parts(system_prompt, parts, text_fallback=False, task="audio")
+    raw = parse_ai_json(raw_text)
+    return _merge_audio_report(inv, evidence, raw)
+
+
+def _merge_audio_report(inv, evidence, raw) -> dict:
+    """Custom merge for audio investigations producing the requested report format."""
+    if not raw:
+        return _default_audio_report()
+    
+    # Apply evidence signals
+    _apply_evidence_signals(evidence, (raw or {}).get("evidenceSignals"))
+    
+    # Extract audio-specific evidence for audit trail
+    audio_evidence = [e for e in (evidence or []) if e.get("metadata", {}).get("checkCapability", "").startswith("aud_")]
+    audit_trail = []
+    for ev in audio_evidence:
+        cap = ev.get("metadata", {}).get("checkCapability", "")
+        cap_labels = {
+            "aud_authenticity": "Audio authenticity",
+            "aud_voice_deepfake": "Voice/deepfake detection",
+            "aud_transcription": "Speech transcription",
+            "aud_speaker_consistency": "Speaker/voice consistency",
+            "aud_av_sync": "Audio-video synchronization",
+            "aud_manipulation": "Audio manipulation/splicing",
+            "aud_translation": "Translation/subtitle verification",
+        }
+        audit_trail.append({
+            "check": cap_labels.get(cap, cap),
+            "status": "COMPLETED" if ev.get("signal") == "observed" else "NOT_AVAILABLE",
+            "evidenceProduced": ev.get("finding", "")[:200],
+            "confidence": 85 if ev.get("signal") == "observed" else 0
+        })
+    
+    # Build the report from raw AI output, with fallbacks
+    final_assessment = raw.get("finalAssessment") or "Inconclusive"
+    confidence_data = raw.get("confidence") or {}
+    overall_confidence = confidence_data.get("overall") if isinstance(confidence_data, dict) else 50
+    
+    return {
+        "finalAssessment": final_assessment,
+        "confidence": confidence_data if isinstance(confidence_data, dict) else {
+            "overall": overall_confidence,
+            "breakdown": {
+                "authenticitySignals": 0,
+                "acousticConsistency": 0,
+                "manipulationAnalysis": 0,
+                "aiGenerationIndicators": 0,
+                "provenance": 0,
+                "evidenceLimitations": 0
+            },
+            "explanation": "Confidence breakdown not provided by analysis"
+        },
+        "transcriptWithTimestamps": raw.get("transcriptWithTimestamps") or [],
+        "speakerAnalysis": raw.get("speakerAnalysis") or {},
+        "aiSyntheticVoiceAnalysis": raw.get("aiSyntheticVoiceAnalysis") or {},
+        "manipulationSplicingAnalysis": raw.get("manipulationSplicingAnalysis") or {},
+        "acousticAnalysis": raw.get("acousticAnalysis") or {},
+        "metadataProvenance": raw.get("metadataProvenance") or {
+            "externalSources": "No external sources were acquired. The assessment is based on the submitted audio and internal audio analysis."
+        },
+        "suspiciousTimestamps": raw.get("suspiciousTimestamps") or [],
+        "evidenceUsed": raw.get("evidenceUsed") or [],
+        "limitations": raw.get("limitations") or [],
+        "reasoning": raw.get("reasoning") or "No reasoning provided",
+        "auditTrail": audit_trail
+    }
+
+
+def _default_audio_report() -> dict:
+    return {
+        "finalAssessment": "Inconclusive",
+        "confidence": {
+            "overall": 0,
+            "breakdown": {
+                "authenticitySignals": 0,
+                "acousticConsistency": 0,
+                "manipulationAnalysis": 0,
+                "aiGenerationIndicators": 0,
+                "provenance": 0,
+                "evidenceLimitations": 0
+            },
+            "explanation": "No analysis performed"
+        },
+        "transcriptWithTimestamps": [],
+        "speakerAnalysis": {},
+        "aiSyntheticVoiceAnalysis": {},
+        "manipulationSplicingAnalysis": {},
+        "acousticAnalysis": {},
+        "metadataProvenance": {
+            "externalSources": "No external sources were acquired. The assessment is based on the submitted audio and internal audio analysis."
+        },
+        "suspiciousTimestamps": [],
+        "evidenceUsed": [],
+        "limitations": ["No evidence acquired"],
+        "reasoning": "No analysis performed",
+        "auditTrail": []
+    }
 
 
 def json_dumps(obj):

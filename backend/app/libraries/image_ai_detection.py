@@ -111,7 +111,7 @@ async def multimodal_assessment(buf: bytes, mime: str | None) -> dict | None:
         )
         parts = [{"file": {"mimeType": mime or "image/jpeg",
                            "base64": base64.b64encode(buf).decode("ascii")}}]
-        raw = await ai_lib.call_ai_with_parts(prompt, parts)
+        raw = await ai_lib.call_ai_with_parts(prompt, parts, task="image")
         payload = ai_lib.parse_ai_json(raw)
         if isinstance(payload, dict) and payload.get("band"):
             payload["source"] = "multimodal_model_assessment"

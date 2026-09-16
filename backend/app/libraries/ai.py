@@ -12,46 +12,51 @@ async def call_ai_with_parts(
     parts: list[dict],
     temperature: float = 0.2,
     text_fallback: bool = True,
+    task: str | None = None,
 ) -> str | None:
     """parts: list of {'text'?: str, 'file'?: {'mimeType', 'base64'}}.
 
     text_fallback=False restricts the call to providers that actually receive
     the attached files (Gemini multimodal). Chat-only text providers only see
     the text parts and would hallucinate about unseen files, so calls that
-    must read a file (audio transcription) pass False."""
+    must read a file (audio transcription) pass False.
+
+    task selects the per-task Gemini model chain (config.MODEL_TASKS); the
+    primary model is tried first and each fallback is used until one responds."""
     text_context = "\n\n".join(p.get("text", "") for p in parts if p.get("text"))
 
-    # 1. Gemini (multimodal).
+    # 1. Gemini (multimodal). Fall through the task's model chain.
     if config.GEMINI_API_KEY:
-        try:
-            content_parts = []
-            for part in parts:
-                if part.get("file"):
-                    content_parts.append({
-                        "inlineData": {
-                            "mimeType": part["file"]["mimeType"],
-                            "data": part["file"]["base64"],
-                        }
-                    })
-                elif part.get("text"):
-                    content_parts.append({"text": part["text"]})
-            payload = {
-                "contents": [{"role": "user", "parts": content_parts}],
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"},
-            }
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                res = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent?key={config.GEMINI_API_KEY}",
-                    json=payload,
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-                    if text:
-                        return text
-        except Exception:
-            pass
+        content_parts = []
+        for part in parts:
+            if part.get("file"):
+                content_parts.append({
+                    "inlineData": {
+                        "mimeType": part["file"]["mimeType"],
+                        "data": part["file"]["base64"],
+                    }
+                })
+            elif part.get("text"):
+                content_parts.append({"text": part["text"]})
+        payload = {
+            "contents": [{"role": "user", "parts": content_parts}],
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"},
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for model in config.model_chain(task):
+                try:
+                    res = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={config.GEMINI_API_KEY}",
+                        json=payload,
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+                        if text:
+                            return text
+                except Exception:
+                    continue
 
     # 2. Experiential (OpenAI-compatible, supports audio/video/images via parts).
     if config.EXPLABS_API_KEY:
@@ -268,4 +273,4 @@ async def transcribe_audio(file_b64: str, mime: str) -> str | None:
         "Transcribe the following audio VERBATIM. Do not correct, summarize, or interpret. "
         "Keep proper names exactly as spoken; if a name is unclear, leave it verbatim as spoken."
     )
-    return await call_ai_with_parts(system_prompt, [{"file": {"mimeType": mime, "base64": file_b64}}], temperature=0.0, text_fallback=False)
+    return await call_ai_with_parts(system_prompt, [{"file": {"mimeType": mime, "base64": file_b64}}], temperature=0.0, text_fallback=False, task="transcribe")

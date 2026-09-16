@@ -12,6 +12,9 @@ PyMuPDF
 opencv-python-headless
 pyzbar
 numpy
+scipy
+exifread
+c2pa
 
 # Browser rendering
 playwright

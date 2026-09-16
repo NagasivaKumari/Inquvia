@@ -100,7 +100,8 @@ class _PageExtractor(HTMLParser):
                 self.sections.append({"type": "heading", "level": self._heading_level, "text": text})
         elif block == "p":
             if text:
-                self.sections.append({"type": "paragraph", "text": text})
+                heading = next((s["text"] for s in reversed(self.sections) if s["type"] == "heading"), "Document")
+                self.sections.append({"type": "paragraph", "text": text, "context": heading})
         elif block == "li":
             if text and self._list_items is not None:
                 self._list_items.append(text)
