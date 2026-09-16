@@ -16,6 +16,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from .. import db
 from ..libraries import ai, storage, web_inspector
+from ..libraries import image_c2pa, image_forensics
 from ..libraries.analyze import heuristic_analysis
 from ..libraries.evidence_types import EvidenceResult
 from ..libraries.evidence_validation import (
@@ -228,14 +229,87 @@ async def authenticity_evidence(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=415, detail=error_resp.model_dump())
     
     upload_ref = storage.store_file(data, file.filename or "upload.bin", file.content_type or "application/octet-stream", _id("case"))
-    raw = await _ai_finding("authenticity", "", [{"file": {"mimeType": file.content_type or "application/octet-stream", "base64": __import__("base64").b64encode(data).decode("ascii")}}])
+    mime = file.content_type or "application/octet-stream"
+    raw = await _ai_finding("authenticity", "", [{"file": {"mimeType": mime, "base64": __import__("base64").b64encode(data).decode("ascii")}}])
+
+    # Deterministic layers (before the AI read): crypto C2PA + local forensics.
+    # C2PA scan is container-agnostic (jpg/png/webp/heic + mp4/mov/m4a when the lib
+    # supports them); image forensics only runs on images.
+    c2pa = image_c2pa.analyze(data)
+    forensics = image_forensics.analyze_image(data, mime) if mime.startswith("image/") else {}
+    sig_bits = [image_c2pa.describe(c2pa)]
+    if forensics:
+        tamper = forensics.get("tamperSignals") or {}
+        fbits = [f"perceptualHash={forensics.get('perceptualHash')}",
+                 f"format={forensics.get('format')}",
+                 f"estimatedQuality={forensics.get('estimatedQuality')}",
+                 f"reencodeSignals={forensics.get('jpegQuantizationStandard')}"]
+        if tamper.get("warnings"):
+            fbits.append(f"tamperSignals warnings={tamper['warnings']}")
+        for k in ("editorIdentified", "dateMismatch", "exifAbsent", "hasGps", "cameraMake", "cameraModel"):
+            if tamper.get(k):
+                fbits.append(f"{k}={tamper[k]}")
+        sig_bits.append("Image forensics: " + "; ".join(b for b in fbits if b and not str(b).endswith("=None")))
+
+    verdict, verdict_reason = _authenticity_verdict(c2pa, forensics, raw)
+    sig_bits.append(f"OPINION VERDICT: {verdict} — {verdict_reason}")
+    sig_text = "\n".join(sig_bits)
+
     result = _envelope(
         "authenticity", raw.get("finding") or f"Authenticity analysis: {file.filename or 'upload'}.",
-        metadata={"filename": file.filename, "mimeType": file.content_type,
-                  "size": len(data), "filePath": upload_ref["filePath"], "ai": raw},
+        metadata={"filename": file.filename, "mimeType": mime,
+                  "size": len(data), "filePath": upload_ref["filePath"], "ai": raw,
+                  "c2pa": c2pa, "forensics": forensics,
+                  "forensicSignals": sig_text,
+                  "verdict": verdict, "verdictReason": verdict_reason},
     )
-    result.setdefault("metadata", {})["forensicMode"] = "signal-only"
-    return _persist(request, "authenticity", {"filename": file.filename, "mimeType": file.content_type}, result) if request else result
+    result["content"] = sig_text
+    result.setdefault("metadata", {})["forensicMode"] = "signals-plus-ai"
+    return _persist(request, "authenticity", {"filename": file.filename, "mimeType": mime}, result) if request else result
+
+
+def _authenticity_verdict(c2pa: dict, forensics: dict, ai_raw: dict) -> tuple[str, str]:
+    """Derived opinion combining crypto provenance, edit signals, and AI read.
+
+    Opinion, not proof — the caller decides. Precedence: crypto > edit signals > AI.
+    """
+    tamper = forensics.get("tamperSignals") or {}
+    ela = forensics.get("ela") or {}
+    edit_signals = [
+        name for name, val in (("editorIdentified", tamper.get("editorIdentified")),
+                               ("dateMismatch", tamper.get("dateMismatch")))
+        if val
+    ]
+    if ela and ela.get("elevatedErrorBlocks"):
+        edit_signals.append(f"reencode (ELA elevated blocks={ela['elevatedErrorBlocks']})")
+
+    trusted = bool(c2pa.get("signerTrusted"))
+    valid = c2pa.get("validationState") in ("Valid",)
+    markers = bool(c2pa.get("credentialsPresent"))
+
+    if trusted and not edit_signals:
+        verdict, reason = "likely_authentic", \
+            "C2PA signature verified against trust anchors and no editing signals found."
+    elif trusted and edit_signals:
+        verdict, reason = "authentic_with_edits", \
+            "C2PA signature trusted but editing signals present (edits may be benign/recorded)."
+    elif valid:
+        verdict, reason = "provenance_attested", \
+            "C2PA signature cryptographically valid but signer not in the official trust list."
+    elif markers:
+        verdict, reason = "provenance_claimed", \
+            "C2PA/Content Credentials markers present but not cryptographically verified."
+    elif edit_signals:
+        verdict, reason = "editing_indicators", \
+            f"Editing signals detected without any C2PA provenance: {', '.join(edit_signals)}."
+    else:
+        verdict, reason = "undetermined", \
+            "No C2PA provenance and no editing signals — insufficient evidence either way."
+
+    conf = ai_raw.get("confidence")
+    if isinstance(conf, (int, float)):
+        reason += f" (AI read confidence {conf:.2f})"
+    return verdict, reason
 
 
 # ── URL Endpoint (with clear error messages) ──

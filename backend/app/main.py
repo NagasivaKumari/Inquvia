@@ -41,6 +41,7 @@ from .libraries.evidence_validation import get_all_evidence_contracts
 
 
 import time
+import asyncio
 from collections import defaultdict
 
 class _RateLimiter:
@@ -113,6 +114,11 @@ async def _init_startup():
     _X402_MIDDLEWARE = _build_x402()
     try:
         db.init_db_indexes()
+    except Exception:
+        pass
+    try:
+        from .libraries.image_c2pa import refresh_verifier_context
+        await asyncio.to_thread(refresh_verifier_context)
     except Exception:
         pass
 

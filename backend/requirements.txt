@@ -14,7 +14,7 @@ pyzbar
 numpy
 scipy
 exifread
-c2pa
+c2pa-python
 
 # Browser rendering
 playwright

@@ -127,6 +127,10 @@ def _flags(result_by_cap: dict[str, dict]) -> dict:
     c2pa = _r("image_c2pa")
     if c2pa.get("credentialsPresent"):
         f["c2pa_credentials"] = True
+    if c2pa.get("validationState"):
+        f["c2pa_verified"] = True
+    if c2pa.get("signerTrusted"):
+        f["c2pa_trusted_signer"] = True
 
     logo = _r("logo_watermark")
     if any(logo.get(k) for k in ("logos", "watermarks", "seals")) or logo.get("tamperSigns"):

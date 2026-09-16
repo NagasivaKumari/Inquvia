@@ -1533,8 +1533,13 @@ async def _copyright_attribution_findings(inv: dict) -> list[dict]:
         bits = []
         if sources:
             bits.append(f"web sources mentioning image: {'; '.join(sources[:3])}")
-        if c2pa.get("credentialsPresent"):
-            bits.append("C2PA/Content Credentials markers present")
+        if c2pa.get("validationState"):
+            sig = c2pa.get("signer") or {}
+            who = sig.get("issuer") or sig.get("commonName") or "unknown signer"
+            trust = "trusted signer" if c2pa.get("signerTrusted") else "signature valid, issuer not in C2PA trust list"
+            bits.append(f"C2PA manifest store verified: {c2pa.get('validationState')} ({trust}) — {who}")
+        elif c2pa.get("credentialsPresent"):
+            bits.append("C2PA/Content Credentials markers present (not cryptographically verified)")
         elif c2pa:
             bits.append("no C2PA credentials detected")
         if rev.get("earliestSource"):
