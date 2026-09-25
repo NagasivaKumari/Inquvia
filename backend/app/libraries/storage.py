@@ -57,7 +57,8 @@ def validate_upload(mime: str, size: int, filename: str = "upload.bin", capabili
             "FILE_TOO_LARGE", "files",
             {"maxSizeMB": config.MAX_UPLOAD_SIZE_MB, "receivedSizeBytes": size},
         )
-    if mime not in config.ALLOWED_MIME:
+    accepted = config.capability_accepted_mimes(capability_id) if capability_id else list(config.ALLOWED_MIME)
+    if mime not in config.ALLOWED_MIME or (capability_id and mime not in accepted):
         hint = _accepted_extensions_hint(capability_id)
         message = f'"{safe_name}" is not a supported file type.'
         if hint:

@@ -4,6 +4,7 @@ import json
 
 from .. import db, config
 from ..libraries import storage
+from ..libraries import source_input
 from ..libraries import capabilities as caps
 
 
@@ -104,6 +105,86 @@ def _build_reused_inputs(parsed: dict, case_id: str, source: dict, files: list) 
     return inputs
 
 
+def _remote_allowed_mimes(capability_id: str) -> set[str]:
+    accepted = set(config.capability_accepted_mimes(capability_id))
+    candidates = set(source_input.ANALYSIS_MIMES) | accepted
+    allowed = ALLOWED_INPUT_TYPES.get(capability_id, set())
+    if capability_id == "source-investigation":
+        return candidates
+    return {mime for mime in candidates if config.mime_input_type(mime, capability_id) in allowed}
+
+
+def _normalize_files(files: list[dict] | None) -> list[dict]:
+    normalized = []
+    for file in files or []:
+        data = file.get("data") or b""
+        name = file.get("name") or file.get("filename") or "upload.bin"
+        mime = source_input.normalize_upload_mime(data, file.get("mime") or file.get("content_type"), name)
+        source_input.validate_upload_mime(data, mime, "files")
+        normalized.append({"data": data, "name": name, "mime": mime})
+    return normalized
+
+
+def _store_local_files(files: list[dict], case_id: str, reused_from: str | None = None) -> list[dict]:
+    inputs = []
+    for file in files or []:
+        stored = storage.store_file(file["data"], file["name"], file["mime"], case_id)
+        inputs.append({
+            "type": _mime_to_input_type(file["mime"]),
+            "content": file["name"],
+            "fileName": stored["fileName"],
+            "mimeType": stored["mimeType"],
+            "filePath": stored["filePath"],
+            **({"reusedFrom": reused_from} if reused_from else {}),
+        })
+    return inputs
+
+
+async def _remote_input(
+    url: str,
+    case_id: str,
+    capability_id: str,
+    reused_from: str | None = None,
+) -> dict:
+    sanitized = storage.sanitize_url(url)
+    if not sanitized:
+        raise source_input.SourceInputError(400, "INVALID_URL", "Please enter a valid HTTP or HTTPS URL.", "url")
+    remote = await source_input.fetch_url(sanitized, _remote_allowed_mimes(capability_id))
+    input_type = "url" if capability_id == "source-investigation" else None
+    return source_input.store_remote_input(
+        remote,
+        case_id,
+        capability_id=capability_id,
+        input_type=input_type,
+        reused_from=reused_from,
+        inspection=source_input.inspect_source(remote),
+    )
+
+
+async def _build_inputs_with_sources(
+    parsed: dict,
+    case_id: str,
+    capability_id: str,
+    files: list[dict],
+    reuse_source: dict | None = None,
+) -> list[dict]:
+    if reuse_source:
+        inputs = _build_reused_inputs(parsed, case_id, reuse_source, files)
+        if parsed.get("url"):
+            remote = await _remote_input(parsed["url"], case_id, capability_id, reuse_source.get("id"))
+            inputs = [item for item in inputs if item.get("type") != "url"]
+            inputs.insert(0, remote)
+        return inputs
+
+    inputs = []
+    if parsed.get("url"):
+        inputs.append(await _remote_input(parsed["url"], case_id, capability_id))
+    if parsed.get("text"):
+        inputs.append({"type": "text", "content": parsed["text"]})
+    inputs.extend(_store_local_files(files, case_id))
+    return inputs
+
+
 async def handle_atomic_paid_request(capability_id: str, user, body, files, idempotency_key: str | None = None, background_tasks=None, reuse_source: dict | None = None) -> dict:
     """Returns { status, content, headers }. Status 200 on success with the
     Investigation as content. When reuse_source (a previous investigation owned
@@ -122,9 +203,18 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
 
     try:
         parsed = await parse_body(body, files)
+        normalized_files = _normalize_files(files)
+    except source_input.SourceInputError as e:
+        return {"status": e.status_code, "content": e.paid_content()}
     except InputValidationError as e:
         print(f"DEBUG: InputValidationError: {e}")
         return {"status": 400, "content": {"error": str(e)}}
+
+    for file in normalized_files:
+        ok, err = storage.validate_upload(file["mime"], len(file["data"]), file["name"], capability_id)
+        if not ok:
+            status = 413 if err.get("errorCode") == "FILE_TOO_LARGE" else 415 if err.get("errorCode") == "UNSUPPORTED_FILE_TYPE" else 400
+            return {"status": status, "content": err}
 
     if not (parsed.get("question") or "").strip():
         print(f"DEBUG: Missing question in parsed body: {parsed}")
@@ -134,10 +224,12 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
         }}
 
     case_id = f"case_{secrets.token_urlsafe(6)[:10]}"
-    if reuse_source:
-        inputs = _build_reused_inputs(parsed, case_id, reuse_source, files)
-    else:
-        inputs = _build_stored_inputs(parsed, case_id)
+    try:
+        inputs = await _build_inputs_with_sources(
+            parsed, case_id, capability_id, normalized_files, reuse_source=reuse_source,
+        )
+    except source_input.SourceInputError as e:
+        return {"status": e.status_code, "content": e.paid_content()}
     allowed = ALLOWED_INPUT_TYPES.get(capability_id)
     if reuse_source and allowed:
         # Drop any reused inputs this capability does not accept, so a

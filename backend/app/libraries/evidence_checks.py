@@ -905,7 +905,7 @@ async def _url_findings(inv: dict) -> list[dict]:
         url = inp.get("content")
         if not url:
             continue
-        inspection = inv.get("webInspection") or await web_inspector.inspect_live_url(url)
+        inspection = inp.get("inspection") or inv.get("webInspection") or await web_inspector.inspect_live_url(url)
         if not inspection:
             records.append({
                 "finding": f"URL check ({url}): could not be inspected — network or DNS failure.",

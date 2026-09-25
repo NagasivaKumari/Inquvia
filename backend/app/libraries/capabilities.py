@@ -247,10 +247,10 @@ async def run_source_investigation(args):
     url_input = next((i for i in (args.get("inputs") or []) if i.get("type") == "url"), None)
     if not url_input or not url_input.get("content"):
         raise InputError("source-investigation requires a valid URL")
-    inputs = [{"type": "url", "content": url_input["content"]}]
+    inputs = [dict(url_input)]
     question = (args.get("question") or "").strip() or f"Analyze the source: {url_input['content']}"
 
-    inspection = await web_inspector.inspect_live_url(url_input["content"])
+    inspection = url_input.get("inspection") or await web_inspector.inspect_live_url(url_input["content"])
 
     reqs = await EvidencePlanner().plan(question, ["url"])
 

@@ -401,8 +401,8 @@ export const MEDIA = {
 } as const;
 
 export function capabilityTitle(idOrPath: string): string {
-  const id = idOrPath.replace(/^\/api\/x402\//, "");
-  return getPaidCapability(id)?.title ?? idOrPath;
+  const id = idOrPath.replace(/^\/api\/(?:x402|evidence)\//, "");
+  return getPaidCapability(id)?.title ?? id.replace(/-/g, " ");
 }
 
 // ── Evidence Service Contract Types ──

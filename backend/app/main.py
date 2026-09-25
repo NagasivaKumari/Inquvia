@@ -1119,22 +1119,38 @@ async def _handle_atomic_capability(
             "url": form.get("url"),
             "text": form.get("text"),
             "serviceName": form.get("serviceName"),
+            "medicalOptIn": form.get("medicalOptIn"),
             "reinvestigateFrom": form.get("reinvestigateFrom"),
         }
-        for f in form.getlist("files"):
-            data = await f.read()
+        from .libraries import source_input
+        from .libraries.storage import validate_upload
+        uploaded = form.getlist("files") or form.getlist("file")
+        for f in uploaded:
+            data = await f.read(config.MAX_UPLOAD_SIZE + 1)
             print(f"DEBUG: Processing file {f.filename}, length={len(data)}, content_type={f.content_type}")
-            if data and len(data) > 0:
-                from .libraries.storage import validate_upload
-                ok, err = validate_upload(f.content_type or "", len(data), f.filename or "upload.bin", capability_id)
-                if not ok:
-                    print(f"DEBUG: File validation failed for {f.filename}: {err.get('error')}")
-                    return JSONResponse(err, status_code=400)
-                files.append({
-                    "data": data,
-                    "name": f.filename or "upload.bin",
-                    "mime": f.content_type or "application/octet-stream",
-                })
+            if len(data) > config.MAX_UPLOAD_SIZE:
+                return JSONResponse({
+                    "error": f'"{f.filename or "upload.bin"}" is too large. The maximum allowed size is {config.MAX_UPLOAD_SIZE_MB}MB.',
+                    "errorCode": "FILE_TOO_LARGE", "field": "files",
+                    "details": {"maxSizeMB": config.MAX_UPLOAD_SIZE_MB, "receivedSizeBytes": len(data)},
+                }, status_code=413)
+            if not data:
+                return JSONResponse({"error": "The selected file is empty.", "errorCode": "INVALID_FIELD_VALUE", "field": "files"}, status_code=400)
+            mime = source_input.normalize_upload_mime(data, f.content_type, f.filename or "upload.bin")
+            try:
+                source_input.validate_upload_mime(data, mime, "files")
+            except source_input.SourceInputError as e:
+                return JSONResponse(e.content, status_code=e.status_code)
+            ok, err = validate_upload(mime, len(data), f.filename or "upload.bin", capability_id)
+            if not ok:
+                print(f"DEBUG: File validation failed for {f.filename}: {err.get('error')}")
+                status = 413 if err.get("errorCode") == "FILE_TOO_LARGE" else 415 if err.get("errorCode") == "UNSUPPORTED_FILE_TYPE" else 400
+                return JSONResponse(err, status_code=status)
+            files.append({
+                "data": data,
+                "name": f.filename or "upload.bin",
+                "mime": mime,
+            })
         print(f"DEBUG: Successfully loaded {len(files)} files")
     else:
         body = await _json(request)

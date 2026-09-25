@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { Investigation } from "@/lib/types";
 import { API_BASE, APP_NAME } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { capabilityForService, type EvidenceService } from "@/lib/dashboard-capabilities";
 import styles from "./page.module.css";
 
 interface DashboardData {
@@ -18,16 +19,7 @@ interface DashboardData {
   recentInvestigations: Investigation[];
 }
 
-interface EvidenceService {
-  id?: string;
-  name?: string;
-  capability?: string;
-  description?: string;
-  priceMicro?: number;
-  priceUsdc?: number;
-  paid?: boolean;
-  endpoint?: string;
-}
+export { capabilityForService } from "@/lib/dashboard-capabilities";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -125,26 +117,30 @@ export default function DashboardPage() {
           <p className="text-muted">Evidence services are loading or temporarily unavailable.</p>
         ) : (
           <div className={styles.servicesGrid}>
-            {services.map((service, index) => (
-              <Link
-                key={service.id ?? service.name ?? index}
-                href={`/investigate?cap=${encodeURIComponent(capabilityForService(service))}&service=${encodeURIComponent(service.name ?? "Evidence check")}&q=${encodeURIComponent(`Use the ${service.name ?? "evidence"} check for my investigation`)}`}
-                className={`card card-hover ${styles.serviceCard}`}
-              >
-                <div className={styles.serviceTop}>
-                  <span className={styles.serviceKind}>{service.capability ?? "Evidence check"}</span>
-                  <span className={styles.servicePrice}>
-                    {typeof service.priceUsdc === "number"
-                      ? `$${service.priceUsdc.toFixed(2)} USDC`
-                      : typeof service.priceMicro === "number"
-                        ? `$${(service.priceMicro / 1_000_000).toFixed(2)} USDC`
-                        : service.paid === false ? "Included" : "Price at checkout"}
-                  </span>
-                </div>
-                <h3>{service.name ?? "Evidence service"}</h3>
-                <p>{service.description ?? "Evidence-backed analysis selected for your investigation."}</p>
-              </Link>
-            ))}
+            {services.map((service, index) => {
+              const capability = capabilityForService(service);
+              if (!capability) return null;
+              return (
+                <Link
+                  key={service.id ?? service.name ?? index}
+                  href={`/investigate?cap=${encodeURIComponent(capability)}&service=${encodeURIComponent(service.name ?? "Evidence check")}&q=${encodeURIComponent(`Use the ${service.name ?? "evidence"} check for my investigation`)}`}
+                  className={`card card-hover ${styles.serviceCard}`}
+                >
+                  <div className={styles.serviceTop}>
+                    <span className={styles.serviceKind}>{service.capability ?? "Evidence check"}</span>
+                    <span className={styles.servicePrice}>
+                      {typeof service.priceUsdc === "number"
+                        ? `$${service.priceUsdc.toFixed(2)} USDC`
+                        : typeof service.priceMicro === "number"
+                          ? `$${(service.priceMicro / 1_000_000).toFixed(2)} USDC`
+                          : service.paid === false ? "Included" : "Price at checkout"}
+                    </span>
+                  </div>
+                  <h3>{service.name ?? "Evidence service"}</h3>
+                  <p>{service.description ?? "Evidence-backed analysis selected for your investigation."}</p>
+                </Link>
+              );
+            })}
           </div>
         )}
       </section>
@@ -199,17 +195,6 @@ function AddButton({ label, cap }: { label: string; cap: string }) {
       {label}
     </button>
   );
-}
-
-function capabilityForService(service: EvidenceService): string {
-  const type = (service.capability ?? service.id ?? "").replace(/^evidence-/, "");
-  if (type === "authenticity") return "image-investigation";
-  if (type === "structured") return "data-investigation";
-  if (type === "url") return "source-investigation";
-  if (["image", "video", "document", "audio", "data"].includes(type)) {
-    return `${type}-investigation`;
-  }
-  return "claim-investigation";
 }
 
 function StatsCard({

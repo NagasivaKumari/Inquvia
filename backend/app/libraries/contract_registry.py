@@ -26,7 +26,8 @@ ALLOWED_DOCUMENT_MIME = [
     "text/plain", 
     "text/markdown", 
     "application/rtf", 
-    "application/vnd.oasis.opendocument.text"
+    "application/vnd.oasis.opendocument.text",
+    "text/html", "application/xhtml+xml"
 ]
 ALLOWED_STRUCTURED_MIME = [
     "application/json", 
@@ -98,9 +99,53 @@ class EndpointContract(BaseModel):
     example_input: Optional[Dict[str, Any]] = None
 
 
+def _url_field(required: bool = False) -> FieldSpec:
+    return FieldSpec(
+        name="url", type="string", required=required,
+        description="Public HTTP/HTTPS URL to acquire and analyze",
+        max_length=2048,
+    )
+
+
+def _pdf_field() -> FieldSpec:
+    return FieldSpec(
+        name="file", type="file", required=False,
+        description="Optional PDF file to extract",
+        accepted_mimetypes=["application/pdf"], max_size_mb=MAX_UPLOAD_SIZE_MB,
+    )
+
+
+def _source_contract(contract: EndpointContract, pdf: bool = False) -> EndpointContract:
+    original_required = list(contract.required_inputs)
+    original_optional = list(contract.optional_inputs)
+    contract.required_inputs = [
+        field for field in original_required
+        if field.required and field.name != "file"
+    ]
+    optional = [field for field in original_optional if field.name != "file"]
+    optional += [field for field in original_required if not field.required and field.name != "file"]
+    if pdf:
+        optional = [_pdf_field(), _url_field()] + optional
+    else:
+        file_fields = [field for field in original_required + original_optional if field.name == "file"]
+        optional = [_url_field()] + file_fields + optional
+    contract.optional_inputs = optional
+    if contract.json_structure is not None:
+        contract.json_structure = dict(contract.json_structure)
+        if pdf:
+            contract.json_structure.update({
+                "file": "Optional PDF file to extract",
+                "url": "Optional public URL to extract",
+            })
+        else:
+            contract.json_structure["url"] = "Optional public URL to analyze"
+    contract.requires_payment = True
+    return contract
+
+
 # ── Contract Generators ──
 def image_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/image",
         name="Image Evidence",
         description="Process and analyze an image file for evidence extraction.",
@@ -120,10 +165,10 @@ def image_contract() -> EndpointContract:
         accepted_mimetypes=ALLOWED_IMAGE_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<image_file>", "claim": "Is this image authentic?"}
-    )
+    ))
 
 def video_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/video",
         name="Video Evidence",
         description="Process and analyze a video file for evidence extraction.",
@@ -146,10 +191,10 @@ def video_contract() -> EndpointContract:
         accepted_mimetypes=ALLOWED_VIDEO_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<video_file>", "claim": "Is this video authentic?", "max_frames": 8}
-    )
+    ))
 
 def audio_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/audio",
         name="Audio Evidence",
         description="Process and analyze an audio file for evidence extraction.",
@@ -169,10 +214,10 @@ def audio_contract() -> EndpointContract:
         accepted_mimetypes=ALLOWED_AUDIO_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<audio_file>", "claim": "What is being said in this audio?"}
-    )
+    ))
 
 def document_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/document",
         name="Document Evidence",
         description="Process and analyze a document file for evidence extraction.",
@@ -187,15 +232,15 @@ def document_contract() -> EndpointContract:
                      description="Optional claim or question about the document",
                      max_length=1000),
         ],
-        accepted_file_types=["document", "pdf", "docx", "doc", "txt", "md", "rtf", "odt"],
-        accepted_file_extensions=[".pdf", ".docx", ".doc", ".txt", ".md", ".rtf", ".odt"],
+        accepted_file_types=["document", "pdf", "docx", "doc", "txt", "md", "rtf", "odt", "html", "xhtml"],
+        accepted_file_extensions=[".pdf", ".docx", ".doc", ".txt", ".md", ".rtf", ".odt", ".html", ".htm", ".xhtml"],
         accepted_mimetypes=ALLOWED_DOCUMENT_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<document_file>", "claim": "Does this document contain inconsistencies?"}
-    )
+    ))
 
 def authenticity_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/authenticity",
         name="Authenticity Analysis",
         description="Perform forensic analysis to check media authenticity signals.",
@@ -212,7 +257,7 @@ def authenticity_contract() -> EndpointContract:
         accepted_mimetypes=ALLOWED_IMAGE_MIME + ALLOWED_VIDEO_MIME + ALLOWED_AUDIO_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<media_file>"}
-    )
+    ))
 
 def url_contract() -> EndpointContract:
     return EndpointContract(
@@ -225,16 +270,19 @@ def url_contract() -> EndpointContract:
                      description="Valid HTTP/HTTPS URL to inspect",
                      pattern=r"^https?://[^\s/$.?#].[^\s]*$",
                      min_length=10, max_length=2048),
+        ],
+        optional_inputs=[
             FieldSpec(name="claim", type="string", required=False,
                      description="Optional claim or question about the URL",
                      max_length=1000),
         ],
+        requires_payment=True,
         url_requirements="Must be a valid HTTP or HTTPS URL (e.g., https://example.com/page)",
         example_input={"url": "https://example.com/listing", "claim": "Is this website legitimate?"}
     )
 
 def structured_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/structured",
         name="Structured Data Evidence",
         description="Analyze JSON or CSV structured data for evidence extraction.",
@@ -258,13 +306,13 @@ def structured_contract() -> EndpointContract:
         json_structure={
             "file": "Optional - JSON or CSV file",
             "payload": "Optional - JSON or CSV text content",
-            "required": "At least one of 'file' or 'payload' must be provided"
+            "required": "At least one of 'file', 'payload', or 'url' must be provided"
         },
         example_input={"payload": '{"key": "value", "data": [1, 2, 3]}', "claim": "What does this data show?"}
-    )
+    ))
 
 def assess_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/assess",
         name="Evidence Assessment",
         description="Assess a claim against supplied evidence.",
@@ -282,10 +330,10 @@ def assess_contract() -> EndpointContract:
             "claim": "string"
         },
         example_input={"evidence": [{"text": "The seller has 95% positive feedback."}], "claim": "Is this seller legitimate?"}
-    )
+    ), pdf=True)
 
 def contradictions_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/contradictions",
         name="Contradiction Detection",
         description="Find contradictions in supplied evidence items.",
@@ -297,10 +345,10 @@ def contradictions_contract() -> EndpointContract:
         ],
         json_structure={"evidence": [{"evidence_id": "string", "text": "string"}]},
         example_input={"evidence": [{"text": "Event at 3 PM"}, {"text": "Event at 5 PM"}]}
-    )
+    ), pdf=True)
 
 def duplicates_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/duplicates",
         name="Duplicate Detection",
         description="Find duplicate and dependent evidence items.",
@@ -312,10 +360,10 @@ def duplicates_contract() -> EndpointContract:
         ],
         json_structure={"evidence": [{"evidence_id": "string", "text": "string"}]},
         example_input={"evidence": [{"text": "Company founded in 2010"}, {"text": "Founded in 2010, the company..."}]}
-    )
+    ), pdf=True)
 
 def timeline_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/timeline",
         name="Timeline Reconstruction",
         description="Reconstruct a timeline from supplied evidence items.",
@@ -327,16 +375,16 @@ def timeline_contract() -> EndpointContract:
         ],
         json_structure={"evidence": [{"evidence_id": "string", "text": "string"}]},
         example_input={"evidence": [{"text": "Project started Jan 15, 2024"}]}
-    )
+    ), pdf=True)
 
 def gaps_contract() -> EndpointContract:
-    return EndpointContract(
+    return _source_contract(EndpointContract(
         endpoint="/api/evidence/gaps",
         name="Evidence Gaps Analysis",
         description="Identify missing evidence and unresolved questions.",
         method="POST",
         required_inputs=[
-            FieldSpec(name="evidence", type="array", required=True,
+            FieldSpec(name="evidence", type="array", required=False,
                      description="Array of evidence objects to analyze for gaps",
                      min_length=0),
             FieldSpec(name="claim", type="string", required=False,
@@ -345,7 +393,7 @@ def gaps_contract() -> EndpointContract:
         ],
         json_structure={"evidence": [{"evidence_id": "string", "text": "string"}], "claim": "string"},
         example_input={"evidence": [{"text": "Company has 50 employees"}], "claim": "Is this company stable?"}
-    )
+    ), pdf=True)
 
 def get_all_evidence_contracts() -> List[EndpointContract]:
     """Return the complete contract for all 12 evidence endpoints."""

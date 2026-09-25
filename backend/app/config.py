@@ -103,51 +103,57 @@ AUDIO_TRANSCRIPT_WINDOW_SECONDS = int(os.getenv("AUDIO_TRANSCRIPT_WINDOW_SECONDS
 VIDEO_FRAME_MAX_WIDTH = int(os.getenv("VIDEO_FRAME_MAX_WIDTH", "640"))
 
 ALLOWED_MIME = [
-    "image/jpeg", "image/png", "image/webp", "image/gif",
-    "video/mp4", "video/webm",
-    "audio/mpeg", "audio/wav", "audio/mp3", "audio/ogg",
-    "application/pdf", "text/plain", "text/csv", "application/json",
+    "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/heic", "image/heif",
+    "video/mp4", "video/webm", "video/x-matroska", "video/x-msvideo", "video/mpeg", "video/x-m4v",
+    "audio/mpeg", "audio/wav", "audio/mp3", "audio/ogg", "audio/x-m4a", "audio/aac", "audio/flac", "audio/webm",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword", "text/plain", "text/markdown", "application/rtf",
+    "application/vnd.oasis.opendocument.text",
+    "text/csv", "text/tab-separated-values", "application/json", "application/x-jsonlines",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel",
+    "application/x-parquet", "text/html", "application/xhtml+xml",
 ]
 
-# Human-facing extensions per MIME type (single source of truth for both the
-# validation error messages and the capability contract served to the frontend).
 MIME_EXTENSIONS = {
-    "image/jpeg": [".jpg", ".jpeg"],
-    "image/png": [".png"],
-    "image/webp": [".webp"],
-    "image/gif": [".gif"],
-    "video/mp4": [".mp4"],
-    "video/webm": [".webm"],
-    "audio/mpeg": [".mp3"],
-    "audio/mp3": [".mp3"],
-    "audio/wav": [".wav"],
-    "audio/ogg": [".ogg"],
+    "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"], "image/webp": [".webp"], "image/gif": [".gif"],
+    "image/bmp": [".bmp"], "image/tiff": [".tif", ".tiff"], "image/heic": [".heic"], "image/heif": [".heif"],
+    "video/mp4": [".mp4"], "video/webm": [".webm"], "video/x-matroska": [".mkv"], "video/x-msvideo": [".avi"],
+    "video/mpeg": [".mpeg", ".mpg"], "video/x-m4v": [".m4v"],
+    "audio/mpeg": [".mp3"], "audio/mp3": [".mp3"], "audio/wav": [".wav"], "audio/ogg": [".ogg"],
+    "audio/x-m4a": [".m4a"], "audio/aac": [".aac"], "audio/flac": [".flac"], "audio/webm": [".webm"],
     "application/pdf": [".pdf"],
-    "text/plain": [".txt"],
-    "text/csv": [".csv"],
-    "application/json": [".json"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+    "application/msword": [".doc"], "text/plain": [".txt"], "text/markdown": [".md"],
+    "application/rtf": [".rtf"], "application/vnd.oasis.opendocument.text": [".odt"],
+    "text/csv": [".csv"], "text/tab-separated-values": [".tsv"], "application/json": [".json"],
+    "application/x-jsonlines": [".jsonl"],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+    "application/vnd.ms-excel": [".xls"], "application/x-parquet": [".parquet"],
+    "text/html": [".html", ".htm"], "application/xhtml+xml": [".xhtml"],
 }
 
 
-def mime_input_type(mime: str) -> str:
-    """Canonical MIME -> input type mapping (mirrors atomic_route)._mime_to_input_type."""
-    mime = (mime or "").lower()
+def mime_input_type(mime: str, capability_id: str | None = None) -> str:
+    """Canonical MIME -> input type mapping used by paid input validation."""
+    mime = (mime or "").lower().split(";", 1)[0].strip()
     if mime.startswith("image/"):
         return "image"
     if mime.startswith("video/"):
         return "video"
     if mime.startswith("audio/"):
         return "audio"
-    if mime == "application/pdf" or mime.startswith("text/"):
-        return "document"
-    if "json" in mime or "csv" in mime:
+    if mime in ("text/html", "application/xhtml+xml"):
+        return "url" if capability_id in ("claim-investigation", "source-investigation") else "document"
+    if mime in {
+        "text/csv", "text/tab-separated-values", "application/json", "application/x-jsonlines",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel",
+        "application/x-parquet",
+    }:
         return "data"
     return "document"
 
 
-# Each capability owns a distinct set of input types — a video investigation
-# rejects audio/image files, document accepts text-or-PDF, data accepts only
-# JSON, and so on. Rejects mismatched uploads before any payment can run.
 ATOMIC_INPUT_TYPES = {
     "claim-investigation": {"text", "url", "document"},
     "image-investigation": {"image"},
@@ -161,10 +167,11 @@ ATOMIC_INPUT_TYPES = {
 
 
 def capability_accepted_mimes(capability_id: str) -> list[str]:
-    """MIME types a capability actually validates against (derived from the
-    same ALLOWED_MIME + input-type rules used during validation)."""
+    """MIME types a capability validates against for uploaded files."""
+    if capability_id == "source-investigation":
+        return []
     allowed = ATOMIC_INPUT_TYPES.get(capability_id, set())
-    return [m for m in ALLOWED_MIME if mime_input_type(m) in allowed]
+    return [m for m in ALLOWED_MIME if mime_input_type(m, capability_id) in allowed]
 
 
 def capability_accepted_extensions(capability_id: str) -> list[str]:
@@ -260,7 +267,7 @@ PAID_CAPABILITIES = [
     {"id": "claim-investigation", "title": "Claim Investigation",
     "endpoint": "/api/x402/claim-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Check whether a claim is supported by available evidence.",
-     "inputTypes": ["text"]},
+     "inputTypes": ["text", "url", "document"]},
     {"id": "image-investigation", "title": "Image Investigation",
         "endpoint": "/api/x402/image-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Investigate an image for context, provenance, and evidence.",

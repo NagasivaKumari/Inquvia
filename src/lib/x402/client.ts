@@ -272,6 +272,7 @@ export const SETTLEMENT_HEADER_NAMES = [
   "x-payment-response",
   "x-x402-payment",
   "x-payment",
+  "x-402-payment",
   "Payment-Response",
 ];
 
@@ -300,20 +301,6 @@ export interface PaidInvestigationResult {
   capability?: string;
 }
 
-/**
- * Pay for any atomic x402 investigation capability from the browser wallet.
- *
- * When `files` are provided, the body is sent as FormData (multipart) so the
- * server can store the uploaded files. When only text/url/question is supplied,
- * JSON is sent. The wrapped fetch handles the 402 → sign → facilitator settle
- * → retry flow automatically.
- */
-/**
- * Build a human-readable error message from a failed capability response.
- * Prefers the structured backend message ({ error, errorCode, field, details })
- * or FastAPI's { detail } shape; falls back to a status-code mapping so the
- * user always sees a useful sentence, never just an HTTP number.
- */
 function toErrorMessage(body: Record<string, unknown> | null, status: number): string {
   if (body && typeof body.error === "string" && body.error) return body.error;
   const detail = body?.detail;
@@ -357,81 +344,69 @@ function withErrorMeta(err: Error, res: Response, body: Record<string, unknown> 
   return err;
 }
 
-export async function payForCapability(input: {
+interface StableFile {
+  data: ArrayBuffer;
+  name: string;
+  type: string;
+}
+
+async function snapshotFiles(files: File[] | undefined): Promise<StableFile[]> {
+  return Promise.all(
+    (files ?? []).map(async (file) => ({
+      data: await file.arrayBuffer(),
+      name: file.name,
+      type: file.type,
+    }))
+  );
+}
+
+function appendStableFiles(form: FormData, field: string, files: StableFile[]): void {
+  for (const file of files) {
+    form.append(field, new Blob([file.data], { type: file.type }), file.name);
+  }
+}
+
+function paymentEndpoint(endpoint: string): string {
+  if (endpoint.startsWith("http")) return endpoint;
+  return `${API_BASE}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+}
+
+interface PaidPostInput {
   address: string;
   endpoint: string;
-  question: string;
-  serviceName?: string;
-  text?: string;
-  url?: string;
   files?: File[];
   idempotencyKey?: string;
-  reinvestigateFrom?: string;
   signal?: AbortSignal;
-}): Promise<PaidInvestigationResult> {
-  const capabilityId = input.endpoint.split("/").pop();
+  buildBody: (files: StableFile[]) => { headers: Record<string, string>; body: BodyInit };
+}
+
+async function postPaid(input: PaidPostInput): Promise<Response> {
+  const stableFiles = await snapshotFiles(input.files);
+  const hasFiles = stableFiles.length > 0;
+  const capabilityId = input.endpoint.split("/").filter(Boolean).pop();
   const { fetchWithPay, httpClient } = buildX402Payment(input.address, capabilityId);
-  const hasFiles = !!input.files && input.files.length > 0;
-
-  const buildBody = (): { headers: Record<string, string>; body: BodyInit } => {
-    if (hasFiles) {
-      const fd = new FormData();
-      fd.append("question", input.question);
-      if (input.text) fd.append("text", input.text);
-      if (input.url) fd.append("url", input.url);
-      if (input.serviceName) fd.append("serviceName", input.serviceName);
-      if (input.reinvestigateFrom) fd.append("reinvestigateFrom", input.reinvestigateFrom);
-      for (const file of input.files ?? []) {
-        fd.append("files", file);
-      }
-      return { headers: {}, body: fd };
-    }
-    return {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: input.question,
-        serviceName: input.serviceName,
-        text: input.text,
-        url: input.url,
-        reinvestigateFrom: input.reinvestigateFrom,
-      }),
-    };
+  const endpointUrl = paymentEndpoint(input.endpoint);
+  const requestHeadersFor = (extra: HeadersInit) => {
+    const headers = new Headers(extra);
+    if (input.idempotencyKey) headers.set("Idempotency-Key", input.idempotencyKey);
+    return headers;
   };
-
-  const requestHeadersFor = (extra: Record<string, string>) => {
-    const requestHeaders = new Headers(extra);
-    if (input.idempotencyKey) {
-      requestHeaders.set("Idempotency-Key", input.idempotencyKey);
-    }
-    return requestHeaders;
+  const call = (f: typeof fetchWithPay, extraHeaders: Record<string, string>) => {
+    const body = input.buildBody(stableFiles);
+    return f(endpointUrl, {
+      method: "POST",
+      headers: requestHeadersFor({ ...body.headers, ...extraHeaders }),
+      body: body.body,
+      signal: input.signal,
+    });
   };
 
   await ensureUsdcOptIn(input.address);
 
-  const endpointUrl = input.endpoint.startsWith("http")
-    ? input.endpoint
-    : `${API_BASE}${input.endpoint.startsWith("/") ? "" : "/"}${input.endpoint}`;
-
-  const call = (
-    f: typeof fetchWithPay,
-    headers: Record<string, string>,
-    body: BodyInit
-  ) =>
-    f(endpointUrl, {
-      method: "POST",
-      headers: requestHeadersFor(headers),
-      body,
-      signal: input.signal,
-    });
-
   let res: Response;
   if (hasFiles) {
-    // Multipart bodies are single-use streams — wrapFetchWithPayment re-sends
-    // the same drained FormData on retry (arrives empty). We do the
-    // 402 → sign → retry handshake manually with a fresh body each round.
     emitPay("gate-rejected", { message: "Probing endpoint for payment requirements…" });
-    res = await call(apiFetch as typeof fetchWithPay, {}, buildBody().body);
-
+    res = await call(apiFetch as typeof fetchWithPay, {});
     if (res.status === 402) {
       emitPay("requesting-approval");
       let payload: PaymentPayload;
@@ -444,16 +419,10 @@ export async function payForCapability(input: {
         throw new Error(`Payment signing failed: ${message}`);
       }
       emitPay("request-approved");
-
-      // Retry the request with the signed payment header and a FRESH body
-      const paymentHeader = httpClient.encodePaymentSignatureHeader(payload);
       res = await call(
         apiFetch as typeof fetchWithPay,
-        { ...paymentHeader },
-        buildBody().body // REBUILT FRESH
+        httpClient.encodePaymentSignatureHeader(payload)
       );
-
-      // If the library says the response needs one more round-trip, retry once
       const { recovered } = await httpClient
         .processPaymentResult(payload, (name) => res.headers.get(name), res.status)
         .catch(() => ({ recovered: false }));
@@ -463,8 +432,7 @@ export async function payForCapability(input: {
         const freshPayload = await httpClient.createPaymentPayload(paymentRequired);
         res = await call(
           apiFetch as typeof fetchWithPay,
-          { ...httpClient.encodePaymentSignatureHeader(freshPayload) },
-          buildBody().body // REBUILT FRESH
+          httpClient.encodePaymentSignatureHeader(freshPayload)
         );
         await httpClient.processPaymentResult(
           freshPayload,
@@ -475,55 +443,145 @@ export async function payForCapability(input: {
     }
   } else {
     try {
-      res = await call(fetchWithPay, {}, buildBody().body);
+      res = await call(fetchWithPay, {});
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // The bare 402 is the expected first round of the x402 protocol — the
-      // server asks "who pays?", then we retry with a signed payment header.
       emitPay("gate-rejected", { message });
-      // Retry ONCE only when the payment step failed before a settle could be
-      // recorded: a 402 from the server or a payment-build failure means no
-      // money moved, so re-running the signed flow is safe (never double-pays).
-      const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle/i.test(message);
-      if (!canRetry || input.signal?.aborted) {
-        throw err;
-      }
+      const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle|upload/i.test(message);
+      if (!canRetry || input.signal?.aborted) throw err;
       emitPay("retrying-payment", { message });
       await new Promise((r) => setTimeout(r, 600));
-      res = await call(buildX402Payment(input.address).fetchWithPay, {}, buildBody().body);
+      res = await call(buildX402Payment(input.address, capabilityId).fetchWithPay, {});
     }
   }
+  return res;
+}
 
-  if (!res.ok) {
-    const required = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required");
-    if (required) {
-      try {
-        const decoded = JSON.parse(atob(required)) as { error?: string };
-        const reason = decoded.error ? `: ${decoded.error}` : "";
-        throw new Error(`Payment required${reason}`);
-      } catch (err) {
-        if (err instanceof Error && err.message.startsWith("Payment required")) throw err;
+async function throwResponseError(res: Response): Promise<never> {
+  const required = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required");
+  if (required) {
+    try {
+      const decoded = JSON.parse(atob(required)) as { error?: string };
+      const reason = decoded.error ? `: ${decoded.error}` : "";
+      throw new Error(`Payment required${reason}`);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Payment required")) throw err;
+    }
+  }
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  throw withErrorMeta(new Error(toErrorMessage(body, res.status)), res, body);
+}
+
+export interface PaidEvidenceResult {
+  data: unknown;
+  status: string;
+  txId: string;
+}
+
+export async function payForCapability(input: {
+  address: string;
+  endpoint: string;
+  question: string;
+  serviceName?: string;
+  text?: string;
+  url?: string;
+  files?: File[];
+  idempotencyKey?: string;
+  reinvestigateFrom?: string;
+  signal?: AbortSignal;
+}): Promise<PaidInvestigationResult> {
+  const res = await postPaid({
+    address: input.address,
+    endpoint: input.endpoint,
+    files: input.files,
+    idempotencyKey: input.idempotencyKey,
+    signal: input.signal,
+    buildBody: (files) => {
+      if (files.length) {
+        const form = new FormData();
+        form.append("question", input.question);
+        if (input.text) form.append("text", input.text);
+        if (input.url) form.append("url", input.url);
+        if (input.serviceName) form.append("serviceName", input.serviceName);
+        if (input.reinvestigateFrom) form.append("reinvestigateFrom", input.reinvestigateFrom);
+        appendStableFiles(form, "files", files);
+        return { headers: {} as Record<string, string>, body: form };
       }
-    }
-    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-    throw withErrorMeta(new Error(toErrorMessage(body, res.status)), res, body);
-  }
+      return {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: input.question,
+          serviceName: input.serviceName,
+          text: input.text,
+          url: input.url,
+          reinvestigateFrom: input.reinvestigateFrom,
+        }),
+      };
+    },
+  });
 
+  if (!res.ok) await throwResponseError(res);
   const txId = extractSettlementTxId(res);
-  const bodyJson = (await res.json().catch(() => ({}))) as {
+  const body = (await res.json().catch(() => ({}))) as {
     id?: string;
     status?: string;
     capability?: string;
   };
-  if (!bodyJson.id) {
-    throw new Error("Investigation did not return an id");
-  }
+  if (!body.id) throw new Error("Investigation did not return an id");
   return {
-    id: bodyJson.id,
-    status: bodyJson.status ?? "",
+    id: body.id,
+    status: body.status ?? "",
     txId,
-    capability: bodyJson.capability,
+    capability: body.capability,
   };
+}
+
+export async function payForEvidence(input: {
+  address: string;
+  endpoint: string;
+  fields?: Record<string, string>;
+  json?: unknown;
+  files?: File[];
+  fileField?: string;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<PaidEvidenceResult> {
+  const res = await postPaid({
+    address: input.address,
+    endpoint: input.endpoint,
+    files: input.files,
+    idempotencyKey: input.idempotencyKey,
+    signal: input.signal,
+    buildBody: (files) => {
+      if (files.length) {
+        const form = new FormData();
+        for (const [name, value] of Object.entries(input.fields ?? {})) form.append(name, value);
+        appendStableFiles(form, input.fileField ?? "file", files);
+        return { headers: {} as Record<string, string>, body: form };
+      }
+      return {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input.json ?? input.fields ?? {}),
+      };
+    },
+  });
+
+  if (!res.ok) await throwResponseError(res);
+  const txId = extractSettlementTxId(res);
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+  const status =
+    data && typeof data === "object" && "status" in data
+      ? String((data as { status?: unknown }).status ?? "")
+      : "";
+  return { data, status, txId };
 }
 
 /**
@@ -565,18 +623,27 @@ export async function payForInvestigation(input: {
   return { id: body.id, status: body.status ?? "", txId };
 }
 
+export function normalizeCapabilityEndpoint(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "";
+  if (raw.startsWith("/api/evidence/") || raw.startsWith("/api/x402/")) return raw;
+  return `/api/x402/${raw.replace(/^\/+/, "")}`;
+}
+
 /** Determine the correct atomic endpoint for a set of inputs. */
 export function detectCapabilityEndpoint(files: File[], url: string): string {
   const mimes = files.map((f) => f.type);
   const names = files.map((f) => f.name.toLowerCase());
-  
+
   if (mimes.some((m) => m.startsWith("image/"))) return "/api/x402/image-investigation";
-  
-  if (mimes.some((m) => m.startsWith("video/")) || 
-      names.some((n) => n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".avi") || n.endsWith(".wmv"))) {
+
+  if (
+    mimes.some((m) => m.startsWith("video/")) ||
+    names.some((n) => n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".avi") || n.endsWith(".wmv"))
+  ) {
     return "/api/x402/video-investigation";
   }
-  
+
   if (mimes.some((m) => m === "application/pdf")) return "/api/x402/document-investigation";
   if (mimes.some((m) => m.includes("json") || m.includes("csv"))) return "/api/x402/data-investigation";
   if (mimes.some((m) => m.startsWith("audio/"))) return "/api/x402/audio-investigation";
