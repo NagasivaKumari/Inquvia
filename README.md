@@ -412,49 +412,10 @@ Where possible, evidence retains source references such as:
 - metadata,
 - and other provenance information.
 
----
-
-## 12. Supported Evidence Types
-
-### Image
-
-Typical formats:
-
-`jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`, `tif`, `tiff`
-
-### Video
-
-Typical formats:
-
-`mp4`, `mov`, `m4v`, `avi`, `mkv`, `webm`, `mpeg`, `mpg`
-
-### Audio
-
-Typical formats:
-
-`mp3`, `wav`, `m4a`, `aac`, `flac`, `ogg`, `opus`, audio webm
-
-### Documents
-
-Typical formats:
-
-`pdf`, `docx`, `doc`, `txt`, `md`, `rtf`, `odt`
-
-### Structured Data
-
-Depending on the deployed parser configuration:
-
-`json`, `csv`, `tsv`, `txt`, and other supported tabular formats
-
-### URLs
-
-`http` and `https` public URLs
-
-> Actual upload validation is authoritative. Formats should only be considered supported when the deployed processing pipeline can reliably handle them.
 
 ---
 
-## 13. Evidence Analysis Features
+## 12. Evidence Analysis Features
 
 ### Contradiction Analysis
 
@@ -484,7 +445,7 @@ Assesses a specific claim against the supplied evidence.
 
 ---
 
-## 14. Local Development
+## 13. Local Development
 
 ### Prerequisites
 
@@ -539,7 +500,7 @@ comes back.
 
 ---
 
-## 15. Environment Configuration
+## 14. Environment Configuration
 
 Copy `.env.example` to `.env`. Nothing is hardcoded in the application.
 
@@ -597,7 +558,7 @@ Never commit private keys, database credentials, or API keys.
 
 ---
 
-## 16. Running a Test Investigation
+## 15. Running a Test Investigation
 
 A basic local test should follow this flow:
 
@@ -619,21 +580,33 @@ For x402 testing, use the configured Testnet flow before using Mainnet funds.
 
 ---
 
-## 17. Testing
+## 16. Testing
+
+Commands that run from a fresh clone of this repository:
 
 ```bash
 npm run build                                             # frontend build
-python -m pytest -p no:asyncio backend/tests/test_api.py -q
-python backend/tests/test_audit_fixes.py                  # network-free audit checks
 python backend/demo.py                                    # offline end-to-end self-check
 ```
 
-Backend tests run against `mongomock` with testnet defaults, so they never touch a
-live network or spend real USDC.
+`backend/demo.py` exercises the pipeline end to end with no network access and
+no USDC spend.
+
+> The pytest suite under `backend/tests/` is developed and run locally but is
+> excluded from version control by `.gitignore`, so it is not present in a fresh
+> clone. Two useful checks when you have the full working tree:
+>
+> ```bash
+> python -m pytest -p no:asyncio backend/tests/test_api.py -q
+> python backend/tests/test_audit_fixes.py                  # network-free audit checks
+> ```
+>
+> Backend tests run against `mongomock` with testnet defaults, so they never
+> touch a live network or spend real USDC.
 
 ---
 
-## 18. Live Project
+## 17. Live Project
 
 **Application:**  
 https://inquvia.vercel.app/
@@ -665,7 +638,7 @@ The entry is live when all of the following hold:
 
 ---
 
-## 19. Repository Structure
+## 18. Repository Structure
 
 A simplified view of the repository:
 
@@ -693,7 +666,7 @@ inquvia/
 
 ---
 
-## 20. Demonstration
+## 19. Demonstration
 
 The implemented Inquvia workflow takes an investigation from a user question to a traceable final report.
 
@@ -816,7 +789,7 @@ The report and activity view preserve the investigation result together with the
 
 ---
 
-## 21. Limitations
+## 20. Limitations
 
 Inquvia is an evidence investigation system, not an absolute truth oracle.
 
@@ -834,14 +807,14 @@ The system is designed to make the available evidence and remaining uncertainty 
 
 ---
 
-## 22. Team
+## 21. Team
 
 - **Nagasiva Kumari Kota**
 - **Akash Kumar Guntur**
 
 ---
 
-## 23. Acknowledgements
+## 22. Acknowledgements
 
 Built with and around:
 
@@ -853,7 +826,7 @@ Built with and around:
 
 ---
 
-## 24. License
+## 23. License
 
 MIT — see [LICENSE](LICENSE).
 
@@ -863,7 +836,7 @@ taxonomy under the Algorand ecosystem.
 
 ---
 
-## 25. Contact
+## 24. Contact
 
 **Project:** Inquvia
 
