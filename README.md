@@ -836,8 +836,6 @@ The system is designed to make the available evidence and remaining uncertainty 
 
 ## 22. Team
 
-Inquvia is built by a two-person team.
-
 - **Nagasiva Kumari Kota**
 - **Akash Kumar Guntur**
 
