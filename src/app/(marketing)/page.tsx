@@ -129,9 +129,6 @@ function HomePageContent() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [prices, setPrices] = useState<Record<string, number>>({});
-  const [evidenceServices, setEvidenceServices] = useState<
-    { id: string; name: string; description?: string; capability?: string; priceMicro?: number }[]
-  >([]);
   const [demoStageIndex, setDemoStageIndex] = useState(4); // Default: Assessment stage
 
   useEffect(() => {
@@ -149,14 +146,6 @@ function HomePageContent() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    fetch(`${API_BASE}/api/providers`)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        if (Array.isArray(data?.services)) setEvidenceServices(data.services);
-      })
-      .catch(() => {});
-  }, []);
 
   // Subtle scroll-reveal observer
   useEffect(() => {
@@ -328,40 +317,6 @@ function HomePageContent() {
         </div>
       </section>
 
-      {/* DYNAMIC EVIDENCE SERVICES (IF REGISTERED BY PROVIDERS) */}
-      {evidenceServices.length > 0 && (
-        <section id="evidence-services" className={`${styles.toolsSection} ${styles.revealOnScroll}`}>
-          <div className="container">
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionKicker}>Evidence services</span>
-              <h2 className={styles.sectionTitle}>What Inquvia can check for you</h2>
-              <p className={styles.sectionLede}>
-                Inquvia selects only the relevant evidence checks for your request,
-                then shows the sources, limitations, and payment trail in your report.
-              </p>
-            </div>
-            <div className={styles.toolsGrid}>
-              {evidenceServices.map((service) => (
-                <div key={service.id} className={styles.toolCard}>
-                  <div className={styles.toolCardBody}>
-                    <span className={styles.toolType}>{service.capability ?? "evidence"}</span>
-                    <h3 className={styles.toolTitle}>{service.name}</h3>
-                    <p className={styles.toolDesc}>{service.description || "Evidence analysis service"}</p>
-                    <div className={styles.toolMeta}>
-                      <span className={styles.toolPrice}>
-                        {typeof service.priceMicro === "number"
-                          ? `$${(service.priceMicro / 1_000_000).toFixed(3)} USDC`
-                          : "Priced per request"}
-                      </span>
-                      <span className={styles.toolGo}>Selected when relevant</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* REAL-WORLD SITUATIONS */}
       <section className={`${styles.casesSection} ${styles.revealOnScroll}`}>
