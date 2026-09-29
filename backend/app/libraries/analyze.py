@@ -10,8 +10,21 @@ VALID_SIGNALS = ["supporting", "contradictory", "uncertain", "observed"]
 
 
 def redundant_evidence_ids(inv: dict, evidence: list[dict]) -> set:
-    """Ids of evidence that must NOT count as independent confirmation."""
-    return engines.DuplicateDependencyEngine.detect_redundant(evidence)
+    """Ids of evidence that must NOT count as independent confirmation.
+
+    Two sources: what the fingerprint engine can see in the items themselves,
+    and the duplicate groups the pipeline already computed and stored on the
+    investigation. Ignoring the latter double-counts copied evidence and
+    inflates confidence.
+    """
+    redundant = engines.DuplicateDependencyEngine.detect_redundant(evidence)
+    groups = (inv or {}).get("duplicates") or []
+    if isinstance(groups, dict):
+        groups = groups.get("duplicates") or []
+    for group in groups:
+        if isinstance(group, (list, tuple)) and len(group) > 1:
+            redundant.update(group[1:])
+    return redundant
 
 
 def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
@@ -41,7 +54,7 @@ def heuristic_analysis(inv: dict, evidence: list[dict]) -> dict:
         if supporting or contradicting:
             conclusion_text = (
                 f"Based on {len(evidence)} acquired evidence item(s), {len(supporting)} "
-                f"established support and {len(contradicting)} established contradiction."
+                f"supporting and {len(contradicting)} contradicting."
             )
         else:
             conclusion_text = (

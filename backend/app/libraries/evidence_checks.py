@@ -2,9 +2,16 @@
 
 Each planned evidence requirement whose capability maps to a runnable
 deterministic check is executed server-side against the user's submission and
-recorded as acquired evidence (origin "evidence_service"). Checks that would
-require an external provider we don't have (reverse-image indexes, WHOIS,
-search engines, transcription) are skipped and simply are not counted.
+recorded as acquired evidence (origin "evidence_service", a legacy name for an
+internal Inquvia check — not a third-party provider). Checks with no reachable
+data source are skipped and simply are not counted.
+
+Network-backed checks and their dependencies:
+  - reverse-image / web search   SERPAPI_API_KEY   (libraries/reverse_image.py)
+  - C2PA trust anchors           contentcredentials.org (image_c2pa.py)
+  - audio transcription          GROQ_API_KEY      (Whisper)
+  - URL DNS/TLS/fetch, JS pages  direct + Playwright (web_inspector, browser_renderer)
+LLM interpretation lives in libraries/ai.py and runs after these, not here.
 
 ponytail: no model calls here — these are reproducible observations; the
 analyzer later reasons over them and gives the verdict.
@@ -66,7 +73,7 @@ _AUTHENTICITY_REASONING_PROMPT = (
 )
 
 from ..libraries.evidence_registry import EvidenceRegistry
-from ..libraries.evidence_types import CheckStatus
+from ..libraries.evidence_types import CheckStatus, ExtractionStatus
 from ..libraries.checks.image_metadata import ImageMetadataCheck
 from ..libraries.checks.image_manipulation import ImageManipulationCheck
 

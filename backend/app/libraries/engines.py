@@ -25,8 +25,21 @@ class DuplicateDependencyEngine:
         
         fingerprints = {}
         for e in evidence:
-            # Simple fingerprinting based on finding + source
-            fingerprint = f"{e.get('type')}|{e.get('source')}|{re.sub(r'\\W+', ' ', e.get('finding', '').lower())}"
+            # Signal direction must be part of the fingerprint. Two items can
+            # carry the same observation text and disagree about what it means;
+            # collapsing them drops the contradiction and silently flips the
+            # verdict (supporting + contradictory looked like a match pair and
+            # returned likely_genuine instead of suspicious). Same wording with
+            # the same signal is still a duplicate.
+            signal = "{}|{}|{}".format(
+                e.get("signal"),
+                bool(e.get("supportsClaim")),
+                bool(e.get("contradictsClaim")),
+            )
+            fingerprint = (
+                f"{e.get('type')}|{e.get('source')}|{signal}|"
+                f"{re.sub(r'\\W+', ' ', (e.get('finding') or '').lower())}"
+            )
             fingerprints.setdefault(fingerprint, []).append(e['id'])
             
         redundant = set()
@@ -42,23 +55,113 @@ class DuplicateDependencyEngine:
                 
         return redundant
 
+# A "Label: 123" style finding carries a checkable fact. Two items claiming the
+# same label with materially different numbers are a contradiction regardless of
+# what the model says. ponytail: label + first number only, 5% tolerance; this
+# is the floor, not a replacement for the semantic pass below.
+_NUMERIC_LABEL = re.compile(
+    r"(?P<label>[A-Za-z][A-Za-z_-]{1,30})\s*(?:is|=|:)\s*\$?\s*"
+    r"(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_LABEL_NOISE = re.compile(
+    r"^(?:page\s+\d+\s+(?:lists?|shows?)|the|report\s+shows?|line\s+item\s+total)\s+",
+    re.IGNORECASE,
+)
+_NUM_TOLERANCE = 0.05
+
+
+def _numeric_claims(evidence: List[Dict[str, Any]]) -> Dict[str, List[tuple]]:
+    """Map normalized label -> [(value, evidence_id)] across evidence findings."""
+    out: Dict[str, List[tuple]] = {}
+    for e in evidence:
+        m = _NUMERIC_LABEL.search((e.get("finding") or "").strip())
+        if not m:
+            continue
+        label = _LABEL_NOISE.sub("", m.group("label")).strip().lower()
+        if not label:
+            continue
+        try:
+            value = float(m.group("num").replace(",", ""))
+        except ValueError:
+            continue
+        out.setdefault(label, []).append((value, e.get("id")))
+    return out
+
+
+def numeric_conflicts(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deterministic contradiction pass: same label, materially different value."""
+    conflicts = []
+    for label, items in _numeric_claims(evidence).items():
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (va, ida), (vb, idb) = items[i], items[j]
+                if ida == idb or ida is None or idb is None:
+                    continue
+                hi = max(abs(va), abs(vb))
+                if hi and abs(va - vb) / hi > _NUM_TOLERANCE:
+                    conflicts.append({
+                        "evidence_id1": ida,
+                        "evidence_id2": idb,
+                        "description": f"Conflicting values for '{label}': {va:g} vs {vb:g}.",
+                        "detectedBy": "numeric",
+                    })
+    return conflicts
+
+
 class ContradictionEngine:
     """Compares evidence for semantic contradictions."""
-    
+
     @staticmethod
     async def find_contradictions(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Performs semantic claim comparison between evidence items."""
+        """Deterministic numeric conflicts first, then the semantic pass.
+
+        The numeric pass is authoritative and never dropped; the model's pairs
+        are merged in only where they are not already covered.
+        """
+        deterministic = numeric_conflicts(evidence)
+
         system_prompt = (
             "Analyze the following evidence items and identify any semantic contradictions "
             "between them. Return a JSON list of objects, each containing 'evidence_id1', "
             "'evidence_id2', and a 'description' of the contradiction."
         )
         parts = [{"text": json.dumps(evidence)}]
-        
+
         raw_result = await call_ai_with_parts(system_prompt + few_shot_block("contradictions"), parts, task="contradictions")
         result = parse_ai_json(raw_result)
-        
-        return result if isinstance(result, list) else []
+        ai = result if isinstance(result, list) else []
+
+        seen = set()
+        for c in deterministic:
+            seen.add((c["evidence_id1"], c["evidence_id2"]))
+            seen.add((c["evidence_id2"], c["evidence_id1"]))
+        merged = list(deterministic)
+        for c in ai:
+            if not isinstance(c, dict):
+                continue
+            pair = (c.get("evidence_id1"), c.get("evidence_id2"))
+            if pair in seen or (pair[1], pair[0]) in seen:
+                continue
+            seen.add(pair)
+            merged.append(c)
+        return merged
+
+
+if __name__ == "__main__":
+    ev = [
+        {"id": "1", "finding": "Attendees: 300"},
+        {"id": "2", "finding": "Attendees: 42"},
+        {"id": "3", "finding": "Total: $1,240.00"},
+        {"id": "4", "finding": "Page lists Total: $1,240.00"},
+    ]
+    c = numeric_conflicts(ev)
+    assert len(c) == 1, c
+    assert {c[0]["evidence_id1"], c[0]["evidence_id2"]} == {"1", "2"}, c
+    assert c[0]["detectedBy"] == "numeric"
+    assert numeric_conflicts([ev[2], ev[3]]) == []
+    assert numeric_conflicts([{"id": "9", "finding": "title=Widget Pro"}]) == []
+    print("ContradictionEngine numeric self-check OK")
 
 class GapsEngine:
     """Identifies missing evidence based on investigation objectives."""
@@ -100,5 +203,20 @@ class ClaimVerificationGate:
             system_prompt + few_shot_block("verify"), parts, task="verify", key="verified"
         )
         result = parse_ai_json(raw_result)
-        
-        return result if isinstance(result, dict) else {"verified": False, "unsupported_claims": ["Error verifying claims"], "confidence_score": 0.0}
+
+        if isinstance(result, dict) and result.get("verified") is not None:
+            return result
+
+        # Fail CLOSED, not open. A provider outage must never look like a
+        # finding: `verified: False` here would read as "the evidence does not
+        # support this claim" and contradict it. Flag it as unavailable and
+        # leave confidence unset so it cannot be averaged in as a low score.
+        return {
+            "verified": None,
+            "unsupported_claims": [],
+            "contradictions": [],
+            "missing_objectives": [],
+            "confidence_score": None,
+            "verificationUnavailable": True,
+            "unavailableReason": "No model provider returned a usable verification.",
+        }

@@ -216,21 +216,26 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 #   text-only fallbacks for transcript-of-transcript requests.
 # Live / TTS / robotics / image-generation free models can't do one-shot
 # JSON analysis over evidence, so they are intentionally not routed here.
+# Per-task Gemini chain, tried in order (ai.call_ai_with_parts falls through on
+# failure). Every chain leads with a model verified reachable on the current
+# key: the pro/preview names below return 429/503 and, when they lead, the whole
+# chain can dead-end into a null result. ponytail: pro models stay as later
+# fallbacks; delete them if they stay unavailable.
 MODEL_TASKS: dict[str, list[str]] = {
-    "image": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemma-4-31b-it"],
-    "video": ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemma-4-26b-a4b-it"],
-    "audio": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemma-4-26b-a4b-it"],
-    "document": ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.7-flash", "gemini-pro-latest", "gemma-4-26b-a4b-it"],
-    "web source": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemma-4-31b-it"],
-    "source": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemma-4-31b-it"],
-    "authenticity": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.8-flash", "gemini-3.7-flash"],
-    "claim": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
-    "verify": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
-    "contradictions": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.8-flash"],
-    "gaps": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.7-flash", "gemini-3.5-flash-lite"],
-    "plan": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
-    "structured": ["gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
-    "data": ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
+    "image": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash", "gemma-4-26b-a4b-it"],
+    "video": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash", "gemma-4-26b-a4b-it"],
+    "audio": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemma-4-26b-a4b-it"],
+    "document": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash", "gemma-4-26b-a4b-it"],
+    "web source": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemma-4-26b-a4b-it"],
+    "source": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemma-4-26b-a4b-it"],
+    "authenticity": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    "claim": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    "verify": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    "contradictions": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    "gaps": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview"],
+    "plan": ["gemini-3.5-flash-lite", "gemini-3.1-pro-preview"],
+    "structured": ["gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "data": ["gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
     "transcribe": ["gemini-3.5-transcribe", "gemini-3.5-transcribe-live", "gemini-3.5-flash-lite"],
 }
 

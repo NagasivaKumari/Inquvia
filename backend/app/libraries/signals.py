@@ -11,6 +11,7 @@ encoding analysis becomes a requirement.
 """
 import io
 import struct
+import subprocess
 
 IMAGE_KINDS = {"image", "jpeg", "png", "gif", "webp", "bmp", "tiff"}
 VIDEO_KINDS = {"video", "mp4", "mov", "webm", "mkv", "avi"}
@@ -228,7 +229,6 @@ def _probe_ffprobe(buf: bytes, _kind: str) -> dict | None:
     to the container parser). never fabricates a signal."""
     import json
     import shutil
-    import subprocess
     import tempfile
     import os
 

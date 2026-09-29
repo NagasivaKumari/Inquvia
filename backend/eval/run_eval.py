@@ -47,11 +47,13 @@ def _match(got, want, tol):
             return False
         if not want:
             return True
-        exact = {_norm(x) for x in got if isinstance(x, str)} & {_norm(x) for x in want}
-        if exact:
-            return True
-        texts = [str(x) for x in got]
-        hits = sum(1 for wt in want if any(_norm(wt) in _norm(t) for t in texts))
+        def _one(w, g):
+            if isinstance(w, dict) and isinstance(g, dict):
+                return _match(g, w, tol)
+            if isinstance(w, str) and isinstance(g, str):
+                return _norm(w) in _norm(g)
+            return g == w
+        hits = sum(1 for w in want if any(_one(w, g) for g in got))
         return hits / len(want) >= 0.5
     if isinstance(want, dict):
         return isinstance(got, dict) and all(
@@ -84,9 +86,13 @@ async def _run_one(case):
         return None, [("__error__", False, None, f"unknown task {task}")]
 
     checks = []
-    for key, want in gold.items():
-        got = result.get(key) if isinstance(result, dict) else None
-        checks.append((key, _match(got, want, tol_for(key)), got, want))
+    if isinstance(gold, dict):
+        for key, want in gold.items():
+            got = result.get(key) if isinstance(result, dict) else None
+            checks.append((key, _match(got, want, tol_for(key)), got, want))
+    else:
+        # contradictions / gaps return a list payload; gold is the whole list.
+        checks.append(("result", _match(result, gold, 0.0), result, gold))
     return task, checks
 
 

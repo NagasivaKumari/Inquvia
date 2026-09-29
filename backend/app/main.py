@@ -66,6 +66,50 @@ _auth_limiter = _RateLimiter(max_attempts=5, window_seconds=900)  # 5 attempts p
 app = FastAPI(title="Inquvia Backend API")
 app.include_router(evidence_api.router)
 
+
+# Endpoint accuracy coverage. Honest labels only: "measured" means a runnable
+# check asserts it today (backend/app/libraries/eval_accuracy.py), "partial"
+# means only part of the path is measured, "unmeasured" means nobody can tell
+# you how often it is right. Do NOT change "measured" to raise a number.
+_ENDPOINT_COVERAGE: dict[str, tuple[str, str]] = {
+    "/api/evidence/image":         ("measured", "deterministic signals, forensics, C2PA, quality, batch clustering - no AI in these layers"),
+    "/api/evidence/document":      ("measured", "deterministic text/page extraction (PyMuPDF)"),
+    "/api/evidence/structured":    ("measured", "deterministic compute over supplied rows"),
+    "/api/evidence/contracts":     ("measured", "static contract registry, exact"),
+    "/api/evidence/services":      ("measured", "static service registry, exact"),
+    "/api/evidence/contradictions": ("partial", "deterministic numeric-conflict pre-pass self-checked; AI merge judged on 2 eval cases"),
+    "/api/evidence/assess":        ("unmeasured", "heuristic + AI, no labeled corpus"),
+    "/api/evidence/authenticity":  ("unmeasured", "100% AI, no labeled corpus"),
+    "/api/evidence/duplicates":    ("unmeasured", "AI over caller-supplied items, no labeled corpus"),
+    "/api/evidence/timeline":      ("unmeasured", "AI over caller-supplied items, no labeled corpus"),
+    "/api/evidence/gaps":          ("unmeasured", "AI over caller-supplied items, no labeled corpus"),
+    "/api/evidence/url":           ("unmeasured", "network fetch + scrape, no labeled corpus"),
+    "/api/evidence/audio":         ("unmeasured", "network STT/ffmpeg + AI, no labeled corpus"),
+    "/api/evidence/video":         ("unmeasured", "ffmpeg + AI frame analysis, no labeled corpus"),
+}
+
+
+_original_openapi = app.openapi
+
+
+def _openapi_with_coverage():
+    schema = _original_openapi()
+    for path, ops in (schema.get("paths") or {}).items():
+        hit = _ENDPOINT_COVERAGE.get(path)
+        if not hit:
+            continue
+        status, basis = hit
+        line = f"[accuracy: {status}] {basis}"
+        for op in ops.values():
+            if isinstance(op, dict):
+                existing = (op.get("description") or "").strip()
+                op["description"] = f"{existing}\n\n{line}" if existing else line
+    return schema
+
+
+app.openapi = _openapi_with_coverage
+
+
 from fastapi.middleware.cors import CORSMiddleware
 _ALLOWED_ORIGINS = [
     o.strip()
@@ -391,11 +435,6 @@ async def x402_discovery(request: Request):
         "description": "Evidence-backed investigations paid per request with x402 on Algorand.",
         "resources": resources,
     }
-
-
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "service": "inquvia-backend"}
 
 
 # ── Auth ──
