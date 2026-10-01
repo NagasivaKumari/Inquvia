@@ -7,6 +7,8 @@ import { apiFetch, invalidateAuthCache } from "@/lib/api";
 import { payForCapability, payForEvidence, detectCapabilityEndpoint, normalizeCapabilityEndpoint } from "@/lib/x402/client";
 import { connectPera, signChallenge } from "@/lib/wallet/pera";
 import { WalletBadge } from "@/components/wallet/WalletBadge";
+import { InvestigationResultView } from "@/components/investigation/InvestigationResultView";
+import { normalizeToInvestigation } from "@/lib/investigation-normalizer";
 import type { Investigation } from "@/lib/types";
 import styles from "./page.module.css";
 
@@ -49,11 +51,53 @@ interface RawEvidenceContract {
 
 const EVIDENCE_ENDPOINT_MAP: Record<string, string> = {
   "/api/x402/image-investigation": "/api/evidence/image",
+  "/api/x402/image-batch-investigation": "/api/evidence/image",
   "/api/x402/video-investigation": "/api/evidence/video",
   "/api/x402/audio-investigation": "/api/evidence/audio",
   "/api/x402/document-investigation": "/api/evidence/document",
   "/api/x402/data-investigation": "/api/evidence/structured",
   "/api/x402/source-investigation": "/api/evidence/url",
+};
+
+const FALLBACK_EXTENSIONS: Record<string, string[]> = {
+  "/api/x402/claim-investigation": [
+    ".jpg",".jpeg",".png",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif",
+    ".mp4",".mov",".m4v",".avi",".mkv",".webm",".mpeg",".mpg",".wmv",
+    ".mp3",".wav",".m4a",".aac",".flac",".ogg",".opus",
+    ".pdf",".docx",".doc",".txt",".md",".rtf",".odt",".html",".htm",".xhtml",
+    ".csv",".tsv",".json",".jsonl",".xlsx",".xls",".parquet",
+  ],
+  "/api/x402/image-investigation": [".jpg",".jpeg",".png",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif"],
+  "/api/x402/image-batch-investigation": [".jpg",".jpeg",".png",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif"],
+  "/api/x402/video-investigation": [".mp4",".mov",".m4v",".avi",".mkv",".webm",".mpeg",".mpg",".wmv"],
+  "/api/x402/audio-investigation": [".mp3",".wav",".m4a",".aac",".flac",".ogg",".opus",".webm"],
+  "/api/x402/document-investigation": [".pdf",".docx",".doc",".txt",".md",".rtf",".odt",".html",".htm",".xhtml"],
+  "/api/x402/data-investigation": [".csv",".tsv",".json",".jsonl",".xlsx",".xls",".parquet"],
+  "/api/x402/source-investigation": [],
+  "/api/evidence/image": [".jpg",".jpeg",".png",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif"],
+  "/api/evidence/video": [".mp4",".mov",".m4v",".avi",".mkv",".webm",".mpeg",".mpg",".wmv"],
+  "/api/evidence/audio": [".mp3",".wav",".m4a",".aac",".flac",".ogg",".opus",".webm"],
+  "/api/evidence/document": [".pdf",".docx",".doc",".txt",".md",".rtf",".odt",".html",".htm",".xhtml"],
+  "/api/evidence/structured": [".csv",".tsv",".json",".jsonl",".xlsx",".xls",".parquet"],
+  "/api/evidence/url": [],
+  "/api/evidence/authenticity": [".jpg",".jpeg",".png",".webp",".gif",".mp4",".mov",".webm",".mp3",".wav"],
+};
+
+const FALLBACK_MIMES: Record<string, string[]> = {
+  "/api/x402/claim-investigation": [
+    "image/jpeg","image/png","image/webp","image/gif","image/bmp","image/tiff","image/heic","image/heif",
+    "video/mp4","video/quicktime","video/webm","video/x-matroska","video/x-msvideo","video/mpeg","video/x-m4v","video/x-ms-wmv",
+    "audio/mpeg","audio/mp3","audio/wav","audio/ogg","audio/x-m4a","audio/mp4","audio/aac","audio/flac","audio/opus","audio/webm",
+    "application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/msword","text/plain","text/markdown","text/x-markdown","application/rtf","application/vnd.oasis.opendocument.text",
+    "text/csv","text/tab-separated-values","application/json","application/x-jsonlines","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel","application/x-parquet","application/parquet","text/html","application/xhtml+xml",
+  ],
+  "/api/x402/image-investigation": ["image/jpeg","image/png","image/webp","image/gif","image/bmp","image/tiff","image/heic","image/heif"],
+  "/api/x402/image-batch-investigation": ["image/jpeg","image/png","image/webp","image/gif","image/bmp","image/tiff","image/heic","image/heif"],
+  "/api/x402/video-investigation": ["video/mp4","video/quicktime","video/webm","video/x-matroska","video/x-msvideo","video/mpeg","video/x-m4v","video/x-ms-wmv"],
+  "/api/x402/audio-investigation": ["audio/mpeg","audio/mp3","audio/wav","audio/ogg","audio/x-m4a","audio/mp4","audio/aac","audio/flac","audio/opus","audio/webm"],
+  "/api/x402/document-investigation": ["application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/msword","text/plain","text/markdown","text/x-markdown","application/rtf","application/vnd.oasis.opendocument.text","text/html","application/xhtml+xml"],
+  "/api/x402/data-investigation": ["text/csv","text/tab-separated-values","application/json","application/x-jsonlines","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel","application/x-parquet","application/parquet"],
+  "/api/x402/source-investigation": [],
 };
 
 const DIRECT_ANALYSIS_ENDPOINTS = new Set([
@@ -109,6 +153,9 @@ function acceptedExtensions(
   services: EvidenceServiceContract[] | null,
   contracts: RawEvidenceContract[],
 ): string[] {
+  if (endpoint === "/api/x402/claim-investigation") {
+    return FALLBACK_EXTENSIONS["/api/x402/claim-investigation"] ?? [];
+  }
   const target = evidenceEndpoint(endpoint);
   const contract = contracts.find((item) => item.endpoint === target);
   const capability = capabilities?.find((item) => item.path === endpoint);
@@ -116,8 +163,9 @@ function acceptedExtensions(
   const extensions = isDirectEvidence(endpoint)
     ? contract?.accepted_file_extensions ?? service?.acceptedFileExtensions ?? []
     : capability?.acceptedFileExtensions ?? contract?.accepted_file_extensions ?? service?.acceptedFileExtensions ?? [];
-  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return extensions;
-  return [...new Set([...extensions, ".pdf"])];
+  const result = extensions.length ? extensions : (FALLBACK_EXTENSIONS[endpoint] ?? []);
+  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return result;
+  return [...new Set([...result, ".pdf"])];
 }
 
 function acceptedMimes(
@@ -126,6 +174,9 @@ function acceptedMimes(
   services: EvidenceServiceContract[] | null,
   contracts: RawEvidenceContract[],
 ): string[] {
+  if (endpoint === "/api/x402/claim-investigation") {
+    return FALLBACK_MIMES["/api/x402/claim-investigation"] ?? [];
+  }
   const target = evidenceEndpoint(endpoint);
   const contract = contracts.find((item) => item.endpoint === target);
   const capability = capabilities?.find((item) => item.path === endpoint);
@@ -133,8 +184,9 @@ function acceptedMimes(
   const mimes = isDirectEvidence(endpoint)
     ? contract?.accepted_mimetypes ?? service?.acceptedMimeTypes ?? []
     : capability?.acceptedMimeTypes ?? contract?.accepted_mimetypes ?? service?.acceptedMimeTypes ?? [];
-  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return mimes;
-  return [...new Set([...mimes, "application/pdf"])];
+  const result = mimes.length ? mimes : (FALLBACK_MIMES[endpoint] ?? []);
+  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return result;
+  return [...new Set([...result, "application/pdf"])];
 }
 
 function maxFileSizeMB(
@@ -153,48 +205,26 @@ function maxFileSizeMB(
 function requiredInput(
   endpoint: string,
   name: string,
-  capabilities: PaidCapability[] | null,
-  services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  _capabilities: PaidCapability[] | null,
+  _services: EvidenceServiceContract[] | null,
+  _contracts: RawEvidenceContract[],
 ): boolean {
-  if (!isDirectEvidence(endpoint)) {
-    if (endpoint === "/api/x402/source-investigation") return name === "url";
-    return PAID_FILE_ENDPOINTS.has(endpoint) && name === "file";
+  // URLs are accepted for every endpoint. Neither file nor url is strictly required in HTML
+  // when the user can provide either. Only pure source-investigation with 0 files requires a URL.
+  if (endpoint === "/api/x402/source-investigation" || endpoint === "/api/evidence/url") {
+    return name === "url";
   }
-  const target = evidenceEndpoint(endpoint);
-  const contract = contracts.find((item) => item.endpoint === target);
-  const field = contract
-    ? [...(contract.required_inputs ?? []), ...(contract.optional_inputs ?? [])].find((item) => item.name === name)
-    : undefined;
-  if (field) return field.required !== false;
-  const service = services?.find((item) => item.endpoint === endpoint);
-  const serviceField = [...(service?.requiredInputs ?? []), ...(service?.optionalInputs ?? [])].find(
-    (item) => item.name === name,
-  );
-  if (serviceField) return serviceField.required;
-  return target === "/api/evidence/url" || endpoint === "/api/x402/source-investigation";
+  return false;
 }
 
 function acceptsUrlInput(
-  endpoint: string,
-  capabilities: PaidCapability[] | null,
-  services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  _endpoint: string,
+  _capabilities: PaidCapability[] | null,
+  _services: EvidenceServiceContract[] | null,
+  _contracts: RawEvidenceContract[],
 ): boolean {
-  if (!isDirectEvidence(endpoint)) {
-    return (
-      endpoint === "/api/x402/source-investigation" ||
-      capabilities?.find((item) => item.path === endpoint)?.inputTypes?.includes("url") === true
-    );
-  }
-  const target = evidenceEndpoint(endpoint);
-  const contract = contracts.find((item) => item.endpoint === target);
-  const fields = [...(contract?.required_inputs ?? []), ...(contract?.optional_inputs ?? [])];
-  if (fields.some((item) => item.name === "url")) return true;
-  const service = services?.find((item) => item.endpoint === endpoint);
-  return [...(service?.requiredInputs ?? []), ...(service?.optionalInputs ?? [])].some(
-    (item) => item.name === "url",
-  );
+  // Every investigation endpoint accepts a URL
+  return true;
 }
 
 function allowsMultipleFiles(
@@ -253,27 +283,43 @@ function EndpointRequirements({ endpoint, capabilities, services, contracts }: {
     return (
       <>
         Accepted files: {extensions.map((item) => item.replace(".", "").toUpperCase()).join(", ")}
-        {" — "}up to {maxSizeMB}MB each{acceptsUrl ? " or provide a URL" : ""}
+        {" — "}up to {maxSizeMB}MB each{acceptsUrl ? " (or provide a URL)" : ""}
       </>
     );
   }
-  if (mimes.length) return <>Accepted formats: {mimes.join(", ")} — up to {maxSizeMB}MB</>;
-  if (acceptsUrl || endpoint.endsWith("source-investigation") || endpoint === "/api/evidence/url") {
-    return <>Accepts a URL — no file uploads</>;
+  if (mimes.length) return <>Accepted formats: {mimes.join(", ")} — up to {maxSizeMB}MB{acceptsUrl ? " (or provide a URL)" : ""}</>;
+  if (endpoint === "/api/x402/source-investigation" || endpoint === "/api/evidence/url") {
+    return <>Accepts a public website or source URL to inspect and analyze</>;
   }
-  return <>Required: submit text or structured data input</>;
+  return <>Accepts a URL or supported evidence files</>;
 }
+
+/** All file extensions any endpoint supports — used when no capability is pre-selected
+ * so the browser file picker doesn't block valid types. */
+const ALL_SUPPORTED_EXTENSIONS = [
+  ".jpg",".jpeg",".png",".webp",".gif",".bmp",".tif",".tiff",".heic",".heif",
+  ".mp4",".mov",".m4v",".avi",".mkv",".webm",".mpeg",".mpg",".wmv",
+  ".mp3",".wav",".m4a",".aac",".flac",".ogg",".opus",
+  ".pdf",".docx",".doc",".txt",".md",".rtf",".odt",".html",".htm",".xhtml",
+  ".json",".csv",".tsv",".jsonl",".xlsx",".xls",".parquet",
+].join(",");
 
 function getAcceptAttribute(
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
   contracts: RawEvidenceContract[],
   endpoint: string,
+  _hasCapabilityHint: boolean,
 ): string {
-  if (!endpoint) return "";
+  // If claim-investigation or no endpoint, accept all supported file types
+  if (!endpoint || endpoint === "/api/x402/claim-investigation") {
+    return ALL_SUPPORTED_EXTENSIONS;
+  }
   const extensions = acceptedExtensions(endpoint, capabilities, services, contracts);
   if (extensions.length) return extensions.join(",");
-  return acceptedMimes(endpoint, capabilities, services, contracts).join(",");
+  const mimes = acceptedMimes(endpoint, capabilities, services, contracts);
+  if (mimes.length) return mimes.join(",");
+  return ALL_SUPPORTED_EXTENSIONS;
 }
 
 function directEvidenceJson(endpoint: string, question: string, url: string): unknown {
@@ -325,27 +371,27 @@ function validateEvidenceInput(
     }
     if (value.length > 2048) return "The URL is too long.";
   }
-  const isSourceEndpoint =
-    SOURCE_EVIDENCE_ENDPOINTS.has(endpoint) || endpoint === "/api/x402/source-investigation";
-  if (isSourceEndpoint && files.length > 0 && url.trim()) {
-    return "Provide either a file or a URL, not both.";
-  }
-  if (endpoint === "/api/x402/source-investigation" && files.length > 0) {
-    return "This check accepts a URL, not a file.";
-  }
-  if (PAID_FILE_ENDPOINTS.has(endpoint) && url.trim()) {
-    return "This check accepts a file, not a URL.";
-  }
+
+  // URL is accepted for every endpoint.
+  // For file/media endpoints, if no file is uploaded and no URL is given:
   if (
-    isSourceEndpoint &&
-    endpoint !== "/api/evidence/url" &&
-    endpoint !== "/api/x402/source-investigation" &&
+    PAID_FILE_ENDPOINTS.has(endpoint) &&
     files.length === 0 &&
     !url.trim() &&
     (!sourceInvestigation || isDirectEvidence(endpoint))
   ) {
-    return "Please provide a supported file or a URL before starting this check.";
+    return "Please upload a file or enter a URL before starting this check.";
   }
+
+  if (
+    endpoint === "/api/x402/source-investigation" &&
+    files.length === 0 &&
+    !url.trim() &&
+    !sourceInvestigation
+  ) {
+    return "Please enter a valid URL before starting this check.";
+  }
+
   if (
     DIRECT_ANALYSIS_ENDPOINTS.has(endpoint) &&
     endpoint !== "/api/evidence/gaps" &&
@@ -360,28 +406,27 @@ function validateEvidenceInput(
   if (endpoint === "/api/x402/image-investigation" && files.length > 2) {
     return "Image checks accept at most two images.";
   }
-  if (endpoint === "/api/x402/image-batch-investigation" && files.length < 2) {
+  if (endpoint === "/api/x402/image-batch-investigation" && files.length < 2 && !url.trim()) {
     return "Batch image checks require at least two images.";
   }
   if (files.length > 1 && !allowsMultipleFiles(endpoint, capabilities, services, contracts)) {
     return "This check accepts one file.";
   }
+
   for (const item of files) {
-    const hasExtension = extensions.some((extension) => item.name.toLowerCase().endsWith(extension));
-    const hasMime = mimes.includes(item.type.toLowerCase());
+    const itemName = item.name.toLowerCase();
+    const itemType = (item.type || "").toLowerCase();
+    const hasExtension = extensions.some((extension) => itemName.endsWith(extension.toLowerCase()));
+    const hasMime = mimes.some((m) => m === itemType);
     if ((extensions.length || mimes.length) && !hasExtension && !hasMime) {
-      return `"${item.name}" is not supported by ${label}. Accepted formats: ${extensions.join(", ") || mimes.join(", ")}.`;
+      const allowedText = extensions.map((e) => e.replace(".", "").toUpperCase()).join(", ") || mimes.join(", ");
+      return `"${item.name}" is not supported by ${label}. Accepted formats: ${allowedText}.`;
     }
     if (item.file.size > maxSizeMB * 1024 * 1024) {
       return `"${item.name}" is larger than the ${maxSizeMB}MB limit.`;
     }
   }
-  if (requiredInput(endpoint, "file", capabilities, services, contracts) && files.length === 0 && (!sourceInvestigation || isDirectEvidence(endpoint))) {
-    return "Please upload a file before starting this check.";
-  }
-  if (requiredInput(endpoint, "url", capabilities, services, contracts) && !url.trim()) {
-    return "Please enter a valid URL before starting this check.";
-  }
+
   return null;
 }
 
@@ -730,11 +775,9 @@ function InvestigateForm() {
 
         <div className="form-group">
           <label className="form-label">
-            {requiresFile && !sourceInv
-              ? "Upload evidence (required)"
-              : sourceInv
-                ? "Add replacement evidence (optional)"
-                : "Upload evidence (optional)"}
+            {sourceInv
+              ? "Add replacement evidence (optional)"
+              : "Upload evidence (optional — or provide a URL above)"}
           </label>
           <div
             className={`upload-zone ${dragOver ? "drag-over" : ""}`}
@@ -775,8 +818,7 @@ function InvestigateForm() {
             ref={fileInputRef}
             type="file"
             multiple={multipleFiles}
-            required={requiresFile && !sourceInv}
-            accept={getAcceptAttribute(capabilities, evidenceServices, contracts, detectedCap)}
+            accept={getAcceptAttribute(capabilities, evidenceServices, contracts, detectedCap, Boolean(capabilityHint))}
             onChange={(e) => handleFiles(e.target.files)}
             className="sr-only"
             aria-hidden
@@ -844,7 +886,9 @@ function InvestigateForm() {
       {directResult !== undefined && (
         <section className={styles.result} aria-live="polite">
           <h2 className="heading-md">Evidence result</h2>
-          <pre className={styles.resultJson}>{formatDirectResult(directResult)}</pre>
+          <InvestigationResultView
+            investigation={normalizeToInvestigation(directResult, detectedCap, directResultTxId)}
+          />
           {directResultTxId && (
             <p className="text-muted">Settlement transaction: {directResultTxId}</p>
           )}

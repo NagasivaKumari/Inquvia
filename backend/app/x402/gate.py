@@ -216,6 +216,16 @@ async def _record_paid_request(request, response) -> None:
     if not user:
         return
 
+    # The middleware settles on any <400 response, including ones the handler
+    # rejected (bad input, unsupported file). Recording those would charge the
+    # user for a run that never happened and orphan the payment row.
+    if response.status_code >= 400:
+        logger.warning(
+            f"x402: skipping payment record for settled {response.status_code} response "
+            f"on {getattr(request, 'url', None)}"
+        )
+        return
+
     tx_id = extract_settlement_tx_id_from_response_headers(dict(response.headers)) or ""
 
     # Attribute the capability payment to the investigation. The route handler

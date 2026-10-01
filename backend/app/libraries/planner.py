@@ -261,8 +261,20 @@ class EvidencePlanner:
             print(f"AI planning failed, falling back: {e}")
             return self._plan_fallback(question, inputs)
 
+    def _applicable(self, inputs: List[str]) -> List[dict]:
+        """Checks that can run against the submitted input types.
+
+        An input type with no catalog entry of its own (e.g. "text" for claim
+        investigations) must not filter the catalog down to nothing, or the plan
+        is empty and the investigation acquires no evidence at all.
+        """
+        typed = [c for c in self.checks if c["type"] in inputs]
+        if typed:
+            return typed
+        return [c for c in self.checks if not inputs or c["type"] == "text"] or self.checks
+
     async def _plan_ai(self, question: str, inputs: List[str]) -> List[dict]:
-        applicable = [c for c in self.checks if not inputs or c["type"] in inputs or c["type"] == "text"]
+        applicable = self._applicable(inputs)
         catalog = "\n".join(
             f"{c['capability']}: {c['name']} — {c['desc']}"
             for c in applicable
@@ -289,14 +301,13 @@ class EvidencePlanner:
 
     def _plan_fallback(self, question: str, inputs: List[str]) -> List[dict]:
         checks = []
-        for c in self.checks:
-            if not inputs or c["type"] in inputs or c["type"] == "text":
-                checks.append({
-                    "id": f"req_{len(checks) + 1}",
-                    "type": c["type"],
-                    "capability": c["capability"],
-                    "reason": c["name"],
-                })
+        for c in self._applicable(inputs):
+            checks.append({
+                "id": f"req_{len(checks) + 1}",
+                "type": c["type"],
+                "capability": c["capability"],
+                "reason": c["name"],
+            })
         return checks[:4]
 
 

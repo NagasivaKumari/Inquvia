@@ -14,10 +14,10 @@ ALLOWED_IMAGE_MIME = [
     "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/heic", "image/heif"
 ]
 ALLOWED_VIDEO_MIME = [
-    "video/mp4", "video/webm", "video/x-matroska", "video/x-msvideo", "video/mpeg", "video/x-m4v"
+    "video/mp4", "video/quicktime", "video/webm", "video/x-matroska", "video/x-msvideo", "video/mpeg", "video/x-m4v", "video/x-ms-wmv"
 ]
 ALLOWED_AUDIO_MIME = [
-    "audio/mpeg", "audio/wav", "audio/ogg", "audio/x-m4a", "audio/aac", "audio/flac", "audio/webm"
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/x-m4a", "audio/mp4", "audio/aac", "audio/flac", "audio/opus", "audio/webm"
 ]
 ALLOWED_DOCUMENT_MIME = [
     "application/pdf", 
@@ -25,6 +25,7 @@ ALLOWED_DOCUMENT_MIME = [
     "application/msword", 
     "text/plain", 
     "text/markdown", 
+    "text/x-markdown", 
     "application/rtf", 
     "application/vnd.oasis.opendocument.text",
     "text/html", "application/xhtml+xml"
@@ -36,7 +37,8 @@ ALLOWED_STRUCTURED_MIME = [
     "text/tab-separated-values", 
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
     "application/vnd.ms-excel", 
-    "application/x-parquet"
+    "application/x-parquet",
+    "application/parquet"
 ]
 
 
@@ -186,8 +188,8 @@ def video_contract() -> EndpointContract:
                      description="Maximum number of frames to extract (2-40)",
                      min_value=2, max_value=40, integer_only=True),
         ],
-        accepted_file_types=["video", "mp4", "mov", "m4v", "avi", "mkv", "webm", "mpeg", "mpg"],
-        accepted_file_extensions=[".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".mpeg", ".mpg"],
+        accepted_file_types=["video", "mp4", "mov", "m4v", "avi", "mkv", "webm", "mpeg", "mpg", "wmv"],
+        accepted_file_extensions=[".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".mpeg", ".mpg", ".wmv"],
         accepted_mimetypes=ALLOWED_VIDEO_MIME,
         max_file_size_mb=MAX_UPLOAD_SIZE_MB,
         example_input={"file": "<video_file>", "claim": "Is this video authentic?", "max_frames": 8}

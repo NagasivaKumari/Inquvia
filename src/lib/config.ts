@@ -89,7 +89,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/claim-investigation",
     description:
       "Check whether a claim is supported by available evidence.",
-    inputTypes: ["text"],
+    inputTypes: ["text", "url", "document", "image", "video", "audio", "data"],
   },
   {
     id: "image-investigation",
@@ -97,7 +97,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/image-investigation",
     description:
       "Investigate an image for context, provenance, and evidence.",
-    inputTypes: ["image"],
+    inputTypes: ["image", "url"],
   },
   {
     id: "image-batch-investigation",
@@ -105,7 +105,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/image-batch-investigation",
     description:
       "Investigate many images for duplicates, clusters, and common sources.",
-    inputTypes: ["image"],
+    inputTypes: ["image", "url"],
   },
   {
     id: "video-investigation",
@@ -113,7 +113,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/video-investigation",
     description:
       "Investigate what a video shows and whether its context holds up.",
-    inputTypes: ["video"],
+    inputTypes: ["video", "url"],
   },
   {
     id: "document-investigation",
@@ -121,7 +121,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/document-investigation",
     description:
       "Examine a document for findings, inconsistencies, and evidence.",
-    inputTypes: ["document"],
+    inputTypes: ["document", "url"],
   },
   {
     id: "source-investigation",
@@ -137,7 +137,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/data-investigation",
     description:
       "Investigate structured data for anomalies and supporting signals.",
-    inputTypes: ["data"],
+    inputTypes: ["data", "url"],
   },
   {
     id: "audio-investigation",
@@ -145,7 +145,7 @@ export const PAID_CAPABILITIES: readonly PaidCapability[] = [
     endpoint: "/api/x402/audio-investigation",
     description:
       "Investigate an audio recording for transcript, context, and evidence.",
-    inputTypes: ["audio"],
+    inputTypes: ["audio", "url"],
   },
 ] as const;
 

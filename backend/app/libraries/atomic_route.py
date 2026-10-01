@@ -108,10 +108,12 @@ def _build_reused_inputs(parsed: dict, case_id: str, source: dict, files: list) 
 def _remote_allowed_mimes(capability_id: str) -> set[str]:
     accepted = set(config.capability_accepted_mimes(capability_id))
     candidates = set(source_input.ANALYSIS_MIMES) | accepted
-    allowed = ALLOWED_INPUT_TYPES.get(capability_id, set())
-    if capability_id == "source-investigation":
+    if capability_id in ("source-investigation", "claim-investigation"):
         return candidates
-    return {mime for mime in candidates if config.mime_input_type(mime, capability_id) in allowed}
+    allowed_types = {t for t in ALLOWED_INPUT_TYPES.get(capability_id, set()) if t != "url"}
+    result = {mime for mime in candidates if config.mime_input_type(mime, capability_id) in allowed_types}
+    result.update(source_input.HTML_MIMES)
+    return result
 
 
 def _normalize_files(files: list[dict] | None) -> list[dict]:
@@ -150,7 +152,7 @@ async def _remote_input(
     if not sanitized:
         raise source_input.SourceInputError(400, "INVALID_URL", "Please enter a valid HTTP or HTTPS URL.", "url")
     remote = await source_input.fetch_url(sanitized, _remote_allowed_mimes(capability_id))
-    input_type = "url" if capability_id == "source-investigation" else None
+    input_type = "url" if (capability_id == "source-investigation" or remote.mime_type in source_input.HTML_MIMES) else None
     return source_input.store_remote_input(
         remote,
         case_id,

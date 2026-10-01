@@ -193,12 +193,23 @@ async function fetchTransactionParams(): Promise<AlgodTxnParams> {
 }
 
 /**
+ * Session-level cache: once we confirm a wallet is opted-in for this page
+ * load, skip the server round-trip and Pera prompt on subsequent calls.
+ */
+const _optInCache = new Set<string>();
+
+/**
  * Make sure the paying wallet is opted into USDC before the payment is built.
  * Opting-in is a self asset-transfer of 0, signed via Pera and broadcast
  * through the backend (browser-direct algod calls fail silently — the bug the
  * /api/x402 proxy endpoints exist to avoid).
+ *
+ * The result is cached per-address for the lifetime of the page so subsequent
+ * investigations from the same wallet never re-prompt.
  */
 async function ensureUsdcOptIn(address: string): Promise<void> {
+  if (_optInCache.has(address)) return;   // already confirmed this session
+
   let status: { optedIn: boolean; balance: number };
   try {
     const res = await fetch(
@@ -214,6 +225,7 @@ async function ensureUsdcOptIn(address: string): Promise<void> {
   }
 
   if (status.optedIn) {
+    _optInCache.add(address);              // remember for this session
     if (status.balance <= 0) {
       const message =
         "Connected wallet is opted into USDC but holds 0 USDC on testnet — fund it " +
@@ -248,6 +260,7 @@ async function ensureUsdcOptIn(address: string): Promise<void> {
       "USDC opt-in signed but broadcast failed — try again in a few seconds."
     );
   }
+  _optInCache.add(address);                // successful opt-in, cache it
   emitPay("opt-in-ready");
 }
 
@@ -405,6 +418,10 @@ async function postPaid(input: PaidPostInput): Promise<Response> {
 
   let res: Response;
   if (hasFiles) {
+    // ── File-upload path ──
+    // Files can't be replayed by the x402 wrapper, so we do the 402 dance
+    // manually: probe → sign once → send the paid request.  No retries that
+    // would trigger a second Pera signing prompt.
     emitPay("gate-rejected", { message: "Probing endpoint for payment requirements…" });
     res = await call(apiFetch as typeof fetchWithPay, {});
     if (res.status === 402) {
@@ -423,36 +440,20 @@ async function postPaid(input: PaidPostInput): Promise<Response> {
         apiFetch as typeof fetchWithPay,
         httpClient.encodePaymentSignatureHeader(payload)
       );
-      const { recovered } = await httpClient
+      // Record the settlement result but do NOT retry on `recovered` —
+      // `recovered` only means the library reconciled the payment state,
+      // not that a fresh transaction is needed. Retrying here was causing
+      // a second Pera signing prompt.
+      await httpClient
         .processPaymentResult(payload, (name) => res.headers.get(name), res.status)
-        .catch(() => ({ recovered: false }));
-      if (recovered) {
-        emitPay("retrying-payment", { message: "Retrying after settlement recovery." });
-        const paymentRequired = httpClient.getPaymentRequiredResponse((name) => res.headers.get(name));
-        const freshPayload = await httpClient.createPaymentPayload(paymentRequired);
-        res = await call(
-          apiFetch as typeof fetchWithPay,
-          httpClient.encodePaymentSignatureHeader(freshPayload)
-        );
-        await httpClient.processPaymentResult(
-          freshPayload,
-          (name) => res.headers.get(name),
-          res.status
-        );
-      }
+        .catch(() => { /* settlement bookkeeping is best-effort */ });
     }
   } else {
-    try {
-      res = await call(fetchWithPay, {});
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emitPay("gate-rejected", { message });
-      const canRetry = /402|payment.required|transaction.params|failed to (create )?pay|payload|settle|upload/i.test(message);
-      if (!canRetry || input.signal?.aborted) throw err;
-      emitPay("retrying-payment", { message });
-      await new Promise((r) => setTimeout(r, 600));
-      res = await call(buildX402Payment(input.address, capabilityId).fetchWithPay, {});
-    }
+    // ── JSON / URL-only path ──
+    // `fetchWithPay` already handles the 402 → sign → retry cycle internally.
+    // Do NOT catch + rebuild a fresh x402 payment — that was causing a second
+    // Pera signing prompt on every transient error.
+    res = await call(fetchWithPay, {});
   }
   return res;
 }
@@ -632,21 +633,54 @@ export function normalizeCapabilityEndpoint(value: string): string {
 
 /** Determine the correct atomic endpoint for a set of inputs. */
 export function detectCapabilityEndpoint(files: File[], url: string): string {
-  const mimes = files.map((f) => f.type);
+  const mimes = files.map((f) => f.type.toLowerCase());
   const names = files.map((f) => f.name.toLowerCase());
 
-  if (mimes.some((m) => m.startsWith("image/"))) return "/api/x402/image-investigation";
-
+  // Images
+  const imageExts = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"];
   if (
-    mimes.some((m) => m.startsWith("video/")) ||
-    names.some((n) => n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".avi") || n.endsWith(".wmv"))
+    mimes.some((m) => m.startsWith("image/")) ||
+    names.some((n) => imageExts.some((ext) => n.endsWith(ext)))
+  ) {
+    return files.length >= 2 ? "/api/x402/image-batch-investigation" : "/api/x402/image-investigation";
+  }
+
+  // Videos
+  const videoExts = [".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".mpeg", ".mpg", ".wmv"];
+  if (
+    mimes.some((m) => m.startsWith("video/") || m === "video/quicktime") ||
+    names.some((n) => videoExts.some((ext) => n.endsWith(ext)))
   ) {
     return "/api/x402/video-investigation";
   }
 
-  if (mimes.some((m) => m === "application/pdf")) return "/api/x402/document-investigation";
-  if (mimes.some((m) => m.includes("json") || m.includes("csv"))) return "/api/x402/data-investigation";
-  if (mimes.some((m) => m.startsWith("audio/"))) return "/api/x402/audio-investigation";
+  // Audio
+  const audioExts = [".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"];
+  if (
+    mimes.some((m) => m.startsWith("audio/")) ||
+    names.some((n) => audioExts.some((ext) => n.endsWith(ext)))
+  ) {
+    return "/api/x402/audio-investigation";
+  }
+
+  // Structured Data
+  const dataExts = [".csv", ".tsv", ".json", ".jsonl", ".xlsx", ".xls", ".parquet"];
+  if (
+    mimes.some((m) => m.includes("json") || m.includes("csv") || m.includes("excel") || m.includes("spreadsheet") || m.includes("parquet")) ||
+    names.some((n) => dataExts.some((ext) => n.endsWith(ext)))
+  ) {
+    return "/api/x402/data-investigation";
+  }
+
+  // Documents
+  const docExts = [".pdf", ".docx", ".doc", ".txt", ".md", ".rtf", ".odt", ".html", ".htm", ".xhtml"];
+  if (
+    mimes.some((m) => m === "application/pdf" || m.includes("word") || m.includes("document") || m.includes("opendocument") || m.startsWith("text/")) ||
+    names.some((n) => docExts.some((ext) => n.endsWith(ext)))
+  ) {
+    return "/api/x402/document-investigation";
+  }
+
   if (url?.trim()) return "/api/x402/source-investigation";
   return "/api/x402/claim-investigation";
 }

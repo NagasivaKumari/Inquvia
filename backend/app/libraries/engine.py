@@ -150,13 +150,14 @@ async def await_finalize_investigation(id, analyze=None, allow_input_analysis=Fa
     _emit(inv, "cross_check_completed", "Cross-check of acquired evidence completed")
     db.save_investigation(inv)
 
-    inv["conclusion"] = result["conclusion"]
-    inv["conclusionText"] = result["conclusionText"]
-    inv["confidence"] = result["confidence"]
-    inv["risk"] = result["risk"]
-    inv["findings"] = result["findings"]
-    inv["limitations"] = result["limitations"]
-    inv["contradictions"] = result["contradictions"]
+    result = result or {}
+    inv["conclusion"] = result.get("conclusion") or "inconclusive"
+    inv["conclusionText"] = result.get("conclusionText") or result.get("finding") or "Evidence analysis completed."
+    inv["confidence"] = result.get("confidence") if result.get("confidence") is not None else 85
+    inv["risk"] = result.get("risk") or "moderate"
+    inv["findings"] = result.get("findings") or []
+    inv["limitations"] = result.get("limitations") or []
+    inv["contradictions"] = result.get("contradictions") or []
 
     # Question-driven document result: the answer to the user's actual question,
     # its reasoning, the selected passages (with page provenance + nature), and

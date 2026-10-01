@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Investigation } from "@/lib/types";
-import { API_BASE, APP_NAME } from "@/lib/config";
+import { API_BASE, APP_NAME, PAID_CAPABILITIES } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
 import { capabilityForService, type EvidenceService } from "@/lib/dashboard-capabilities";
 import styles from "./page.module.css";
@@ -19,7 +19,15 @@ interface DashboardData {
   recentInvestigations: Investigation[];
 }
 
-export { capabilityForService } from "@/lib/dashboard-capabilities";
+interface InvestigationCardItem {
+  id: string;
+  kind: string;
+  price: string;
+  name: string;
+  description: string;
+  inputs?: readonly string[];
+  href: string;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -28,23 +36,33 @@ export default function DashboardPage() {
   const [budget, setBudget] = useState<{ spent: number; total: number; remaining: number } | null>(null);
   const [services, setServices] = useState<EvidenceService[]>([]);
   const [question, setQuestion] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [recentLoading, setRecentLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      apiFetch(`${API_BASE}/api/dashboard`).then((r) => r.json()),
-      apiFetch(`${API_BASE}/api/auth/me`).then((r) => r.json()),
-      apiFetch(`${API_BASE}/api/user`).then((r) => r.json()),
-      apiFetch(`${API_BASE}/api/providers`).then((r) => r.json()),
-    ])
-      .then(([d, me, b, providers]) => {
-        setData(d);
-        setUser(me.user ?? null);
-        setBudget(b.budget ?? null);
-        setServices(Array.isArray(providers.services) ? providers.services : []);
-        setLoading(false);
+    // Fire all requests independently — each section renders as its data arrives.
+    apiFetch(`${API_BASE}/api/dashboard`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setRecentLoading(false); })
+      .catch(() => setRecentLoading(false));
+
+    apiFetch(`${API_BASE}/api/auth/me`)
+      .then((r) => r.json())
+      .then((me) => setUser(me.user ?? null))
+      .catch(() => { });
+
+    apiFetch(`${API_BASE}/api/user`)
+      .then((r) => r.json())
+      .then((b) => setBudget(b.budget ?? null))
+      .catch(() => { });
+
+    apiFetch(`${API_BASE}/api/providers`)
+      .then((r) => r.json())
+      .then((providers) => {
+        if (Array.isArray(providers.services) && providers.services.length > 0) {
+          setServices(providers.services);
+        }
       })
-      .catch(() => setLoading(false));
+      .catch(() => { });
   }, []);
 
   const submit = async (e: React.FormEvent) => {
@@ -56,10 +74,38 @@ export default function DashboardPage() {
   const firstName = user?.name?.split(" ")[0] ?? "there";
   const recent = data?.recentInvestigations ?? [];
 
+  // If dynamic services are returned from /api/providers, use them. Otherwise, default immediately to Inquvia's core investigation capabilities.
+  const cards: InvestigationCardItem[] = services.length > 0
+    ? services.map((service, index) => {
+        const cap = capabilityForService(service) || "claim-investigation";
+        const price = typeof service.priceUsdc === "number"
+          ? `$${service.priceUsdc.toFixed(2)} USDC`
+          : typeof service.priceMicro === "number"
+            ? `$${(service.priceMicro / 1_000_000).toFixed(2)} USDC`
+            : service.paid === false ? "Included" : "$0.05 USDC";
+        return {
+          id: service.id ?? service.name ?? `srv-${index}`,
+          kind: service.capability ?? cap.replace("-investigation", ""),
+          price,
+          name: service.name ?? "Evidence service",
+          description: service.description ?? "Evidence-backed analysis selected for your investigation.",
+          inputs: (service as { capabilities?: readonly string[]; inputTypes?: readonly string[] }).capabilities ?? (service as { inputTypes?: readonly string[] }).inputTypes,
+          href: `/investigate?cap=${encodeURIComponent(cap)}&service=${encodeURIComponent(service.name ?? "Evidence check")}`,
+        };
+      })
+    : PAID_CAPABILITIES.map((cap) => ({
+        id: cap.id,
+        kind: cap.id.replace("-investigation", "").replace(/-/g, " "),
+        price: "$0.05 USDC",
+        name: cap.title,
+        description: cap.description,
+        inputs: cap.inputTypes,
+        href: `/investigate?cap=${encodeURIComponent(cap.id)}`,
+      }));
+
   return (
     <div className={styles.page}>
       <div className={styles.greeting}>
-        <p className={styles.eyebrow}>Your investigation workspace</p>
         <h1>Good {greet()}, {firstName}</h1>
         <p>Not sure? Let&apos;s check before you decide.</p>
       </div>
@@ -92,8 +138,6 @@ export default function DashboardPage() {
             <span className={styles.walletBadge}>Wallet connected</span>
           )}
         </form>
-
-
       </section>
 
       <section className={styles.statsRow}>
@@ -103,82 +147,77 @@ export default function DashboardPage() {
       <section className={styles.services}>
         <div className={styles.servicesHead}>
           <div>
-            <p className={styles.sectionEyebrow}>Available evidence services</p>
+            <p className={styles.sectionEyebrow}>Available investigations</p>
             <h2 className="app-section-title" style={{ marginBottom: 0 }}>
               What Inquvia can check
             </h2>
           </div>
-          <span className={styles.serviceCount}>{services.length} services</span>
-        </div>
-        <p className={styles.servicesIntro}>
-          Inquvia selects the relevant checks for your question. Your wallet payment covers the investigation, and the selected evidence checks are recorded in the report.
-        </p>
-        {services.length === 0 ? (
-          <p className="text-muted">Evidence services are loading or temporarily unavailable.</p>
-        ) : (
-          <div className={styles.servicesGrid}>
-            {services.map((service, index) => {
-              const capability = capabilityForService(service);
-              if (!capability) return null;
-              return (
-                <Link
-                  key={service.id ?? service.name ?? index}
-                  href={`/investigate?cap=${encodeURIComponent(capability)}&service=${encodeURIComponent(service.name ?? "Evidence check")}&q=${encodeURIComponent(`Use the ${service.name ?? "evidence"} check for my investigation`)}`}
-                  className={`card card-hover ${styles.serviceCard}`}
-                >
-                  <div className={styles.serviceTop}>
-                    <span className={styles.serviceKind}>{service.capability ?? "Evidence check"}</span>
-                    <span className={styles.servicePrice}>
-                      {typeof service.priceUsdc === "number"
-                        ? `$${service.priceUsdc.toFixed(2)} USDC`
-                        : typeof service.priceMicro === "number"
-                          ? `$${(service.priceMicro / 1_000_000).toFixed(2)} USDC`
-                          : service.paid === false ? "Included" : "Price at checkout"}
-                    </span>
-                  </div>
-                  <h3>{service.name ?? "Evidence service"}</h3>
-                  <p>{service.description ?? "Evidence-backed analysis selected for your investigation."}</p>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <section className={styles.recent}>
-        <div className={styles.recentHead}>
-          <h2 className="app-section-title" style={{ marginBottom: 0 }}>Recent investigations</h2>
-          {recent.length > 0 && <Link href="/history" className={styles.viewAll}>View all</Link>}
+          <span className={styles.serviceCount}>{cards.length} available</span>
         </div>
 
-        {loading ? (
-          <p className="text-muted">Loading…</p>
-        ) : recent.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <div className={styles.recentGrid}>
-            {recent.slice(0, 3).map((inv) => (
-              <Link
-                key={inv.id}
-                href={`/investigation/${inv.id}`}
-                className={`card card-hover ${styles.recentCard}`}
-              >
-                <div className={styles.recentCardTop}>
-                  <span className={`pill ${statusPill(inv)}`}>{label(inv.status)}</span>
-                  <span className={styles.recentDate}>{date(inv.createdAt)}</span>
+        <div className={styles.servicesGrid}>
+          {cards.map((card) => (
+            <Link
+              key={card.id}
+              href={question.trim() ? `${card.href}&q=${encodeURIComponent(question.trim())}` : card.href}
+              className={`card card-hover ${styles.serviceCard}`}
+            >
+              <div className={styles.serviceTop}>
+                <span className={styles.serviceKind}>{card.kind}</span>
+                <span className={styles.servicePrice}>{card.price}</span>
+              </div>
+              <h3>{card.name}</h3>
+              <p>{card.description}</p>
+              {card.inputs && card.inputs.length > 0 && (
+                <div className={styles.serviceInputs}>
+                  {card.inputs.map((inp) => (
+                    <span key={inp} className={styles.inputBadge}>{inp}</span>
+                  ))}
                 </div>
-                <p className={styles.recentQ}>&ldquo;{inv.question}&rdquo;</p>
-                {inv.status === "completed" && (
-                  <div className={styles.recentMeta}>
-                    <span>{inv.confidence}% confidence</span>
-                    <span>{inv.evidence.length} pieces of evidence</span>
-                  </div>
-                )}
-              </Link>
-            ))}
-          </div>
-        )}
+              )}
+            </Link>
+          ))}
+        </div>
       </section>
+
+
+
+      {(recentLoading || recent.length > 0) && (
+        <section className={styles.recent}>
+          <div className={styles.recentHead}>
+            <h2 className="app-section-title" style={{ marginBottom: 0 }}>Recent investigations</h2>
+            {recent.length > 0 && <Link href="/history" className={styles.viewAll}>View all</Link>}
+          </div>
+
+          {recentLoading ? (
+            <div className={styles.recentSkeleton}>
+              {[0, 1, 2].map((i) => <div key={i} className={styles.skeletonCard} />)}
+            </div>
+          ) : (
+            <div className={styles.recentGrid}>
+              {recent.slice(0, 3).map((inv) => (
+                <Link
+                  key={inv.id}
+                  href={`/investigation/${inv.id}`}
+                  className={`card card-hover ${styles.recentCard}`}
+                >
+                  <div className={styles.recentCardTop}>
+                    <span className={`pill ${statusPill(inv)}`}>{label(inv.status)}</span>
+                    <span className={styles.recentDate}>{date(inv.createdAt)}</span>
+                  </div>
+                  <p className={styles.recentQ}>&ldquo;{inv.question}&rdquo;</p>
+                  {inv.status === "completed" && (
+                    <div className={styles.recentMeta}>
+                      <span>{inv.confidence}% confidence</span>
+                      <span>{inv.evidence.length} pieces of evidence</span>
+                    </div>
+                  )}
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
@@ -232,20 +271,7 @@ function StatsCard({
   );
 }
 
-function EmptyState() {
-  return (
-    <div className={`card ${styles.empty}`}>
-      <div className={styles.emptyIcon} aria-hidden="true">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M20 20l-3.5-3.5" />
-        </svg>
-      </div>
-      <h3>No investigations yet</h3>
-      <p className="text-muted">Ask something you&apos;re not sure about above.</p>
-    </div>
-  );
-}
+
 
 function greet(): string {
   const h = new Date().getHours();

@@ -104,32 +104,32 @@ VIDEO_FRAME_MAX_WIDTH = int(os.getenv("VIDEO_FRAME_MAX_WIDTH", "640"))
 
 ALLOWED_MIME = [
     "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/heic", "image/heif",
-    "video/mp4", "video/webm", "video/x-matroska", "video/x-msvideo", "video/mpeg", "video/x-m4v",
-    "audio/mpeg", "audio/wav", "audio/mp3", "audio/ogg", "audio/x-m4a", "audio/aac", "audio/flac", "audio/webm",
+    "video/mp4", "video/quicktime", "video/webm", "video/x-matroska", "video/x-msvideo", "video/mpeg", "video/x-m4v", "video/x-ms-wmv",
+    "audio/mpeg", "audio/wav", "audio/mp3", "audio/ogg", "audio/x-m4a", "audio/mp4", "audio/aac", "audio/flac", "audio/opus", "audio/webm",
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword", "text/plain", "text/markdown", "application/rtf",
+    "application/msword", "text/plain", "text/markdown", "text/x-markdown", "application/rtf",
     "application/vnd.oasis.opendocument.text",
     "text/csv", "text/tab-separated-values", "application/json", "application/x-jsonlines",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel",
-    "application/x-parquet", "text/html", "application/xhtml+xml",
+    "application/x-parquet", "application/parquet", "text/html", "application/xhtml+xml",
 ]
 
 MIME_EXTENSIONS = {
     "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"], "image/webp": [".webp"], "image/gif": [".gif"],
     "image/bmp": [".bmp"], "image/tiff": [".tif", ".tiff"], "image/heic": [".heic"], "image/heif": [".heif"],
-    "video/mp4": [".mp4"], "video/webm": [".webm"], "video/x-matroska": [".mkv"], "video/x-msvideo": [".avi"],
-    "video/mpeg": [".mpeg", ".mpg"], "video/x-m4v": [".m4v"],
+    "video/mp4": [".mp4"], "video/quicktime": [".mov"], "video/webm": [".webm"], "video/x-matroska": [".mkv"], "video/x-msvideo": [".avi"],
+    "video/mpeg": [".mpeg", ".mpg"], "video/x-m4v": [".m4v"], "video/x-ms-wmv": [".wmv"],
     "audio/mpeg": [".mp3"], "audio/mp3": [".mp3"], "audio/wav": [".wav"], "audio/ogg": [".ogg"],
-    "audio/x-m4a": [".m4a"], "audio/aac": [".aac"], "audio/flac": [".flac"], "audio/webm": [".webm"],
+    "audio/x-m4a": [".m4a"], "audio/mp4": [".m4a"], "audio/aac": [".aac"], "audio/flac": [".flac"], "audio/opus": [".opus"], "audio/webm": [".webm"],
     "application/pdf": [".pdf"],
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-    "application/msword": [".doc"], "text/plain": [".txt"], "text/markdown": [".md"],
+    "application/msword": [".doc"], "text/plain": [".txt"], "text/markdown": [".md"], "text/x-markdown": [".md"],
     "application/rtf": [".rtf"], "application/vnd.oasis.opendocument.text": [".odt"],
     "text/csv": [".csv"], "text/tab-separated-values": [".tsv"], "application/json": [".json"],
     "application/x-jsonlines": [".jsonl"],
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-    "application/vnd.ms-excel": [".xls"], "application/x-parquet": [".parquet"],
+    "application/vnd.ms-excel": [".xls"], "application/x-parquet": [".parquet"], "application/parquet": [".parquet"],
     "text/html": [".html", ".htm"], "application/xhtml+xml": [".xhtml"],
 }
 
@@ -139,7 +139,7 @@ def mime_input_type(mime: str, capability_id: str | None = None) -> str:
     mime = (mime or "").lower().split(";", 1)[0].strip()
     if mime.startswith("image/"):
         return "image"
-    if mime.startswith("video/"):
+    if mime.startswith("video/") or mime in ("video/quicktime", "video/x-ms-wmv"):
         return "video"
     if mime.startswith("audio/"):
         return "audio"
@@ -148,21 +148,21 @@ def mime_input_type(mime: str, capability_id: str | None = None) -> str:
     if mime in {
         "text/csv", "text/tab-separated-values", "application/json", "application/x-jsonlines",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel",
-        "application/x-parquet",
+        "application/x-parquet", "application/parquet",
     }:
         return "data"
     return "document"
 
 
 ATOMIC_INPUT_TYPES = {
-    "claim-investigation": {"text", "url", "document"},
-    "image-investigation": {"image"},
-    "image-batch-investigation": {"image"},
-    "video-investigation": {"video"},
-    "document-investigation": {"document", "text"},
+    "claim-investigation": {"text", "url", "document", "image", "video", "audio", "data"},
+    "image-investigation": {"image", "url"},
+    "image-batch-investigation": {"image", "url"},
+    "video-investigation": {"video", "url"},
+    "document-investigation": {"document", "text", "url"},
     "source-investigation": {"url"},
-    "data-investigation": {"data"},
-    "audio-investigation": {"audio"},
+    "data-investigation": {"data", "url"},
+    "audio-investigation": {"audio", "url"},
 }
 
 
@@ -272,35 +272,35 @@ PAID_CAPABILITIES = [
     {"id": "claim-investigation", "title": "Claim Investigation",
     "endpoint": "/api/x402/claim-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
      "description": "Check whether a claim is supported by available evidence.",
-     "inputTypes": ["text", "url", "document"]},
-    {"id": "image-investigation", "title": "Image Investigation",
+     "inputTypes": ["text", "url", "document", "image", "video", "audio", "data"]},
+{"id": "image-investigation", "title": "Image Investigation",
         "endpoint": "/api/x402/image-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Investigate an image for context, provenance, and evidence.",
-     "inputTypes": ["image"]},
+        "description": "Investigate an image for context, provenance, and evidence.",
+        "inputTypes": ["image", "url"]},
     {"id": "image-batch-investigation", "title": "Batch Image Investigation",
         "endpoint": "/api/x402/image-batch-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Investigate many images for duplicates, clusters, and common sources.",
-     "inputTypes": ["image"]},
+        "description": "Investigate many images for duplicates, clusters, and common sources.",
+        "inputTypes": ["image", "url"]},
     {"id": "video-investigation", "title": "Video Investigation",
         "endpoint": "/api/x402/video-investigation", "priceUsdc": VIDEO_INVESTIGATION_PRICE_USDC,
-     "description": "Investigate what a video shows and whether its context holds up.",
-     "inputTypes": ["video"]},
+        "description": "Investigate what a video shows and whether its context holds up.",
+        "inputTypes": ["video", "url"]},
     {"id": "document-investigation", "title": "Document Investigation",
         "endpoint": "/api/x402/document-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Examine a document for findings, inconsistencies, and evidence.",
-     "inputTypes": ["document"]},
+        "description": "Examine a document for findings, inconsistencies, and evidence.",
+        "inputTypes": ["document", "url"]},
     {"id": "source-investigation", "title": "Source Investigation",
         "endpoint": "/api/x402/source-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Investigate a website or source before you trust it.",
-     "inputTypes": ["url"]},
+        "description": "Investigate a website or source before you trust it.",
+        "inputTypes": ["url"]},
     {"id": "data-investigation", "title": "Data Investigation",
         "endpoint": "/api/x402/data-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Investigate structured data for anomalies and supporting signals.",
-     "inputTypes": ["data"]},
+        "description": "Investigate structured data for anomalies and supporting signals.",
+        "inputTypes": ["data", "url"]},
     {"id": "audio-investigation", "title": "Audio Investigation",
         "endpoint": "/api/x402/audio-investigation", "priceUsdc": INVESTIGATION_PRICE_USDC,
-     "description": "Investigate an audio recording for transcript, context, and evidence.",
-     "inputTypes": ["audio"]},
+        "description": "Investigate an audio recording for transcript, context, and evidence.",
+        "inputTypes": ["audio", "url"]},
 ]
 
 EVIDENCE_CAPABILITIES = [

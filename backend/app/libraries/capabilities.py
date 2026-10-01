@@ -118,7 +118,13 @@ async def run_capability(capability_id, args, requirements, title, before_discov
 
 async def run_claim_investigation(args):
     question = (args.get("question") or "").strip() or "Investigate this claim"
-    reqs = await EvidencePlanner().plan(question, ["text"])
+    # Plan against the input types actually submitted. A claim can carry a URL
+    # or a document (ATOMIC_INPUT_TYPES allows text/url/document); hardcoding
+    # "text" planned no evidence checks for those and returned an empty report.
+    input_types = sorted({
+        i.get("type") for i in (args.get("inputs") or []) if i.get("type")
+    }) or ["text"]
+    reqs = await EvidencePlanner().plan(question, input_types)
     return await run_capability(
         "claim-investigation", args, reqs,
         "Claim Investigation",
@@ -236,7 +242,10 @@ async def run_video_investigation_async(inv_id: str, reqs: list):
 
 async def run_document_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await EvidencePlanner().plan(question, ["document"])
+    input_types = sorted({
+        i.get("type") for i in (args.get("inputs") or []) if i.get("type")
+    }) or ["document"]
+    reqs = await EvidencePlanner().plan(question, input_types)
     return await run_capability(
         "document-investigation", args, reqs,
         "Document Investigation",
@@ -245,6 +254,8 @@ async def run_document_investigation(args):
 
 async def run_source_investigation(args):
     url_input = next((i for i in (args.get("inputs") or []) if i.get("type") == "url"), None)
+    if not url_input or not url_input.get("content"):
+        url_input = next((i for i in (args.get("inputs") or []) if str(i.get("content") or "").startswith(("http://", "https://"))), None)
     if not url_input or not url_input.get("content"):
         raise InputError("source-investigation requires a valid URL")
     inputs = [dict(url_input)]
@@ -267,7 +278,10 @@ async def run_source_investigation(args):
 
 async def run_data_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await EvidencePlanner().plan(question, ["data"])
+    input_types = sorted({
+        i.get("type") for i in (args.get("inputs") or []) if i.get("type")
+    }) or ["data"]
+    reqs = await EvidencePlanner().plan(question, input_types)
     return await run_capability(
         "data-investigation", args, reqs,
         "Data Investigation",
@@ -276,7 +290,10 @@ async def run_data_investigation(args):
 
 async def run_audio_investigation(args):
     question = (args.get("question") or "").strip()
-    reqs = await EvidencePlanner().plan(question, ["audio"])
+    input_types = sorted({
+        i.get("type") for i in (args.get("inputs") or []) if i.get("type")
+    }) or ["audio"]
+    reqs = await EvidencePlanner().plan(question, input_types)
     return await run_capability(
         "audio-investigation", args, reqs,
         "Audio Investigation",

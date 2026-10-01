@@ -113,6 +113,7 @@ def login_or_create_admin(address: str) -> dict:
         "paymentPrefs": dict(config.DEFAULT_PAYMENT_PREFS),
     }
     db.create_user(user)
+    db.link_wallet(user["id"], address, config.ALGORAND_NETWORK)
     return user
 
 

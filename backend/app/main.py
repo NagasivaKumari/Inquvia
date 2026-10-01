@@ -655,6 +655,8 @@ def _owns(user, inv_id: str) -> bool:
     inv = db.get_investigation(inv_id)
     if not inv:
         return False
+    if inv.get("userId") is None:
+        return True
     return inv.get("userId") == user["id"]
 
 
@@ -1087,6 +1089,7 @@ async def api_wallet_connect(request: Request):
         return JSONResponse({"error": "Signature verification failed"}, status_code=400)
 
     db.update_user(user["id"], {"walletAddress": address, "walletNetwork": config.ALGORAND_NETWORK})
+    db.link_wallet(user["id"], address, config.ALGORAND_NETWORK)
     return JSONResponse({"wallet": {"address": address, "network": config.ALGORAND_NETWORK, "providerId": provider_id}})
 
 
@@ -1096,6 +1099,7 @@ async def api_wallet_disconnect(request: Request):
     if not user:
         return _unauthorized()
     db.update_user(user["id"], {"walletAddress": None, "walletNetwork": None})
+    db.unlink_wallet(user["id"])
     return JSONResponse({"ok": True})
 
 
