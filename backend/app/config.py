@@ -46,6 +46,13 @@ PUBLIC_APP_URL = (
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "Inquvia")
 
+# Dual MongoDB configuration (Live: Read + Write, Archive: Read-Only)
+MONGODB_URI_LIVE = os.getenv("MONGODB_URI_LIVE", "").strip() or MONGODB_URI
+MONGODB_DB_LIVE = os.getenv("MONGODB_DB_LIVE", "").strip() or MONGODB_DB_NAME or "Inquvia"
+
+MONGODB_URI_ARCHIVE = os.getenv("MONGODB_URI_ARCHIVE", "").strip() or MONGODB_URI
+MONGODB_DB_ARCHIVE = os.getenv("MONGODB_DB_ARCHIVE", "").strip() or MONGODB_DB_NAME or "Inquvia"
+
 ALGORAND_NETWORK = os.getenv("NEXT_PUBLIC_ALGORAND_NETWORK", None) or os.getenv("ALGORAND_NETWORK", "mainnet")
 ALGORAND_USDC_ASA = os.getenv("ALGORAND_USDC_ASA", "").strip()
 X402_FACILITATOR_URL = os.getenv("X402_FACILITATOR_URL", "https://facilitator.goplausible.xyz")

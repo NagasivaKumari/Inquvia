@@ -112,8 +112,9 @@ def _url_field(required: bool = False) -> FieldSpec:
 def _pdf_field() -> FieldSpec:
     return FieldSpec(
         name="file", type="file", required=False,
-        description="Optional PDF file to extract",
+        description="Optional PDF file(s) to extract",
         accepted_mimetypes=["application/pdf"], max_size_mb=MAX_UPLOAD_SIZE_MB,
+        allow_multiple=True,
     )
 
 

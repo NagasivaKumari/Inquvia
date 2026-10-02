@@ -628,6 +628,10 @@ export function normalizeCapabilityEndpoint(value: string): string {
   const raw = value.trim();
   if (!raw) return "";
   if (raw.startsWith("/api/evidence/") || raw.startsWith("/api/x402/")) return raw;
+  if (raw.startsWith("evidence-")) return `/api/evidence/${raw.replace(/^evidence-/, "")}`;
+  if (["contradictions", "duplicates", "timeline", "gaps", "assess", "authenticity"].includes(raw)) {
+    return `/api/evidence/${raw}`;
+  }
   return `/api/x402/${raw.replace(/^\/+/, "")}`;
 }
 

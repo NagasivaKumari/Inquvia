@@ -643,11 +643,11 @@ async def api_dashboard(request: Request):
 
 # ── Investigations ──
 @app.get("/api/investigations")
-async def api_investigations(request: Request):
+async def api_investigations(request: Request, limit: int = 50):
     user = _resolve_user(request)
     if not user:
         return _unauthorized()
-    investigations = db.list_investigations(50, user["id"])
+    investigations = db.list_investigations(min(max(int(limit), 1), 500), user["id"])
     return JSONResponse({"investigations": investigations})
 
 

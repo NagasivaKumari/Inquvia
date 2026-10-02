@@ -129,6 +129,8 @@ export default function DashboardPage() {
               <AddButton label="Video" cap="video-investigation" />
               <AddButton label="Document" cap="document-investigation" />
               <AddButton label="URL" cap="source-investigation" />
+              <AddButton label="Contradictions" cap="evidence-contradictions" />
+              <AddButton label="Duplicates" cap="evidence-duplicates" />
             </div>
             <button type="submit" className="btn btn-primary" disabled={!question.trim()}>
               Investigate

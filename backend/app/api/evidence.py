@@ -85,20 +85,62 @@ def _envelope(
     return result
 
 
+def _resolve_evidence_user_id(request: Request | None) -> str | None:
+    if not request:
+        return None
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return str(user_id)
+    user = getattr(request.state, "user", None)
+    if isinstance(user, dict) and user.get("id"):
+        return str(user["id"])
+    try:
+        from ..auth import verify_jwt, get_current_user_from_cookie, SESSION_COOKIE
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            uid = verify_jwt(auth_header.split(" ")[1])
+            if uid:
+                return str(uid)
+        cookie = request.cookies.get(SESSION_COOKIE)
+        if cookie:
+            u = get_current_user_from_cookie(cookie)
+            if u and u.get("id"):
+                return str(u["id"])
+    except Exception:
+        pass
+    return None
+
+
 def _persist(request: Request, operation: str, inputs: dict, result: dict) -> dict:
     """Save the request/result pair before returning a direct evidence response."""
-    request_id = _id("req")
-    db.save_evidence_request(
-        {
-            "requestId": request_id,
-            "operation": operation,
-            "userId": getattr(request.state, "user_id", None),
-            "inputs": inputs,
-            "result": result,
-            "createdAt": _now(),
-        }
-    )
+    request_id = _id("inv")
+    user_id = _resolve_evidence_user_id(request)
+
+    req_doc = {
+        "requestId": request_id,
+        "operation": operation,
+        "userId": user_id,
+        "inputs": inputs,
+        "result": result,
+        "createdAt": _now(),
+    }
+    db.save_evidence_request(req_doc)
+
+    try:
+        inv_doc = db._evidence_request_to_investigation(req_doc)
+        if inv_doc:
+            db.save_investigation(inv_doc)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to auto-save investigation for {operation}: {e}")
+
+    if request:
+        request.state.investigation_id = request_id
+        request.state.capability = operation
+
+    result["id"] = request_id
     result["requestId"] = request_id
+    result["investigationId"] = request_id
     result["persistence"] = {
         "store": "mongodb",
         "collection": "evidence_requests",

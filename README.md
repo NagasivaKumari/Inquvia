@@ -807,7 +807,40 @@ The system is designed to make the available evidence and remaining uncertainty 
 
 ---
 
-## 21. Team
+## 21. Data & Database Architecture
+
+Inquvia uses a Dual-Cluster MongoDB Architecture for data preservation and scalability:
+
+```
+                         INQUVIA
+                            |
+                         Backend
+                            |
+                +-----------+-----------+
+                |                       |
+                v                       v
+        LIVE MONGODB              ARCHIVE MONGODB
+        NEW CLUSTER               EXISTING CLUSTER
+        (READ + WRITE)            (READ-ONLY)
+                |                       |
+                +-----------+-----------+
+                            |
+                            v
+                   UNIFIED DATA LAYER
+                            |
+                 +----------+----------+
+                 |                     |
+                 v                     v
+            HISTORY UI           INVESTIGATION UI
+```
+
+* **LIVE DB (`MONGODB_URI_LIVE`, `MONGODB_DB_LIVE`):** Primary writable database for new investigations, new users, evidence uploads, and ongoing operations.
+* **ARCHIVE DB (`MONGODB_URI_ARCHIVE`, `MONGODB_DB_ARCHIVE`):** Protected read-only database preserving historical investigations, evidence files (GridFS), and reports. Enforced with read-only proxy safeguards.
+* **Unified History:** Transparent single-view history and dashboard experience combining records seamlessly across both clusters without duplication.
+
+---
+
+## 22. Team
 
 - **Nagasiva Kumari Kota**
 - **Akash Kumar Guntur**

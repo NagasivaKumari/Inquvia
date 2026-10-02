@@ -275,7 +275,12 @@ export default function InvestigationPage() {
               <div className={styles.contradictionList}>
                 {contradictions.map((c, i) => (
                   <div key={i} className={styles.contradictionItem}>
-                    <strong>Conflict:</strong> {c}
+                    <strong>Conflict:</strong>{" "}
+                    {typeof c === "object" && c !== null
+                      ? ("reason" in c
+                        ? `${(c as Record<string, unknown>).reason} (${(c as Record<string, unknown>).left ?? "A"} vs ${(c as Record<string, unknown>).right ?? "B"})`
+                        : JSON.stringify(c))
+                      : String(c)}
                   </div>
                 ))}
                 {contradictions.length === 0 && contradictory.map((c) => (

@@ -677,6 +677,14 @@ function InvestigateForm() {
             idempotencyKey,
             signal: controller.signal,
           });
+          const invId =
+            (paid.data as Record<string, unknown> | null)?.id ??
+            (paid.data as Record<string, unknown> | null)?.investigationId ??
+            (paid.data as Record<string, unknown> | null)?.requestId;
+          if (invId) {
+            router.push(`/investigation/${invId}`);
+            return;
+          }
           setDirectResult(paid.data ?? null);
           setDirectResultTxId(paid.txId);
           setPaymentStatus(paid.txId ? "Payment settled." : "Evidence returned.");
