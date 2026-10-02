@@ -374,7 +374,8 @@ class VideoProcessor:
 # ── per-file cached extraction used by evidence_checks and the analyzer ────
 
 def artifacts_dir(file_path: str) -> Path:
-    digest = hashlib.sha1(file_path.encode("utf-8")).hexdigest()[:12]
+    # ponytail: use sha256 for cache dir (non-crypto cache key; sha1 acceptable, but stronger trivial)
+    digest = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:12]
     return config.STORAGE_PATH / "media-cache" / digest
 
 

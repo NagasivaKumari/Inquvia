@@ -133,153 +133,158 @@ const PAID_ENDPOINTS = new Set([
   "/api/x402/source-investigation",
 ]);
 
-function evidenceEndpoint(endpoint: string): string {
+function evidenceEndpoint(endpoint: string | undefined | null): string {
+  if (!endpoint) return "";
   return EVIDENCE_ENDPOINT_MAP[endpoint] ?? endpoint;
 }
 
 function evidenceContract(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): RawEvidenceContract | undefined {
   const target = evidenceEndpoint(endpoint);
-  return contracts.find((contract) => contract.endpoint === target);
+  return (contracts ?? []).find((contract) => contract?.endpoint === target);
 }
 
 function acceptedExtensions(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): string[] {
-  if (endpoint === "/api/x402/claim-investigation") {
+  const ep = endpoint ?? "";
+  if (ep === "/api/x402/claim-investigation") {
     return FALLBACK_EXTENSIONS["/api/x402/claim-investigation"] ?? [];
   }
-  const target = evidenceEndpoint(endpoint);
-  const contract = contracts.find((item) => item.endpoint === target);
-  const capability = capabilities?.find((item) => item.path === endpoint);
-  const service = services?.find((item) => item.endpoint === endpoint);
-  const extensions = isDirectEvidence(endpoint)
+  const target = evidenceEndpoint(ep);
+  const contract = (contracts ?? []).find((item) => item?.endpoint === target);
+  const capability = (capabilities ?? []).find((item) => item?.path === ep);
+  const service = (services ?? []).find((item) => item?.endpoint === ep);
+  const extensions = isDirectEvidence(ep)
     ? contract?.accepted_file_extensions ?? service?.acceptedFileExtensions ?? []
     : capability?.acceptedFileExtensions ?? contract?.accepted_file_extensions ?? service?.acceptedFileExtensions ?? [];
-  const result = extensions.length ? extensions : (FALLBACK_EXTENSIONS[endpoint] ?? []);
-  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return result;
+  const result = extensions.length ? extensions : (FALLBACK_EXTENSIONS[ep] ?? []);
+  if (!DIRECT_ANALYSIS_ENDPOINTS.has(ep)) return result;
   return [...new Set([...result, ".pdf"])];
 }
 
 function acceptedMimes(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): string[] {
-  if (endpoint === "/api/x402/claim-investigation") {
+  const ep = endpoint ?? "";
+  if (ep === "/api/x402/claim-investigation") {
     return FALLBACK_MIMES["/api/x402/claim-investigation"] ?? [];
   }
-  const target = evidenceEndpoint(endpoint);
-  const contract = contracts.find((item) => item.endpoint === target);
-  const capability = capabilities?.find((item) => item.path === endpoint);
-  const service = services?.find((item) => item.endpoint === endpoint);
-  const mimes = isDirectEvidence(endpoint)
+  const target = evidenceEndpoint(ep);
+  const contract = (contracts ?? []).find((item) => item?.endpoint === target);
+  const capability = (capabilities ?? []).find((item) => item?.path === ep);
+  const service = (services ?? []).find((item) => item?.endpoint === ep);
+  const mimes = isDirectEvidence(ep)
     ? contract?.accepted_mimetypes ?? service?.acceptedMimeTypes ?? []
     : capability?.acceptedMimeTypes ?? contract?.accepted_mimetypes ?? service?.acceptedMimeTypes ?? [];
-  const result = mimes.length ? mimes : (FALLBACK_MIMES[endpoint] ?? []);
-  if (!DIRECT_ANALYSIS_ENDPOINTS.has(endpoint)) return result;
+  const result = mimes.length ? mimes : (FALLBACK_MIMES[ep] ?? []);
+  if (!DIRECT_ANALYSIS_ENDPOINTS.has(ep)) return result;
   return [...new Set([...result, "application/pdf"])];
 }
 
 function maxFileSizeMB(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): number {
-  if (!isDirectEvidence(endpoint)) {
-    return capabilities?.find((item) => item.path === endpoint)?.maxFileSizeMB ?? 10;
+  const ep = endpoint ?? "";
+  if (!isDirectEvidence(ep)) {
+    return (capabilities ?? []).find((item) => item?.path === ep)?.maxFileSizeMB ?? 10;
   }
-  const contract = evidenceContract(endpoint, capabilities, services, contracts);
-  return contract?.max_file_size_mb ?? services?.find((item) => item.endpoint === endpoint)?.maxFileSizeMB ?? 10;
+  const contract = evidenceContract(ep, capabilities, services, contracts);
+  return contract?.max_file_size_mb ?? (services ?? []).find((item) => item?.endpoint === ep)?.maxFileSizeMB ?? 10;
 }
 
 function requiredInput(
-  endpoint: string,
+  endpoint: string | undefined | null,
   name: string,
   _capabilities: PaidCapability[] | null,
   _services: EvidenceServiceContract[] | null,
-  _contracts: RawEvidenceContract[],
+  _contracts: RawEvidenceContract[] | null,
 ): boolean {
-  // URLs are accepted for every endpoint. Neither file nor url is strictly required in HTML
-  // when the user can provide either. Only pure source-investigation with 0 files requires a URL.
-  if (endpoint === "/api/x402/source-investigation" || endpoint === "/api/evidence/url") {
+  const ep = endpoint ?? "";
+  if (ep === "/api/x402/source-investigation" || ep === "/api/evidence/url") {
     return name === "url";
   }
   return false;
 }
 
 function acceptsUrlInput(
-  _endpoint: string,
+  _endpoint: string | undefined | null,
   _capabilities: PaidCapability[] | null,
   _services: EvidenceServiceContract[] | null,
-  _contracts: RawEvidenceContract[],
+  _contracts: RawEvidenceContract[] | null,
 ): boolean {
-  // Every investigation endpoint accepts a URL
   return true;
 }
 
 function allowsMultipleFiles(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): boolean {
-  const target = evidenceEndpoint(endpoint);
+  const ep = endpoint ?? "";
+  const target = evidenceEndpoint(ep);
   if (
-    target.includes("document") ||
-    target.includes("image") ||
-    target.includes("contradictions") ||
-    target.includes("assess") ||
-    target.includes("duplicates") ||
-    target.includes("timeline") ||
-    target.includes("gaps") ||
-    target.includes("structured") ||
-    endpoint.includes("claim-investigation") ||
-    endpoint.includes("source-investigation")
+    (target && target.includes("document")) ||
+    (target && target.includes("image")) ||
+    (target && target.includes("contradictions")) ||
+    (target && target.includes("assess")) ||
+    (target && target.includes("duplicates")) ||
+    (target && target.includes("timeline")) ||
+    (target && target.includes("gaps")) ||
+    (target && target.includes("structured")) ||
+    (ep && ep.includes("claim-investigation")) ||
+    (ep && ep.includes("source-investigation"))
   ) {
     return true;
   }
-  const contract = contracts.find((item) => item.endpoint === target);
+  const contract = (contracts ?? []).find((item) => item?.endpoint === target);
   const field = [...(contract?.required_inputs ?? []), ...(contract?.optional_inputs ?? [])].find(
-    (item) => item.name === "file",
+    (item) => item?.name === "file",
   );
   if (field) return field.allow_multiple === true;
-  const service = services?.find((item) => item.endpoint === endpoint);
+  const service = (services ?? []).find((item) => item?.endpoint === ep);
   const serviceField = [...(service?.requiredInputs ?? []), ...(service?.optionalInputs ?? [])].find(
-    (item) => item.name === "file",
+    (item) => item?.name === "file",
   );
   if (serviceField) return serviceField.allowMultiple === true;
   return true;
 }
 
-function isDirectEvidence(endpoint: string): boolean {
-  return endpoint.startsWith("/api/evidence/");
+function isDirectEvidence(endpoint: string | undefined | null): boolean {
+  return typeof endpoint === "string" && endpoint.startsWith("/api/evidence/");
 }
 
 function isKnownEndpoint(
-  endpoint: string,
+  endpoint: string | undefined | null,
   capabilities: PaidCapability[] | null,
   services: EvidenceServiceContract[] | null,
-  contracts: RawEvidenceContract[],
+  contracts: RawEvidenceContract[] | null,
 ): boolean {
-  if (isDirectEvidence(endpoint)) {
+  const ep = endpoint ?? "";
+  if (!ep) return false;
+  if (isDirectEvidence(ep)) {
     return (
-      DIRECT_ANALYSIS_ENDPOINTS.has(endpoint) ||
-      SOURCE_EVIDENCE_ENDPOINTS.has(endpoint) ||
-      services?.some((service) => service.endpoint === endpoint) === true ||
-      contracts.some((contract) => contract.endpoint === endpoint)
+      DIRECT_ANALYSIS_ENDPOINTS.has(ep) ||
+      SOURCE_EVIDENCE_ENDPOINTS.has(ep) ||
+      (services ?? []).some((service) => service?.endpoint === ep) === true ||
+      (contracts ?? []).some((contract) => contract?.endpoint === ep)
     );
   }
-  return PAID_ENDPOINTS.has(endpoint) || capabilities?.some((item) => item.path === endpoint) === true;
+  return PAID_ENDPOINTS.has(ep) || (capabilities ?? []).some((item) => item?.path === ep) === true;
 }
 
 function EndpointRequirements({ endpoint, capabilities, services, contracts }: {

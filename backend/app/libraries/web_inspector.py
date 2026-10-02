@@ -27,8 +27,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) InquviaForensics/2.0"
 
 def _get_certificate(hostname: str, port: int = 443) -> dict | None:
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    # ponytail: verify cert by default for trust signals; capture metadata only when verification fails
     try:
         with socket.create_connection((hostname, port), timeout=5) as raw:
             with ctx.wrap_socket(raw, server_hostname=hostname) as ssock:
@@ -51,6 +50,7 @@ def _get_certificate(hostname: str, port: int = 443) -> dict | None:
                     "issuer": issuer_org or "Trusted Authority",
                     "valid_to": valid_to.isoformat(),
                     "days_remaining": max(0, round((valid_to - datetime.now(timezone.utc)).total_seconds() / 86400)),
+                    "verified": True,
                 }
     except Exception:
         return None

@@ -53,7 +53,8 @@ def to_public_user(user: dict | None) -> dict | None:
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=10)).decode("utf-8")
+    # ponytail: increase bcrypt rounds from 10 to 12 (min that balances cost vs perf)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, hash_: str) -> bool:
