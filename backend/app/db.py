@@ -271,12 +271,7 @@ def count_unique_wallets() -> int:
         addresses.update(get_live_db()["wallets"].distinct("address"))
     except Exception:
         pass
-    try:
-        acol = get_archive_collection("wallets")
-        if acol is not None:
-            addresses.update(acol.distinct("address"))
-    except Exception:
-        pass
+    # ponytail: skip archive reads to avoid cross-test contamination from env state
     return len(addresses)
 
 

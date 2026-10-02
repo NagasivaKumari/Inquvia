@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/config";
 import { invalidateAuthCache } from "@/lib/api";
+import { authenticateWithWallet } from "@/lib/auth/wallet";
 import styles from "../auth.module.css";
 
 function base64(u8: Uint8Array): string {
@@ -97,39 +98,16 @@ function LoginForm() {
     }
   };
 
-  const handleAdminWallet = async () => {
+  const handleWalletLogin = async () => {
     setWalletLoading(true);
     setWalletError("");
     try {
-      const { connectPera, signChallenge } = await import("@/lib/wallet/pera");
-      const w = await connectPera();
-      const message = `Admin sign-in to Inquvia at ${Date.now()}`;
-      const { signature, authenticatorData, message: signedMessage } = await signChallenge(
-        w.address,
-        message,
-        window.location.origin
-      );
-      const res = await fetch(`${API_BASE}/api/auth/wallet-login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        cache: "no-store",
-        body: JSON.stringify({
-          providerId: "pera",
-          address: w.address,
-          message: signedMessage,
-          authenticatorData: base64(authenticatorData),
-          signatureB64: base64(signature),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Admin wallet login failed");
-
+      const data = await authenticateWithWallet(remember);
       localStorage.setItem("token", data.token);
       invalidateAuthCache();
-      window.location.href = "/admin";
+      window.location.href = next;
     } catch (err) {
-      setWalletError(err instanceof Error ? err.message : "Admin wallet login failed");
+      setWalletError(err instanceof Error ? err.message : "Wallet sign-in failed");
     } finally {
       setWalletLoading(false);
     }
@@ -217,16 +195,16 @@ function LoginForm() {
       </p>
 
       <div className={styles.orDivider}>
-        <span>Admin access</span>
+        <span>Or continue with wallet</span>
       </div>
 
       <div className={styles.formBox}>
         {walletError && <div className={styles.error} role="alert">{walletError}</div>}
-        <button type="button" className="btn btn-secondary btn-lg" disabled={walletLoading} onClick={handleAdminWallet}>
-          {walletLoading ? "Connecting wallet…" : "Sign in with wallet"}
+        <button type="button" className="btn btn-secondary btn-lg" disabled={walletLoading} onClick={handleWalletLogin}>
+          {walletLoading ? "Connecting wallet…" : "Continue with wallet"}
         </button>
         <p className={styles.footer}>
-          Connect a Pera wallet authorized on the server to open the admin dashboard.
+          Use your Pera wallet to sign in or create a wallet-only account.
         </p>
       </div>
     </>

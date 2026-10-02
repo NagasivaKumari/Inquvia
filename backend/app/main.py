@@ -19,6 +19,7 @@ from .auth import (
     signup,
     login,
     login_or_create_admin,
+    login_or_create_wallet,
     create_jwt,
     verify_jwt,
     to_public_user,
@@ -508,6 +509,50 @@ async def api_wallet_login(request: Request):
         samesite="lax",
         secure=True,
         max_age=int(SESSION_DURATION_MS / 1000),
+        path="/",
+    )
+    return resp
+
+
+@app.post("/api/auth/wallet")
+async def api_wallet_auth(request: Request):
+    """Sign in or create a regular user account with a verified wallet."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _auth_limiter.is_allowed(f"wallet-auth:{client_ip}"):
+        return JSONResponse({"error": "Too many wallet sign-in attempts. Please try again later."}, status_code=429)
+    body = await _json(request)
+    provider_id = (body or {}).get("providerId") or ""
+    address = ((body or {}).get("address") or "").strip()
+    message = (body or {}).get("message") or ""
+    signature = (body or {}).get("signatureB64") or ""
+    auth_data = (body or {}).get("authenticatorData") or ""
+
+    import re as _re
+    if not any(w["id"] == provider_id for w in WALLET_PROVIDERS):
+        return JSONResponse({"error": "Unsupported wallet provider"}, status_code=400)
+    if not _re.fullmatch(r"[A-Z2-7]{58}", address):
+        return JSONResponse({"error": "Invalid Algorand address"}, status_code=400)
+    if not message or not signature or not auth_data:
+        return JSONResponse({"error": "Missing signed challenge. Please approve the wallet signature."}, status_code=400)
+
+    import base64 as _b64
+    data_b64 = _b64.b64encode(message.encode("utf-8")).decode()
+    if not await _verify_algorand_signature(address, data_b64, auth_data, signature):
+        return JSONResponse({"error": "Wallet signature verification failed"}, status_code=401)
+
+    user = login_or_create_wallet(address, provider_id)
+    remember = bool((body or {}).get("remember", True))
+    token = create_jwt(user["id"])
+    session = create_user_session(user["id"], remember)
+    resp = JSONResponse({"user": to_public_user(user), "token": token}, status_code=200)
+    max_age = int(SESSION_DURATION_MS / 1000) if remember else None
+    resp.set_cookie(
+        SESSION_COOKIE,
+        session["id"],
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=max_age,
         path="/",
     )
     return resp
@@ -1242,18 +1287,18 @@ async def _handle_atomic_capability(
 
 
 @app.post("/api/x402/claim-investigation")
-async def claim_investigation(request: Request):
-    return await _handle_atomic_capability(request, "claim-investigation")
+async def claim_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "claim-investigation", background_tasks)
 
 
 @app.post("/api/x402/image-investigation")
-async def image_investigation(request: Request):
-    return await _handle_atomic_capability(request, "image-investigation")
+async def image_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "image-investigation", background_tasks)
 
 
 @app.post("/api/x402/image-batch-investigation")
-async def image_batch_investigation(request: Request):
-    return await _handle_atomic_capability(request, "image-batch-investigation")
+async def image_batch_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "image-batch-investigation", background_tasks)
 
 
 @app.post("/api/x402/video-investigation")
@@ -1262,23 +1307,23 @@ async def video_investigation(request: Request, background_tasks: BackgroundTask
 
 
 @app.post("/api/x402/document-investigation")
-async def document_investigation(request: Request):
-    return await _handle_atomic_capability(request, "document-investigation")
+async def document_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "document-investigation", background_tasks)
 
 
 @app.post("/api/x402/source-investigation")
-async def source_investigation(request: Request):
-    return await _handle_atomic_capability(request, "source-investigation")
+async def source_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "source-investigation", background_tasks)
 
 
 @app.post("/api/x402/data-investigation")
-async def data_investigation(request: Request):
-    return await _handle_atomic_capability(request, "data-investigation")
+async def data_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "data-investigation", background_tasks)
 
 
 @app.post("/api/x402/audio-investigation")
-async def audio_investigation(request: Request):
-    return await _handle_atomic_capability(request, "audio-investigation")
+async def audio_investigation(request: Request, background_tasks: BackgroundTasks):
+    return await _handle_atomic_capability(request, "audio-investigation", background_tasks)
 
 
 # ── Helpers ──

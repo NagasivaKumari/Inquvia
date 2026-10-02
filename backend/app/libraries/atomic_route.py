@@ -6,6 +6,7 @@ from .. import db, config
 from ..libraries import storage
 from ..libraries import source_input
 from ..libraries import capabilities as caps
+from ..libraries import engine
 
 
 class InputValidationError(Exception):
@@ -311,34 +312,98 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
     run = caps.CAPABILITY_RUNNERS.get(capability_id)
     if not run:
         return {"status": 400, "content": {"error": f"Unknown capability: {capability_id}"}}
-    try:
-        run_args = {
-            "id": case_id, "userId": user["id"],
-            "question": (parsed.get("question") or "").strip(),
-            "inputs": inputs, "idempotencyKey": idempotency_key,
-            "medicalOptIn": parsed.get("medicalOptIn", False),
-        }
-        if capability_id == "video-investigation" and background_tasks:
-            run_args["background_tasks"] = background_tasks
+    run_args = {
+        "id": case_id, "userId": user["id"],
+        "question": (parsed.get("question") or "").strip(),
+        "inputs": inputs, "idempotencyKey": idempotency_key,
+        "medicalOptIn": parsed.get("medicalOptIn", False),
+    }
+    if capability_id == "video-investigation" and background_tasks:
+        run_args["background_tasks"] = background_tasks
 
+    if background_tasks and capability_id != "video-investigation":
+        pending = engine.start_capability_investigation({
+            **run_args,
+            "title": capability.get("title") or "Investigation in Progress",
+            "capability": capability_id,
+        })
+        pending["status"] = "queued"
+        pending["currentStage"] = "created"
+        db.save_investigation(pending)
+        background_tasks.add_task(
+            _run_capability_background,
+            run,
+            run_args,
+            capability_id,
+            capability.get("priceUsdc"),
+            parsed.get("serviceName"),
+            reuse_source,
+        )
+        return {"status": 200, "content": pending}
+
+    try:
         result = await run(run_args)
     except caps.InputError as e:
         return {"status": 400, "content": {"error": str(e)}}
 
-    # Restore capability fields overwritten by settle clone.
+    inv = _restore_run_metadata(
+        result, capability_id, capability.get("priceUsdc"), idempotency_key,
+        parsed.get("serviceName"), reuse_source,
+    )
+    return {"status": 200, "content": inv or result}
+
+
+def _restore_run_metadata(
+    result: dict,
+    capability_id: str,
+    price_usdc,
+    idempotency_key: str | None,
+    service_name: str | None,
+    reuse_source: dict | None,
+) -> dict | None:
+    """Restore request metadata after a capability runner saves its result."""
     inv = db.get_investigation(result["id"])
     if inv and not inv.get("capability"):
         inv["capability"] = capability_id
-        inv["capabilityPriceUsdc"] = capability.get("priceUsdc")
+        inv["capabilityPriceUsdc"] = price_usdc
         if idempotency_key:
             inv["idempotencyKey"] = idempotency_key
         db.save_investigation(inv)
-    if inv and parsed.get("serviceName"):
-        inv["requestedService"] = parsed["serviceName"]
-        inv["title"] = parsed["serviceName"]
+    if inv and service_name:
+        inv["requestedService"] = service_name
+        inv["title"] = service_name
         db.save_investigation(inv)
     if reuse_source and inv:
         inv["reinvestigationOf"] = reuse_source.get("id")
         db.save_investigation(inv)
+    return inv
 
-    return {"status": 200, "content": inv or result}
+
+async def _run_capability_background(
+    run,
+    run_args: dict,
+    capability_id: str,
+    price_usdc,
+    service_name: str | None,
+    reuse_source: dict | None,
+) -> None:
+    try:
+        result = await run(run_args)
+        _restore_run_metadata(
+            result, capability_id, price_usdc, run_args.get("idempotencyKey"),
+            service_name, reuse_source,
+        )
+    except caps.InputError as exc:
+        inv = db.get_investigation(run_args["id"])
+        if inv:
+            inv["status"] = "failed"
+            inv["limitations"] = [str(exc)]
+            db.save_investigation(inv)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        inv = db.get_investigation(run_args["id"])
+        if inv:
+            inv["status"] = "failed"
+            inv["limitations"] = [f"Processing failed: {exc}"]
+            db.save_investigation(inv)

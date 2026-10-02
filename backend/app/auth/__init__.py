@@ -118,6 +118,26 @@ def login_or_create_admin(address: str) -> dict:
     return user
 
 
+def login_or_create_wallet(address: str, provider_id: str) -> dict:
+    """Sign in an existing wallet account or create one on first wallet auth."""
+    user = db.get_user_by_wallet(address)
+    if user:
+        return user
+    user = {
+        "id": f"usr_{_nanoid(12)}",
+        "name": "Wallet user",
+        "walletAddress": address,
+        "walletNetwork": config.ALGORAND_NETWORK,
+        "walletProvider": provider_id,
+        "createdAt": db.utcnow_iso(),
+        "updatedAt": db.utcnow_iso(),
+        "paymentPrefs": dict(config.DEFAULT_PAYMENT_PREFS),
+    }
+    db.create_user(user)
+    db.link_wallet(user["id"], address, config.ALGORAND_NETWORK)
+    return user
+
+
 def create_user_session(user_id: str, remember: bool) -> dict:
     db.delete_expired_sessions()
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)

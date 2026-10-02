@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { API_BASE, APP_NAME } from "@/lib/config";
+import { invalidateAuthCache } from "@/lib/api";
+import { authenticateWithWallet } from "@/lib/auth/wallet";
 import styles from "../auth.module.css";
 
 export default function SignupPage() {
@@ -13,6 +15,8 @@ export default function SignupPage() {
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletError, setWalletError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +44,21 @@ export default function SignupPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
+    }
+  };
+
+  const handleWalletSignup = async () => {
+    setWalletLoading(true);
+    setWalletError("");
+    try {
+      const data = await authenticateWithWallet(true);
+      localStorage.setItem("token", data.token);
+      invalidateAuthCache();
+      window.location.assign("/dashboard/");
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : "Wallet sign-up failed");
+    } finally {
+      setWalletLoading(false);
     }
   };
 
@@ -131,6 +150,20 @@ export default function SignupPage() {
             {loading ? "Creating account…" : "Create account"}
           </button>
         </form>
+      </div>
+
+      <div className={styles.orDivider}>
+        <span>Or create an account with wallet</span>
+      </div>
+
+      <div className={styles.formBox}>
+        {walletError && <div className={styles.error} role="alert">{walletError}</div>}
+        <button type="button" className="btn btn-secondary btn-lg" disabled={walletLoading} onClick={handleWalletSignup}>
+          {walletLoading ? "Connecting wallet…" : "Continue with wallet"}
+        </button>
+        <p className={styles.footer}>
+          No email or password required. Your wallet becomes your account.
+        </p>
       </div>
 
       <p className={styles.footer}>
