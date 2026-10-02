@@ -219,6 +219,7 @@ def reset_password(token: str, new_password: str) -> dict:
     user = db.get_user_by_id(reset.get("userId") or "")
     if not user:
         return {"ok": False, "error": "Account not found."}
-    db.update_user(user["id"], {"passwordHash": hash_password(new_password)})
+    if not db.update_user_password(user["id"], hash_password(new_password)):
+        return {"ok": False, "error": "Account could not be updated."}
     db.mark_reset_used(token)
     return {"ok": True, "data": None}

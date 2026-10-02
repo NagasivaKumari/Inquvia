@@ -299,6 +299,35 @@ def update_user(user_id: str, updates: dict) -> dict | None:
     return get_user_by_id(user_id)
 
 
+def update_user_password(user_id: str, password_hash: str) -> bool:
+    """Update a live user password, promoting an archive-only user if needed."""
+    if not user_id:
+        return False
+    live = get_live_db()["users"]
+    criteria = [{"id": user_id}, {"_id": user_id}]
+    if ObjectId.is_valid(user_id):
+        criteria.append({"_id": ObjectId(user_id)})
+
+    now = utcnow_iso()
+    result = live.update_one(
+        {"$or": criteria},
+        {"$set": {"passwordHash": password_hash, "updatedAt": now}},
+    )
+    if result.matched_count == 0:
+        archive = get_user_by_id(user_id)
+        if not archive:
+            return False
+        promoted = dict(archive)
+        promoted.pop("_id", None)
+        promoted["id"] = user_id
+        promoted["passwordHash"] = password_hash
+        promoted["updatedAt"] = now
+        live.replace_one({"id": user_id}, {"_id": user_id, **promoted}, upsert=True)
+
+    invalidate_user_cache(user_id)
+    return True
+
+
 def update_user_prefs(user_id: str, prefs: dict) -> dict | None:
     return update_user(user_id, {"paymentPrefs": prefs})
 
