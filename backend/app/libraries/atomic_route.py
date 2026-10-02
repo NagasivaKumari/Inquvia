@@ -26,7 +26,7 @@ ALLOWED_INPUT_TYPES = config.ATOMIC_INPUT_TYPES
 
 async def parse_body(body: dict | None, files: list) -> dict:
     question = storage.sanitize_text((body or {}).get("question") or "")
-    url = (body or {}).get("url") or ""
+    url = (body or {}).get("url") or (body or {}).get("urls") or ""
     text = storage.sanitize_text((body or {}).get("text") or "")
     service_name = storage.sanitize_text((body or {}).get("serviceName") or "")
     medical_opt_in = str((body or {}).get("medicalOptIn") or "").lower() in ("1", "true", "yes")
@@ -43,8 +43,14 @@ def mime_to_base64(mime: str, data: bytes) -> str:
 
 def _build_stored_inputs(parsed: dict, case_id: str) -> list[dict]:
     inputs = []
-    if parsed.get("url"):
-        sanitized = storage.sanitize_url(parsed["url"])
+    body_url = parsed.get("url") or parsed.get("urls") or ""
+    raw_urls = []
+    if isinstance(body_url, list):
+        raw_urls.extend(body_url)
+    elif isinstance(body_url, str):
+        raw_urls.extend([u.strip() for u in body_url.replace(",", "\n").split("\n") if u.strip()])
+    for u in raw_urls:
+        sanitized = storage.sanitize_url(u)
         if sanitized:
             inputs.append({"type": "url", "content": sanitized})
     if parsed.get("text"):

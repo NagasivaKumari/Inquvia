@@ -417,10 +417,6 @@ async def _file_evidence(
 async def image_evidence(request: Request):
     """Process and analyze an image file or image URL for evidence extraction."""
     payload, files = await _request_data(request)
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one image source may be submitted.", "file"
-        )
     return await _file_evidence(
         request,
         "image",
@@ -434,10 +430,6 @@ async def image_evidence(request: Request):
 async def video_evidence(request: Request):
     """Process and analyze a video file or video URL for evidence extraction."""
     payload, files = await _request_data(request)
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one video source may be submitted.", "file"
-        )
     raw_frames = payload.get("max_frames", 8)
     try:
         max_frames = int(raw_frames)
@@ -464,10 +456,6 @@ async def video_evidence(request: Request):
 async def audio_evidence(request: Request):
     """Process and analyze an audio file or audio URL for evidence extraction."""
     payload, files = await _request_data(request)
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one audio source may be submitted.", "file"
-        )
     return await _file_evidence(
         request,
         "audio",
@@ -481,10 +469,6 @@ async def audio_evidence(request: Request):
 async def document_evidence(request: Request):
     """Process and analyze a document file or document URL for evidence extraction."""
     payload, files = await _request_data(request)
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one document source may be submitted.", "file"
-        )
     return await _file_evidence(
         request,
         "document",
@@ -498,10 +482,6 @@ async def document_evidence(request: Request):
 async def authenticity_evidence(request: Request):
     """Perform forensic analysis to check media authenticity signals."""
     payload, files = await _request_data(request)
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one media source may be submitted.", "file"
-        )
     source = await _resolve_source(
         request,
         "authenticity",
@@ -791,18 +771,13 @@ async def _analysis_data(
         _raise_validation(
             "INVALID_BODY_SCHEMA", "The evidence must be a list of items.", "evidence"
         )
-    if len(files) > 1:
-        _raise_validation(
-            "INVALID_BODY_SCHEMA", "Only one PDF may be submitted.", "file"
-        )
     source_items = []
     source_inputs = []
-    if files:
-        file = files[0]
+    for file in files:
         ok, error_resp = EvidenceValidator.validate_file_upload(
             file["mime"],
             len(file["data"]),
-            ["application/pdf"],
+            ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword", "text/plain", "text/markdown", "application/rtf", "application/vnd.oasis.opendocument.text", "text/html", "application/xhtml+xml", "text/csv", "text/tab-separated-values", "application/json", "application/x-jsonlines", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "application/x-parquet", "application/parquet", "image/jpeg", "image/png", "image/webp", "image/gif"],
             config.MAX_UPLOAD_SIZE_MB,
         )
         if not ok:
@@ -826,10 +801,23 @@ async def _analysis_data(
                 "filePath": stored["filePath"],
             }
         )
-    if payload.get("url"):
+
+    raw_urls = []
+    body_url = payload.get("url") or payload.get("urls") or ""
+    if isinstance(body_url, list):
+        raw_urls.extend(body_url)
+    elif isinstance(body_url, str):
+        raw_urls.extend([u.strip() for u in body_url.replace(",", "\n").split("\n") if u.strip()])
+    
+    urls = []
+    for u in raw_urls:
+        if u not in urls:
+            urls.append(u)
+
+    for u in urls:
         try:
             remote = await source_input.fetch_url(
-                payload["url"], source_input.ANALYSIS_MIMES
+                u, source_input.ANALYSIS_MIMES
             )
             inspection = source_input.inspect_source(remote)
             stored = source_input.store_remote_input(

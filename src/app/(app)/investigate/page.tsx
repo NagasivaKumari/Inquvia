@@ -234,6 +234,20 @@ function allowsMultipleFiles(
   contracts: RawEvidenceContract[],
 ): boolean {
   const target = evidenceEndpoint(endpoint);
+  if (
+    target.includes("document") ||
+    target.includes("image") ||
+    target.includes("contradictions") ||
+    target.includes("assess") ||
+    target.includes("duplicates") ||
+    target.includes("timeline") ||
+    target.includes("gaps") ||
+    target.includes("structured") ||
+    endpoint.includes("claim-investigation") ||
+    endpoint.includes("source-investigation")
+  ) {
+    return true;
+  }
   const contract = contracts.find((item) => item.endpoint === target);
   const field = [...(contract?.required_inputs ?? []), ...(contract?.optional_inputs ?? [])].find(
     (item) => item.name === "file",
@@ -244,7 +258,7 @@ function allowsMultipleFiles(
     (item) => item.name === "file",
   );
   if (serviceField) return serviceField.allowMultiple === true;
-  return target === "/api/evidence/image" || endpoint.includes("image");
+  return true;
 }
 
 function isDirectEvidence(endpoint: string): boolean {
@@ -768,12 +782,11 @@ function InvestigateForm() {
 
         <div className="form-group">
           <label htmlFor="url" className="form-label">
-            URL {requiresUrl ? "(required)" : sourceInv ? "(optional — original is reused)" : "(optional)"}
+            URLs {requiresUrl ? "(required)" : sourceInv ? "(optional — original is reused)" : "(optional — multiple URLs separated by newlines or commas)"}
           </label>
-          <input
+          <textarea
             id="url"
-            type="url"
-            className="form-input"
+            className="form-textarea"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://example.com/listing"

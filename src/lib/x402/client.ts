@@ -639,6 +639,15 @@ export function normalizeCapabilityEndpoint(value: string): string {
 export function detectCapabilityEndpoint(files: File[], url: string): string {
   const mimes = files.map((f) => f.type.toLowerCase());
   const names = files.map((f) => f.name.toLowerCase());
+  const urlList = url ? url.split(/[\n,]+/).map((u) => u.trim()).filter(Boolean) : [];
+
+  if (files.length >= 2 || urlList.length >= 2) {
+    const imageExts = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"];
+    if (mimes.some((m) => m.startsWith("image/")) || names.some((n) => imageExts.some((ext) => n.endsWith(ext)))) {
+      return "/api/x402/image-batch-investigation";
+    }
+    return "/api/evidence/contradictions";
+  }
 
   // Images
   const imageExts = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"];
