@@ -27,6 +27,13 @@ yarn-error.log*
 *.log
 dev-*.log
 
+# local investigation scratch scripts
+/hardcode.py
+/scan.py
+/scan2.py
+/scan3.py
+/scan4.py
+
 # env files (keep .env.example tracked)
 .env
 .env.*
