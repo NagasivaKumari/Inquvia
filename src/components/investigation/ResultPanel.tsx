@@ -14,11 +14,13 @@ interface Props {
 }
 
 export function ResultPanel({ investigation, hideEvidence = false }: Props) {
+  const supportingEvidenceIds = investigation.supportingEvidenceIds ?? [];
+  const contradictoryEvidenceIds = investigation.contradictoryEvidenceIds ?? [];
   const supporting = investigation.evidence.filter((e) =>
-    investigation.supportingEvidenceIds.includes(e.id)
+    supportingEvidenceIds.includes(e.id)
   );
   const contradictory = investigation.evidence.filter((e) =>
-    investigation.contradictoryEvidenceIds.includes(e.id)
+    contradictoryEvidenceIds.includes(e.id)
   );
 
   const assessmentClass = {
