@@ -479,6 +479,7 @@ def _evidence_request_to_investigation(req: dict) -> dict:
 
     raw_duplicates = res.get("duplicates") or []
 
+    timeline_events = res.get("events") or []
     if op in ("contradictions", "evidence-contradictions") or (not res.get("conclusion") and contradiction_strings):
         if contradiction_strings:
             conclusion = "suspicious"
@@ -490,6 +491,20 @@ def _evidence_request_to_investigation(req: dict) -> dict:
             risk = "low"
             conclusion_text = "No material contradictions detected across verified sources."
             findings = ["All supplied evidence points are mutually consistent; no direct factual conflicts found."]
+    elif op in ("timeline", "evidence-timeline"):
+        if timeline_events:
+            conclusion = "answered"
+            risk = "low"
+            conclusion_text = f"Extracted {len(timeline_events)} dated event(s) from the supplied evidence."
+            findings = [
+                f"{event.get('date')}: {event.get('text') or 'No event description available.'}"
+                for event in timeline_events
+            ]
+        else:
+            conclusion = "insufficient_evidence"
+            risk = "moderate"
+            conclusion_text = "No dated events could be extracted from the supplied evidence."
+            findings = [conclusion_text]
     elif op in ("duplicates", "evidence-duplicates") or (not res.get("conclusion") and raw_duplicates):
         if raw_duplicates:
             conclusion = "suspicious"
@@ -584,7 +599,19 @@ def _evidence_request_to_investigation(req: dict) -> dict:
         "findings": findings,
         "limitations": limitations,
         "contradictions": contradiction_strings,
-        "inputs": [{"type": "file" if inp.get("file") else "text", "content": str(inp.get("claim") or inp.get("url") or inp.get("file") or claim)}],
+        "inputs": (
+            ([{"type": "text", "content": str(inp.get("claim") or claim)}] if inp.get("claim") else [])
+            + [
+                {
+                    "type": "document" if "pdf" in str(source.get("mimeType") or "").lower() else "file",
+                    "content": source.get("filename") or "uploaded evidence",
+                    "fileName": source.get("filename"),
+                    "mimeType": source.get("mimeType"),
+                    "filePath": source.get("filePath"),
+                }
+                for source in (inp.get("sourceInputs") or [])
+            ]
+        ) or [{"type": "text", "content": str(inp.get("url") or inp.get("file") or claim)}],
         "stages": [
             {"stage": "planning", "status": "completed"},
             {"stage": "discovering", "status": "completed"},

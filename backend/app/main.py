@@ -1185,6 +1185,12 @@ async def _handle_atomic_capability(
 
     content_type = request.headers.get("content-type") or ""
     print(f"DEBUG: Content-Type: {content_type}")
+    sensitive_headers = {"authorization", "cookie", "payment-signature", "x-payment", "x-payment-response"}
+    safe_headers = {
+        key: "[REDACTED]" if key.lower() in sensitive_headers else value
+        for key, value in request.headers.items()
+    }
+    print(f"DEBUG: Safe headers: {safe_headers}")
     
     files = []
     body = None

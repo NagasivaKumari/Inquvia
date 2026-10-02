@@ -318,9 +318,11 @@ function toErrorMessage(body: Record<string, unknown> | null, status: number): s
   if (body && typeof body.error === "string" && body.error) return body.error;
   const detail = body?.detail;
   if (detail && typeof detail === "object") {
-    const m = (detail as { message?: unknown }).message;
+    const detailRecord = detail as { message?: unknown; error?: unknown; errorCode?: unknown };
+    const m = detailRecord.message ?? detailRecord.error;
     if (typeof m === "string" && m) return m;
   }
+  if (typeof detail === "string" && detail) return detail;
   const details = body?.details && typeof body.details === "object" ? (body.details as Record<string, unknown>) : null;
   switch (status) {
     case 401:

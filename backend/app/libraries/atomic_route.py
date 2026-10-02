@@ -238,6 +238,7 @@ async def handle_atomic_paid_request(capability_id: str, user, body, files, idem
             parsed, case_id, capability_id, normalized_files, reuse_source=reuse_source,
         )
     except source_input.SourceInputError as e:
+        print(f"DEBUG: Source input rejected for {capability_id}: {e.code} - {e.message}")
         return {"status": e.status_code, "content": e.paid_content()}
     allowed = ALLOWED_INPUT_TYPES.get(capability_id)
     if reuse_source and allowed:

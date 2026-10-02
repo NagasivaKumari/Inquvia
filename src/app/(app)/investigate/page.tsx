@@ -378,6 +378,12 @@ function validateEvidenceInput(
   const label = capabilityTitle(endpoint);
   if (url.trim()) {
     const value = url.trim();
+    if (
+      endpoint === "/api/x402/audio-investigation" &&
+      /(?:youtube\.com|youtu\.be)\//i.test(value)
+    ) {
+      return "YouTube pages are not direct audio files. Upload an audio file or provide a direct MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, or WEBM URL.";
+    }
     try {
       const parsed = new URL(value);
       if (
