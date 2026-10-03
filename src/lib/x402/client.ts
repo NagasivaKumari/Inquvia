@@ -643,7 +643,7 @@ export function detectCapabilityEndpoint(files: File[], url: string): string {
   const names = files.map((f) => f.name.toLowerCase());
   const urlList = url ? url.split(/[\n,]+/).map((u) => u.trim()).filter(Boolean) : [];
 
-  if (files.length >= 2 || urlList.length >= 2) {
+  if (files.length >= 2) {
     const imageExts = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"];
     if (mimes.some((m) => m.startsWith("image/")) || names.some((n) => imageExts.some((ext) => n.endsWith(ext)))) {
       return "/api/x402/image-batch-investigation";
@@ -696,6 +696,6 @@ export function detectCapabilityEndpoint(files: File[], url: string): string {
     return "/api/x402/document-investigation";
   }
 
-  if (url?.trim()) return "/api/x402/source-investigation";
+  if (urlList.length) return "/api/x402/source-investigation";
   return "/api/x402/claim-investigation";
 }

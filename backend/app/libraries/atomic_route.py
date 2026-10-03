@@ -123,6 +123,16 @@ def _remote_allowed_mimes(capability_id: str) -> set[str]:
     return result
 
 
+def _split_urls(value: object) -> list[str]:
+    if isinstance(value, list):
+        raw_urls = value
+    elif isinstance(value, str):
+        raw_urls = value.replace(",", "\n").splitlines()
+    else:
+        raw_urls = []
+    return [url.strip() for url in raw_urls if isinstance(url, str) and url.strip()]
+
+
 def _normalize_files(files: list[dict] | None) -> list[dict]:
     normalized = []
     for file in files or []:
@@ -177,17 +187,21 @@ async def _build_inputs_with_sources(
     files: list[dict],
     reuse_source: dict | None = None,
 ) -> list[dict]:
+    urls = _split_urls(parsed.get("url"))
     if reuse_source:
         inputs = _build_reused_inputs(parsed, case_id, reuse_source, files)
-        if parsed.get("url"):
-            remote = await _remote_input(parsed["url"], case_id, capability_id, reuse_source.get("id"))
+        if urls:
+            remotes = [
+                await _remote_input(url, case_id, capability_id, reuse_source.get("id"))
+                for url in urls
+            ]
             inputs = [item for item in inputs if item.get("type") != "url"]
-            inputs.insert(0, remote)
+            inputs = remotes + inputs
         return inputs
 
     inputs = []
-    if parsed.get("url"):
-        inputs.append(await _remote_input(parsed["url"], case_id, capability_id))
+    for url in urls:
+        inputs.append(await _remote_input(url, case_id, capability_id))
     if parsed.get("text"):
         inputs.append({"type": "text", "content": parsed["text"]})
     inputs.extend(_store_local_files(files, case_id))

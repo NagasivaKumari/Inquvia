@@ -253,12 +253,19 @@ async def run_document_investigation(args):
 
 
 async def run_source_investigation(args):
-    url_input = next((i for i in (args.get("inputs") or []) if i.get("type") == "url"), None)
-    if not url_input or not url_input.get("content"):
-        url_input = next((i for i in (args.get("inputs") or []) if str(i.get("content") or "").startswith(("http://", "https://"))), None)
-    if not url_input or not url_input.get("content"):
+    url_inputs = [
+        dict(item) for item in (args.get("inputs") or [])
+        if item.get("type") == "url" and item.get("content")
+    ]
+    if not url_inputs:
+        url_inputs = [
+            dict(item) for item in (args.get("inputs") or [])
+            if str(item.get("content") or "").startswith(("http://", "https://"))
+        ]
+    if not url_inputs:
         raise InputError("source-investigation requires a valid URL")
-    inputs = [dict(url_input)]
+    url_input = url_inputs[0]
+    inputs = url_inputs
     question = (args.get("question") or "").strip() or f"Analyze the source: {url_input['content']}"
 
     inspection = url_input.get("inspection") or await web_inspector.inspect_live_url(url_input["content"])
@@ -268,7 +275,9 @@ async def run_source_investigation(args):
     def before(pending):
         if inspection:
             pending["webInspection"] = inspection
-            pending.setdefault("sourcesUsed", []).insert(0, url_input["content"])
+            pending["sourcesUsed"] = [
+                item["content"] for item in url_inputs
+            ]
 
     return await run_capability(
         "source-investigation", {**args, "inputs": inputs}, reqs,

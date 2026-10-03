@@ -360,6 +360,14 @@ function directEvidenceFields(endpoint: string, question: string, url: string): 
   return fields;
 }
 
+function splitInputUrls(value: string): string[] {
+  return value
+    .replace(/,/g, "\n")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function validateEvidenceInput(
   endpoint: string,
   files: UploadedFile[],
@@ -377,24 +385,27 @@ function validateEvidenceInput(
   const maxSizeMB = maxFileSizeMB(endpoint, capabilities, services, contracts);
   const label = capabilityTitle(endpoint);
   if (url.trim()) {
-    const value = url.trim();
-    if (
-      endpoint === "/api/x402/audio-investigation" &&
-      /(?:youtube\.com|youtu\.be)\//i.test(value)
-    ) {
-      return "YouTube pages are not direct audio files. Upload an audio file or provide a direct MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, or WEBM URL.";
-    }
-    try {
-      const parsed = new URL(value);
+    const values = splitInputUrls(url);
+    if (!values.length) return "Please enter a valid HTTP or HTTPS URL.";
+    for (const value of values) {
       if (
-        parsed.protocol !== "http:" &&
-        parsed.protocol !== "https:"
-      ) throw new Error();
-      if (!parsed.hostname || parsed.username || parsed.password || /\s/.test(value)) throw new Error();
-    } catch {
-      return "Please enter a valid HTTP or HTTPS URL.";
+        endpoint === "/api/x402/audio-investigation" &&
+        /(?:youtube\.com|youtu\.be)\//i.test(value)
+      ) {
+        return "YouTube pages are not direct audio files. Upload an audio file or provide a direct MP3, WAV, M4A, AAC, FLAC, OGG, OPUS, or WEBM URL.";
+      }
+      try {
+        const parsed = new URL(value);
+        if (
+          parsed.protocol !== "http:" &&
+          parsed.protocol !== "https:"
+        ) throw new Error();
+        if (!parsed.hostname || parsed.username || parsed.password || /\s/.test(value)) throw new Error();
+      } catch {
+        return "Please enter a valid HTTP or HTTPS URL.";
+      }
+      if (value.length > 2048) return "The URL is too long.";
     }
-    if (value.length > 2048) return "The URL is too long.";
   }
 
   // URL is accepted for every endpoint.
