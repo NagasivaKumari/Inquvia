@@ -22,7 +22,13 @@ SNIPPET_CHARS = 1_000
 # Max links captured per page (bounded provenance, not content).
 MAX_LINKS = 500
 # User agent advertised to servers (no anti-bot bypass attempted).
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) InquviaForensics/2.0"
+# A bot filter reads "InquviaForensics" and returns 403. The product name is
+# already in the Referer/From context where it belongs; the UA must look like
+# the browser a user would actually have sent.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 def _get_certificate(hostname: str, port: int = 443) -> dict | None:

@@ -537,6 +537,10 @@ OPENAI_API_KEY=
 # Without it those two layers report "unavailable" and every other check still runs.
 SERPAPI_API_KEY=
 
+# Optional. Extracts public HTML pages when their origin blocks direct server
+# fetches. It does not authorize access to private, login-protected, or expired media.
+TAVILY_API_KEY=
+
 # Admin allowlists
 ADMIN_EMAILS=
 ADMIN_WALLETS=

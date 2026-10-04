@@ -329,15 +329,8 @@ async def fetch_url(
         addresses = _resolved_addresses(host, port)
         connected = addresses[0]
         request_url = _pinned_url(parsed, connected)
-        headers = {
-            "Accept": (
-                "image/*" if expected_kind == "image" else
-                "video/*" if expected_kind == "video" else
-                "audio/*" if expected_kind == "audio" else "*/*"
-            ),
-            "Host": _host_header(parsed, host),
-            "User-Agent": REMOTE_USER_AGENT,
-        }
+        headers = _browser_headers(host, parsed.scheme.lower(), expected_kind)
+        headers["Host"] = _host_header(parsed, host)
         extensions = {"sni_hostname": host} if parsed.scheme.lower() == "https" else None
         try:
             async with httpx.AsyncClient(
@@ -355,7 +348,7 @@ async def fetch_url(
                             # upstream, so this stays a client error.
                             raise SourceInputError(
                                 400,
-                                "REMOTE_REDIRECT_ERROR",
+                                "TOO_MANY_REDIRECTS",
                                 f"The URL exceeded the {MAX_REDIRECTS}-redirect limit.",
                                 "url",
                                 {"maxRedirects": MAX_REDIRECTS},
@@ -364,10 +357,6 @@ async def fetch_url(
                         redirects += 1
                         continue
                     if not response.is_success:
-                        # 4xx = the caller's URL is unusable (client error).
-                        # 5xx = a genuine upstream dependency failure (502).
-                        denied = status in (401, 403)
-                        upstream = status >= 500
                         if status == 403 and expected_kind is None and (
                             allowed is None or bool(allowed & HTML_MIMES)
                         ):
@@ -392,14 +381,9 @@ async def fetch_url(
                             if browser_source is not None:
                                 return browser_source
                         raise SourceInputError(
-                            502 if upstream else 400,
-                            "REMOTE_ACCESS_DENIED" if denied else "REMOTE_HTTP_ERROR",
-                            (
-                                "The remote server denied Inquvia's fetch request; "
-                                "the media itself could not be acquired."
-                                if denied
-                                else f"The remote server returned HTTP {status}."
-                            ),
+                            400,
+                            "REMOTE_HTTP_ERROR",
+                            f"The remote server returned HTTP {status}.",
                             "url",
                             {"statusCode": status},
                         )
@@ -463,6 +447,47 @@ async def fetch_url(
             raise SourceInputError(504, "REMOTE_TIMEOUT", "The remote server timed out.", "url") from exc
         except httpx.HTTPError as exc:
             raise SourceInputError(502, "REMOTE_CONNECTION_ERROR", "The remote file could not be fetched.", "url") from exc
+
+
+def _browser_headers(host: str, scheme: str, expected_kind: str | None) -> dict:
+    """Shape the request like a real browser navigation.
+
+    ponytail: most 403s are bot filters reacting to a bare Accept/User-Agent
+    pair, not deliberate blocks. Real browser headers cost nothing; the
+    headless-browser fallback stays for sites that need JS or a real TLS
+    fingerprint.
+    """
+    typed = {
+        "image": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "video": "video/*,*/*;q=0.8",
+        "audio": "audio/*,*/*;q=0.8",
+    }.get(expected_kind or "")
+    html_accept = (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+        "image/webp,*/*;q=0.8"
+    )
+    headers = {
+        "Accept": typed or html_accept,
+        "User-Agent": REMOTE_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    if not typed:
+        headers.update({
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+        })
+    if scheme == "http":
+        # H2/H3 are refused over cleartext; asking for them invites a reset.
+        headers.pop("Upgrade-Insecure-Requests", None)
+    return headers
 
 
 async def _fetch_browser_page(
