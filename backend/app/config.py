@@ -198,6 +198,7 @@ EXPLABS_API_KEY = os.getenv("EXPLABS_API_KEY") or ""
 # image_reverse_search evidence layer reports "not provisioned" honestly
 # instead of fabricating hits.
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY") or ""
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
 # Maximum images per image-investigation (two-image comparison).
 MAX_IMAGE_INPUTS = int(os.getenv("MAX_IMAGE_INPUTS", "2"))
 MAX_BATCH_IMAGE_INPUTS = int(os.getenv("MAX_BATCH_IMAGE_INPUTS", "200"))

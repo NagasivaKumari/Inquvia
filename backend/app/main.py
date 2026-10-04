@@ -5,6 +5,7 @@ all /api/* routes. Same-origin is achieved by proxy/frontend config; no CORS
 middleware is added by default.
 """
 import json
+import logging
 import os
 import base64
 from html import escape
@@ -150,6 +151,7 @@ def _build_x402():
         return None
 
 
+logger = logging.getLogger("inquvia.x402")
 _X402_MIDDLEWARE = None
 
 
@@ -236,10 +238,28 @@ async def x402_middleware(request: Request, call_next):
             }, status_code=400)
         except Exception as e:
             import traceback; traceback.print_exc()
-            # Fail closed: a payment-gate error can never mean "run for free".
+            # Fail closed on payment, but never re-label an application fault as
+            # 402: that would tell the client to pay again for a paid request.
             res = JSONResponse(
-                {"error": "Payment verification failed. No payment was accepted and the capability was not run."},
+                {"error": "Payment verification failed. No payment was accepted and the capability was not run.",
+                 "errorCode": "PAYMENT_VERIFICATION_FAILED"},
                 status_code=402,
+            )
+        if res.status_code >= 400:
+            logger.error(
+                "x402 request failed path=%s status=%s body=%.400s",
+                request.url.path, res.status_code,
+                getattr(res, "body", b"") or b"",
+            )
+        if getattr(request.state, "payment_payload", None):
+            logger.info(
+                "evidence_stage %s",
+                json.dumps({
+                    "stage": "payment_verified",
+                    "endpoint": request.url.path,
+                    "idempotency_key": request.headers.get("idempotency-key"),
+                    "payment_verified": True,
+                }),
             )
         if res.status_code == 402:
             try:

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import secrets
+import traceback
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from .. import config, db
@@ -113,11 +114,61 @@ def _resolve_evidence_user_id(request: Request | None) -> str | None:
     return None
 
 
+def _stage(request: Request | None, stage: str, **fields) -> None:
+    """Structured lifecycle log for paid evidence endpoints.
+
+    ponytail: one helper instead of a tracing framework. Every stage is INFO,
+    every failure is logged with traceback by _stage_error so a post-payment
+    failure is never a silent 4xx/5xx.
+    """
+    extra = {
+        "stage": stage,
+        "endpoint": getattr(getattr(request, "url", None), "path", None),
+        "capability": getattr(getattr(request, "state", None), "capability", None),
+        "case_id": getattr(getattr(request, "state", None), "investigation_id", None),
+        "idempotency_key": (request.headers.get("idempotency-key") if request else None),
+        "payment_verified": bool(
+            getattr(getattr(request, "state", None), "payment_payload", None)
+        ),
+    }
+    extra.update(fields)
+    logger.info("evidence_stage %s", json.dumps(extra, default=str))
+
+
+def _stage_error(request: Request | None, stage: str, exc: BaseException, **fields) -> None:
+    """Never hide an exception behind a bare status code."""
+    _stage(request, stage, outcome="error", exc_type=type(exc).__name__,
+           exc_message=str(exc), **fields)
+    logger.error(
+        "evidence_stage_failed stage=%s endpoint=%s\n%s",
+        stage,
+        getattr(getattr(request, "url", None), "path", None),
+        traceback.format_exc(),
+    )
+
+
 def _persist(request: Request, operation: str, inputs: dict, result: dict) -> dict:
     """Save the request/result pair before returning a direct evidence response."""
-    request_id = _id("inv")
+    _stage(request, "persistence_started", operation=operation)
     user_id = _resolve_evidence_user_id(request)
+    idempotency_key = request.headers.get("idempotency-key") if request else None
 
+    # A retried paid request must not become a second investigation or a
+    # second charge: the key identifies the same logical request.
+    if idempotency_key:
+        existing = db.get_investigation_by_idempotency_key(idempotency_key, user_id)
+        if existing:
+            _stage(request, "idempotent_replay", operation=operation,
+                   investigation_id=existing.get("id") or existing.get("_id"))
+            replayed = dict(result)
+            replayed.setdefault("idempotentReplay", True)
+            replayed["id"] = existing.get("id") or existing.get("_id")
+            replayed["investigationId"] = replayed["id"]
+            request.state.investigation_id = replayed["id"]
+            request.state.capability = operation
+            return replayed
+
+    request_id = _id("inv")
     req_doc = {
         "requestId": request_id,
         "operation": operation,
@@ -126,7 +177,22 @@ def _persist(request: Request, operation: str, inputs: dict, result: dict) -> di
         "result": result,
         "createdAt": _now(),
     }
-    db.save_evidence_request(req_doc)
+    if idempotency_key:
+        req_doc["idempotencyKey"] = idempotency_key
+    try:
+        db.save_evidence_request(req_doc)
+    except Exception as exc:
+        # Never let a persistence fault become an opaque 502 on a paid request.
+        _stage_error(request, "persistence_failed", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorResponse(
+                error="PERSISTENCE_UNAVAILABLE",
+                message="The result could not be saved. Please retry shortly.",
+                field="requestId",
+            ).model_dump(),
+        ) from exc
+    _stage(request, "persistence_completed", operation=operation, request_id=request_id)
 
     try:
         inv_doc = db._evidence_request_to_investigation(req_doc)
@@ -251,6 +317,8 @@ async def _request_data(request: Request) -> tuple[dict, list[dict]]:
             sorted(body),
             len(files),
         )
+        _stage(request, "request_body_parsed", encoding="multipart",
+               fields=sorted(body), files=len(files))
         return body, files
     try:
         chunks = []
@@ -276,6 +344,7 @@ async def _request_data(request: Request) -> tuple[dict, list[dict]]:
             "INVALID_BODY_SCHEMA", "The request body must be a JSON object.", "body"
         )
     logger.info("evidence request parsed: fields=%s files=0", sorted(body))
+    _stage(request, "request_body_parsed", encoding="json", fields=sorted(body), files=0)
     return body, []
 
 
@@ -796,7 +865,12 @@ async def _analysis_data(
         )
     source_items = []
     source_inputs = []
+    _stage(request, "evidence_acquisition_started", files=len(files),
+           url_field_present=bool(payload.get("url") or payload.get("urls")),
+           client_evidence_items=len(evidence))
     for file in files:
+        _stage(request, "evidence_acquisition_file_started", filename=file["name"],
+               mime=file["mime"], bytes=len(file["data"]))
         ok, error_resp = EvidenceValidator.validate_file_upload(
             file["mime"],
             len(file["data"]),
@@ -808,6 +882,7 @@ async def _analysis_data(
         try:
             source_input.validate_upload_mime(file["data"], file["mime"], "file")
         except source_input.SourceInputError as exc:
+            _stage_error(request, "evidence_acquisition_file_failed", exc)
             raise HTTPException(
                 status_code=exc.status_code, detail=exc.content
             ) from exc
@@ -824,6 +899,8 @@ async def _analysis_data(
                 "filePath": stored["filePath"],
             }
         )
+        _stage(request, "evidence_acquisition_file_completed", filename=file["name"],
+               items=len(source_items))
 
     raw_urls = []
     body_url = payload.get("url") or payload.get("urls") or ""
@@ -838,6 +915,7 @@ async def _analysis_data(
             urls.append(u)
 
     for u in urls:
+        _stage(request, "evidence_acquisition_url_started", url=u)
         try:
             remote = await source_input.fetch_url(
                 u, source_input.ANALYSIS_MIMES
@@ -847,6 +925,9 @@ async def _analysis_data(
                 remote, _id("case"), input_type="url", inspection=inspection
             )
         except source_input.SourceInputError as exc:
+            # This is the exact line that produced the silent post-payment 502.
+            _stage_error(request, "evidence_acquisition_url_failed", exc, url=u,
+                         upstream_status=(exc.details or {}).get("statusCode"))
             raise HTTPException(
                 status_code=exc.status_code, detail=exc.content
             ) from exc
@@ -868,6 +949,10 @@ async def _analysis_data(
                 "finalUrl": remote.final_url,
             }
         )
+        _stage(request, "evidence_acquisition_url_completed", url=u,
+               final_url=remote.final_url, mime=remote.mime_type, bytes=len(remote.data))
+    _stage(request, "evidence_acquisition_completed", items=len(source_items),
+           urls=len(urls), files=len(files))
     all_evidence = evidence + source_items
     if len(all_evidence) < minimum:
         _raise_validation(

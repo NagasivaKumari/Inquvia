@@ -4,6 +4,7 @@ import mimetypes
 import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html import escape
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -303,13 +304,13 @@ def _content_length(response: object) -> int | None:
         length = int(value)
     except (TypeError, ValueError) as exc:
         raise SourceInputError(
-            502,
+            400,
             "INVALID_CONTENT_LENGTH",
             "The remote server returned an invalid Content-Length header.",
             "url",
         ) from exc
     if length < 0:
-        raise SourceInputError(502, "INVALID_CONTENT_LENGTH", "The remote server returned a negative Content-Length.", "url")
+        raise SourceInputError(400, "INVALID_CONTENT_LENGTH", "The remote server returned a negative Content-Length.", "url")
     return length
 
 
@@ -350,8 +351,10 @@ async def fetch_url(
                     status = response.status_code
                     if 300 <= status < 400 and response.headers.get("location"):
                         if redirects >= MAX_REDIRECTS:
+                            # The submitted URL is the problem, not Inquvia's
+                            # upstream, so this stays a client error.
                             raise SourceInputError(
-                                502,
+                                400,
                                 "REMOTE_REDIRECT_ERROR",
                                 f"The URL exceeded the {MAX_REDIRECTS}-redirect limit.",
                                 "url",
@@ -361,16 +364,40 @@ async def fetch_url(
                         redirects += 1
                         continue
                     if not response.is_success:
-                        code = "REMOTE_ACCESS_DENIED" if status in (401, 403) else (
-                            "REMOTE_HTTP_ERROR"
-                        )
+                        # 4xx = the caller's URL is unusable (client error).
+                        # 5xx = a genuine upstream dependency failure (502).
+                        denied = status in (401, 403)
+                        upstream = status >= 500
+                        if status == 403 and expected_kind is None and (
+                            allowed is None or bool(allowed & HTML_MIMES)
+                        ):
+                            tavily_source = await _fetch_tavily_page(
+                                public_url,
+                                requested,
+                                max_bytes,
+                                redirects,
+                                addresses,
+                                connected,
+                            )
+                            if tavily_source is not None:
+                                return tavily_source
+                            browser_source = await _fetch_browser_page(
+                                public_url,
+                                requested,
+                                max_bytes,
+                                redirects,
+                                addresses,
+                                connected,
+                            )
+                            if browser_source is not None:
+                                return browser_source
                         raise SourceInputError(
-                            502,
-                            code,
+                            502 if upstream else 400,
+                            "REMOTE_ACCESS_DENIED" if denied else "REMOTE_HTTP_ERROR",
                             (
                                 "The remote server denied Inquvia's fetch request; "
                                 "the media itself could not be acquired."
-                                if status in (401, 403)
+                                if denied
                                 else f"The remote server returned HTTP {status}."
                             ),
                             "url",
@@ -381,7 +408,7 @@ async def fetch_url(
                     if length is not None and length > max_bytes:
                         raise SourceInputError(
                             413,
-                            "REMOTE_SIZE_LIMIT",
+                            "FILE_TOO_LARGE",
                             "The remote file exceeds the 10MB limit.",
                             "url",
                             {"maxSizeBytes": max_bytes, "receivedSizeBytes": length},
@@ -393,7 +420,7 @@ async def fetch_url(
                         if total > max_bytes:
                             raise SourceInputError(
                                 413,
-                                "REMOTE_SIZE_LIMIT",
+                                "FILE_TOO_LARGE",
                                 "The remote file exceeds the 10MB limit.",
                                 "url",
                                 {"maxSizeBytes": max_bytes},
@@ -436,6 +463,103 @@ async def fetch_url(
             raise SourceInputError(504, "REMOTE_TIMEOUT", "The remote server timed out.", "url") from exc
         except httpx.HTTPError as exc:
             raise SourceInputError(502, "REMOTE_CONNECTION_ERROR", "The remote file could not be fetched.", "url") from exc
+
+
+async def _fetch_browser_page(
+    url: str,
+    requested_url: str,
+    max_bytes: int,
+    redirects: int,
+    resolved_ips: list[str],
+    connected_ip: str,
+) -> RemoteSource | None:
+    """Retry a public HTML page through the existing headless browser.
+
+    This is a rendering fallback for bot-resistant public pages, not an
+    authentication bypass. A page that still returns 401/403 is rejected.
+    """
+    try:
+        from .browser_renderer import render_page
+        rendered = await render_page(url)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+    if not rendered.success or rendered.status_code in (401, 403):
+        return None
+    data = rendered.html.encode("utf-8")
+    if not data or len(data) > max_bytes:
+        return None
+    mime = "text/html"
+    return RemoteSource(
+        data=data,
+        requested_url=requested_url,
+        final_url=rendered.final_url or url,
+        filename=_filename(rendered.final_url or url, mime),
+        mime_type=mime,
+        declared_mime=mime,
+        status_code=rendered.status_code or 200,
+        redirects=redirects,
+        resolved_ips=resolved_ips,
+        connected_ip=connected_ip,
+    )
+
+
+async def _fetch_tavily_page(
+    url: str,
+    requested_url: str,
+    max_bytes: int,
+    redirects: int,
+    resolved_ips: list[str],
+    connected_ip: str,
+) -> RemoteSource | None:
+    """Use Tavily Extract for public HTML pages blocked by direct fetching."""
+    api_key = config.TAVILY_API_KEY
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                "https://api.tavily.com/extract",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"urls": [url], "extract_depth": "basic"},
+            )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        result = next(
+            (
+                item for item in (payload.get("results") or [])
+                if isinstance(item, dict) and item.get("raw_content")
+            ),
+            None,
+        )
+        if not result:
+            return None
+        content = str(result["raw_content"])
+        data = (
+            "<html><body><pre>"
+            + escape(content)
+            + "</pre></body></html>"
+        ).encode("utf-8")
+        if not data or len(data) > max_bytes:
+            return None
+        final_url = str(result.get("url") or url)
+        return RemoteSource(
+            data=data,
+            requested_url=requested_url,
+            final_url=final_url,
+            filename=_filename(final_url, "text/html"),
+            mime_type="text/html",
+            declared_mime="text/html",
+            status_code=200,
+            redirects=redirects,
+            resolved_ips=resolved_ips,
+            connected_ip=connected_ip,
+        )
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        return None
 
 
 def _decode(source: RemoteSource) -> str:

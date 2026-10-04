@@ -584,6 +584,7 @@ def _evidence_request_to_investigation(req: dict) -> dict:
         "id": req_id,
         "title": title,
         "userId": req.get("userId"),
+        "idempotencyKey": req.get("idempotencyKey"),
         "question": claim,
         "inputType": op.replace("/api/x402/", "").replace("/api/evidence/", ""),
         "capability": identity["capabilityId"],
