@@ -90,8 +90,11 @@ def validate_upload_mime(data: bytes, mime: str, field: str = "file") -> None:
 def normalize_mime(data: bytes, declared: str | None, url: str = "") -> str:
     if is_pdf(data):
         return "application/pdf"
+    sniffed = _sniff_media_mime(data)
+    if sniffed:
+        return sniffed
     mime = _content_type(declared)
-    if mime and mime != "application/octet-stream":
+    if mime and mime not in ("application/octet-stream", "text/plain"):
         return mime
     guessed = mimetypes.guess_type(urlsplit(url).path)[0] if url else None
     if guessed:
@@ -108,6 +111,84 @@ def normalize_mime(data: bytes, declared: str | None, url: str = "") -> str:
         except UnicodeDecodeError:
             pass
     return mime or "application/octet-stream"
+
+
+def _sniff_media_mime(data: bytes) -> str | None:
+    """Identify common media from signatures when headers are generic/wrong."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    if data.startswith(b"RIFF") and len(data) >= 12:
+        if data[8:12] == b"WEBP":
+            return "image/webp"
+        if data[8:12] == b"WAVE":
+            return "audio/wav"
+        if data[8:12] == b"AVI ":
+            return "video/x-msvideo"
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    if data.startswith(b"ID3") or _looks_like_mp3_frame(data):
+        return "audio/mpeg"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"qt  ",):
+            return "video/quicktime"
+        if brand in (b"M4A ", b"M4B ", b"M4P "):
+            return "audio/mp4"
+        return "video/mp4"
+    if data.startswith((b"\xff\xf1", b"\xff\xf9")):
+        return "audio/aac"
+    if data.startswith((b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3")):
+        return "video/mpeg"
+    return None
+
+
+def _looks_like_mp3_frame(data: bytes) -> bool:
+    if len(data) < 2 or data[0] != 0xFF:
+        return False
+    return (data[1] & 0xE0) == 0xE0 and (data[1] & 0x06) != 0
+
+
+def validate_media_bytes(data: bytes, expected_kind: str, field: str = "url") -> None:
+    """Reject HTML/text or corrupt bytes before a media pipeline runs."""
+    kind = expected_kind.lower()
+    mime = _sniff_media_mime(data)
+    if kind == "image":
+        try:
+            from PIL import Image
+            from io import BytesIO
+            with Image.open(BytesIO(data)) as image:
+                image.verify()
+        except Exception as exc:
+            raise SourceInputError(
+                415, "REMOTE_INVALID_MEDIA",
+                "The downloaded bytes are not a readable image.",
+                field, {"expectedType": kind},
+            ) from exc
+        return
+    if kind == "video" and (not mime or not mime.startswith("video/")):
+        raise SourceInputError(
+            415, "REMOTE_INVALID_MEDIA",
+            "The downloaded bytes are not a recognized video container.",
+            field, {"expectedType": kind},
+        )
+    if kind == "audio" and (
+        not mime or not mime.startswith("audio/") and mime != "video/webm"
+    ):
+        raise SourceInputError(
+            415, "REMOTE_INVALID_MEDIA",
+            "The downloaded bytes are not a recognized audio format.",
+            field, {"expectedType": kind},
+        )
 
 
 def validate_pdf(data: bytes, mime: str, field: str = "file") -> None:
@@ -154,7 +235,7 @@ def _resolved_addresses(host: str, port: int) -> list[str]:
     except OSError as exc:
         raise SourceInputError(
             400,
-            "URL_DNS_FAILED",
+            "REMOTE_DNS_ERROR",
             "The URL hostname could not be resolved.",
             "url",
             {"reason": str(exc)},
@@ -165,7 +246,7 @@ def _resolved_addresses(host: str, port: int) -> list[str]:
         try:
             address = ipaddress.ip_address(raw)
         except ValueError as exc:
-            raise SourceInputError(400, "URL_DNS_FAILED", "The URL resolved to an invalid IP address.", "url") from exc
+            raise SourceInputError(400, "REMOTE_DNS_ERROR", "The URL resolved to an invalid IP address.", "url") from exc
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
             address = address.ipv4_mapped
         blocked = (
@@ -188,7 +269,7 @@ def _resolved_addresses(host: str, port: int) -> list[str]:
         if address.compressed not in addresses:
             addresses.append(address.compressed)
     if not addresses:
-        raise SourceInputError(400, "URL_DNS_FAILED", "The URL hostname resolved to no usable addresses.", "url")
+        raise SourceInputError(400, "REMOTE_DNS_ERROR", "The URL hostname resolved to no usable addresses.", "url")
     return addresses
 
 
@@ -236,6 +317,7 @@ async def fetch_url(
     url: str,
     allowed_mimetypes: set[str] | list[str] | None = None,
     max_bytes: int = MAX_REMOTE_BYTES,
+    expected_kind: str | None = None,
 ) -> RemoteSource:
     requested, _, _, _ = _parse_url(url)
     allowed = None if allowed_mimetypes is None else {_content_type(mime) for mime in allowed_mimetypes}
@@ -247,7 +329,11 @@ async def fetch_url(
         connected = addresses[0]
         request_url = _pinned_url(parsed, connected)
         headers = {
-            "Accept": "*/*",
+            "Accept": (
+                "image/*" if expected_kind == "image" else
+                "video/*" if expected_kind == "video" else
+                "audio/*" if expected_kind == "audio" else "*/*"
+            ),
             "Host": _host_header(parsed, host),
             "User-Agent": REMOTE_USER_AGENT,
         }
@@ -265,8 +351,8 @@ async def fetch_url(
                     if 300 <= status < 400 and response.headers.get("location"):
                         if redirects >= MAX_REDIRECTS:
                             raise SourceInputError(
-                                400,
-                                "TOO_MANY_REDIRECTS",
+                                502,
+                                "REMOTE_REDIRECT_ERROR",
                                 f"The URL exceeded the {MAX_REDIRECTS}-redirect limit.",
                                 "url",
                                 {"maxRedirects": MAX_REDIRECTS},
@@ -275,10 +361,18 @@ async def fetch_url(
                         redirects += 1
                         continue
                     if not response.is_success:
+                        code = "REMOTE_ACCESS_DENIED" if status in (401, 403) else (
+                            "REMOTE_HTTP_ERROR"
+                        )
                         raise SourceInputError(
-                            400,
-                            "REMOTE_HTTP_ERROR",
-                            f"The remote server returned HTTP {status}.",
+                            502,
+                            code,
+                            (
+                                "The remote server denied Inquvia's fetch request; "
+                                "the media itself could not be acquired."
+                                if status in (401, 403)
+                                else f"The remote server returned HTTP {status}."
+                            ),
                             "url",
                             {"statusCode": status},
                         )
@@ -287,7 +381,7 @@ async def fetch_url(
                     if length is not None and length > max_bytes:
                         raise SourceInputError(
                             413,
-                            "FILE_TOO_LARGE",
+                            "REMOTE_SIZE_LIMIT",
                             "The remote file exceeds the 10MB limit.",
                             "url",
                             {"maxSizeBytes": max_bytes, "receivedSizeBytes": length},
@@ -299,7 +393,7 @@ async def fetch_url(
                         if total > max_bytes:
                             raise SourceInputError(
                                 413,
-                                "FILE_TOO_LARGE",
+                                "REMOTE_SIZE_LIMIT",
                                 "The remote file exceeds the 10MB limit.",
                                 "url",
                                 {"maxSizeBytes": max_bytes},
@@ -307,14 +401,18 @@ async def fetch_url(
                         chunks.append(chunk)
                     data = b"".join(chunks)
                     if not data:
-                        raise SourceInputError(400, "EMPTY_REMOTE_FILE", "The remote file was empty.", "url")
+                        raise SourceInputError(400, "REMOTE_EMPTY_RESPONSE", "The remote server returned an empty response.", "url")
                     final_url = public_url
                     mime = normalize_mime(data, declared, final_url)
+                    if expected_kind == "audio" and mime == "video/webm":
+                        mime = "audio/webm"
                     validate_pdf(data, mime)
+                    if expected_kind:
+                        validate_media_bytes(data, expected_kind)
                     if allowed is not None and mime not in allowed:
                         raise SourceInputError(
                             415,
-                            "UNSUPPORTED_SOURCE_TYPE",
+                            "REMOTE_UNSUPPORTED_TYPE",
                             f"The URL resolved to {mime}, which is incompatible with this endpoint.",
                             "url",
                             {"receivedMimeType": mime, "acceptedMimeTypes": sorted(allowed)},
@@ -335,9 +433,9 @@ async def fetch_url(
         except SourceInputError:
             raise
         except httpx.TimeoutException as exc:
-            raise SourceInputError(502, "REMOTE_FETCH_TIMEOUT", "The remote server timed out.", "url") from exc
+            raise SourceInputError(504, "REMOTE_TIMEOUT", "The remote server timed out.", "url") from exc
         except httpx.HTTPError as exc:
-            raise SourceInputError(502, "REMOTE_FETCH_FAILED", "The remote file could not be fetched.", "url") from exc
+            raise SourceInputError(502, "REMOTE_CONNECTION_ERROR", "The remote file could not be fetched.", "url") from exc
 
 
 def _decode(source: RemoteSource) -> str:

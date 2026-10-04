@@ -894,8 +894,24 @@ async def _document_analyzer(inv, evidence):
     input_ = _find_input(inv, "document")
     pages = await _load_document_pages(inv, input_)
     if not pages:
-        # No readable document content → honest insufficiency, never fabricated.
-        return heuristic_analysis(inv, evidence)
+        # No readable document content → honest insufficiency, never fabricated
+        # and never a URL-availability or extraction-success verdict.
+        message = "Document extraction unavailable; substantive reinvestigation could not be completed"
+        return {
+            "conclusion": "insufficient_evidence",
+            "conclusionText": message,
+            "answer": message,
+            "confidence": 0,
+            "risk": "unknown",
+            "findings": [message],
+            "limitations": [message],
+            "contradictions": [],
+            "evidenceRelationships": {
+                "supporting": 0,
+                "contradicting": 0,
+                "established": False,
+            },
+        }
 
     # Structured/deterministic path: when the question needs whole-file
     # statistics over a record-structured source, compute over every record

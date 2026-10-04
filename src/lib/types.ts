@@ -230,6 +230,14 @@ export interface Investigation {
   title: string;
   /** The atomic paid capability this investigation ran under (e.g. "image-investigation"). */
   capability?: string;
+  /** Stable canonical capability identity, independent of evidence input type. */
+  capabilityId?: string;
+  /** Canonical display name for the capability that created this case. */
+  serviceName?: string;
+  originalCapabilityId?: string;
+  originalServiceName?: string;
+  originalQuestion?: string;
+  parentCaseId?: string;
   /** Price paid for the atomic capability, in whole USDC (merchant fee). */
   capabilityPriceUsdc?: number;
   /** When set, this investigation was created by reinvestigating an earlier

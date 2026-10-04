@@ -58,14 +58,16 @@ export function normalizeToInvestigation(
     return {
       ...raw,
       id: raw.id || raw._id,
-      title: raw.title || raw.question || "Evidence Investigation",
+      title: raw.serviceName || raw.originalServiceName || raw.title || raw.question || "Evidence Investigation",
       inputs: raw.inputs || [],
       inputType:
         raw.inputType ||
         (endpointHint
           ? (endpointHint.replace("/api/x402/", "").replace("/api/evidence/", "") as InputType)
           : "mixed"),
-      capability: raw.capability || endpointHint || "evidence-investigation",
+      capability: raw.capabilityId || raw.capability || endpointHint || "evidence-investigation",
+      capabilityId: raw.capabilityId || raw.capability || endpointHint || "evidence-investigation",
+      serviceName: raw.serviceName || raw.originalServiceName,
       investigationPlan: raw.investigationPlan || [],
       selectedCapabilities: raw.selectedCapabilities || [],
       findings: raw.findings || [],
@@ -88,8 +90,9 @@ export function normalizeToInvestigation(
     raw.finding ||
     "Evidence Investigation";
   const capability =
-    endpointHint ||
+    raw.capabilityId ||
     raw.capability ||
+    endpointHint ||
     raw.type ||
     raw.operation ||
     "evidence-investigation";
@@ -201,7 +204,8 @@ export function normalizeToInvestigation(
   }
 
   // Format title derived from endpoint/capability
-  const sourceName = capability
+  const sourceName = (raw.serviceName || raw.originalServiceName) ||
+    capability
     .replace("/api/x402/", "")
     .replace("/api/evidence/", "")
     .replace("-investigation", "")
@@ -253,6 +257,8 @@ export function normalizeToInvestigation(
       return {
         check: c,
         capability: capability,
+        capabilityId: raw.capabilityId || capability,
+        serviceName: raw.serviceName || raw.originalServiceName || sourceName,
         status: "completed" as const,
         detail: "Check ran and produced observable results.",
       };
@@ -457,11 +463,17 @@ export function normalizeToInvestigation(
 
   return {
     id,
-    title: rawClaim,
+    title: raw.serviceName || raw.originalServiceName || sourceName,
     question: rawClaim,
     inputs,
     inputType,
     capability: capability,
+    capabilityId: raw.capabilityId || capability,
+    serviceName: raw.serviceName || raw.originalServiceName || sourceName,
+    originalCapabilityId: raw.originalCapabilityId,
+    originalServiceName: raw.originalServiceName,
+    originalQuestion: raw.originalQuestion,
+    parentCaseId: raw.parentCaseId,
     status: "completed",
     currentStage: "completed",
     conclusion,

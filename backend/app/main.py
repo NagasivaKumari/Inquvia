@@ -1272,6 +1272,22 @@ async def _handle_atomic_capability(
             }, status_code=403)
         reuse_source = source
 
+        original_capability = (
+            source.get("originalCapabilityId")
+            or source.get("capabilityId")
+            or source.get("capability")
+        )
+        if original_capability:
+            original_capability = config.get_capability_metadata(
+                original_capability
+            )["capabilityId"]
+        if original_capability and original_capability != capability_id:
+            print(
+                "Reinvestigation capability corrected to the source case: "
+                f"{capability_id} -> {original_capability}"
+            )
+            capability_id = original_capability
+
     try:
         result = await atomic_route.handle_atomic_paid_request(
             capability_id, user, body, files, idempotency_key, background_tasks=background_tasks,
@@ -1340,5 +1356,3 @@ async def _json(request: Request):
         return await request.json()
     except Exception:
         return None
-
-

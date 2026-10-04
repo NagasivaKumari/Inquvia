@@ -7,6 +7,7 @@ They never discover or pay another evidence service.
 import csv
 import io
 import json
+import logging
 import re
 import secrets
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ from ..libraries.contract_registry import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("inquvia.evidence")
 
 
 def _id(prefix: str = "") -> str:
@@ -183,6 +185,9 @@ _FILE_CONTRACTS = {
 def _raise_validation(
     code: str, message: str, field: str, status_code: int = 400
 ) -> None:
+    # ponytail: every 400 on this router is a rejected *paid* request, so the
+    # reason is logged here rather than per call site.
+    logger.warning("evidence validation rejected: %s field=%s %s", code, field, message)
     raise HTTPException(
         status_code=status_code,
         detail=ErrorResponse(error=code, message=message, field=field).model_dump(),
@@ -241,6 +246,11 @@ async def _request_data(request: Request) -> tuple[dict, list[dict]]:
                     "The evidence field must be valid JSON.",
                     "evidence",
                 )
+        logger.info(
+            "evidence request parsed: fields=%s files=%d",
+            sorted(body),
+            len(files),
+        )
         return body, files
     try:
         chunks = []
@@ -265,6 +275,7 @@ async def _request_data(request: Request) -> tuple[dict, list[dict]]:
         _raise_validation(
             "INVALID_BODY_SCHEMA", "The request body must be a JSON object.", "body"
         )
+    logger.info("evidence request parsed: fields=%s files=0", sorted(body))
     return body, []
 
 
@@ -286,6 +297,16 @@ def _remote_mimes(kind: str, contract) -> set[str]:
     return set(contract.accepted_mimetypes)
 
 
+def _remote_expected_kind(kind: str) -> str | None:
+    if kind == "image":
+        return "image"
+    if kind == "video":
+        return "video"
+    if kind == "audio":
+        return "audio"
+    return None
+
+
 async def _resolve_source(
     request: Request, kind: str, file: dict | None, url: str
 ) -> dict:
@@ -302,7 +323,9 @@ async def _resolve_source(
         contract = _contract_for_kind(kind)
         try:
             remote = await source_input.fetch_url(
-                sanitized, _remote_mimes(kind, contract)
+                sanitized,
+                _remote_mimes(kind, contract),
+                expected_kind=_remote_expected_kind(kind),
             )
             inspection = source_input.inspect_source(remote)
             stored = source_input.store_remote_input(
@@ -862,15 +885,6 @@ async def _analysis_data(
 async def assess_evidence(request: Request):
     """Assess a claim against supplied evidence or an extracted source."""
     payload, evidence_payload, persistence = await _analysis_data(request, 1)
-    if not all(
-        isinstance(item, dict) and item.get("status") == "extracted"
-        for item in evidence_payload
-    ):
-        _raise_validation(
-            "INVALID_BODY_SCHEMA",
-            "All evidence items must have status 'extracted'.",
-            "evidence",
-        )
     evidence = _refs(evidence_payload)
     result = heuristic_analysis(
         {"question": payload.get("claim") or "", "evidenceRequirements": []},

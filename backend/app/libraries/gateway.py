@@ -22,9 +22,19 @@ def _now_iso() -> str:
 
 def create_investigation_record(input_: dict) -> dict:
     now = _now_iso()
+    identity = config.get_capability_metadata(
+        input_.get("capabilityId") or input_.get("capability")
+    )
     return {
-        "id": input_["id"], "userId": input_.get("userId"), "title": input_["title"],
-        "capability": input_.get("capability"), "capabilityPriceUsdc": input_.get("capabilityPriceUsdc"),
+        "id": input_["id"], "userId": input_.get("userId"), "title": identity["title"],
+        "capability": identity["capabilityId"],
+        "capabilityId": identity["capabilityId"],
+        "serviceName": identity["serviceName"],
+        "originalCapabilityId": identity["capabilityId"],
+        "originalServiceName": identity["serviceName"],
+        "originalQuestion": input_["question"],
+        "originalInputs": list(input_.get("inputs") or []),
+        "capabilityPriceUsdc": input_.get("capabilityPriceUsdc"),
         "idempotencyKey": input_.get("idempotencyKey"), "question": input_["question"],
         "inputs": input_.get("inputs") or [], "inputType": input_.get("inputType"),
         "investigationPlan": [], "selectedCapabilities": [], "evidence": [],

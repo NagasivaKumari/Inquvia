@@ -62,6 +62,7 @@ def start_capability_investigation(input_: dict) -> dict:
         "inputType": detect_input_type(input_.get("inputs") or []),
         "status": "created",
         "capability": input_.get("capability"),
+        "capabilityId": input_.get("capabilityId") or input_.get("capability"),
         "capabilityPriceUsdc": cap.get("priceUsdc") if cap else None,
         "idempotencyKey": input_.get("idempotencyKey"),
     })

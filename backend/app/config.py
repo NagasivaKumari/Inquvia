@@ -344,3 +344,36 @@ def get_paid_capability(capability_id: str) -> dict | None:
         if c["id"] == capability_id:
             return c
     return None
+
+
+def get_capability_metadata(capability_id: str | None) -> dict:
+    """Return the canonical identity for a paid or direct capability.
+
+    Input MIME/type is deliberately not consulted here: URLs and files are
+    evidence inputs, while this metadata identifies the selected analysis.
+    """
+    value = str(capability_id or "").strip()
+    normalized = value.rsplit("/", 1)[-1]
+    if normalized.startswith("api-"):
+        normalized = normalized[4:]
+    paid = get_paid_capability(normalized)
+    if paid:
+        return {
+            "capabilityId": paid["id"],
+            "serviceName": paid["title"],
+            "title": paid["title"],
+        }
+    for item in EVIDENCE_CAPABILITIES:
+        if value in (item["id"], item["endpoint"]) or normalized in (
+            item["id"], item["endpoint"].rsplit("/", 1)[-1],
+        ):
+            return {
+                "capabilityId": item["id"],
+                "serviceName": item["title"],
+                "title": item["title"],
+            }
+    return {
+        "capabilityId": value or "evidence-investigation",
+        "serviceName": value or "Evidence Investigation",
+        "title": value or "Evidence Investigation",
+    }

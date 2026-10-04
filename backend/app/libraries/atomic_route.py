@@ -1,12 +1,15 @@
 """Shared atomic paid-route handler (mirrors x402/atomicRoute.ts)."""
 import secrets
 import json
+import logging
 
 from .. import db, config
 from ..libraries import storage
 from ..libraries import source_input
 from ..libraries import capabilities as caps
 from ..libraries import engine
+
+logger = logging.getLogger(__name__)
 
 
 class InputValidationError(Exception):
@@ -119,8 +122,22 @@ def _remote_allowed_mimes(capability_id: str) -> set[str]:
         return candidates
     allowed_types = {t for t in ALLOWED_INPUT_TYPES.get(capability_id, set()) if t != "url"}
     result = {mime for mime in candidates if config.mime_input_type(mime, capability_id) in allowed_types}
-    result.update(source_input.HTML_MIMES)
+    if capability_id not in (
+        "image-investigation", "image-batch-investigation",
+        "video-investigation", "audio-investigation",
+    ):
+        result.update(source_input.HTML_MIMES)
     return result
+
+
+def _remote_expected_kind(capability_id: str) -> str | None:
+    if capability_id in ("image-investigation", "image-batch-investigation"):
+        return "image"
+    if capability_id == "video-investigation":
+        return "video"
+    if capability_id == "audio-investigation":
+        return "audio"
+    return None
 
 
 def _split_urls(value: object) -> list[str]:
@@ -168,16 +185,60 @@ async def _remote_input(
     sanitized = storage.sanitize_url(url)
     if not sanitized:
         raise source_input.SourceInputError(400, "INVALID_URL", "Please enter a valid HTTP or HTTPS URL.", "url")
-    remote = await source_input.fetch_url(sanitized, _remote_allowed_mimes(capability_id))
-    input_type = "url" if (capability_id == "source-investigation" or remote.mime_type in source_input.HTML_MIMES) else None
-    return source_input.store_remote_input(
+    expected_kind = _remote_expected_kind(capability_id)
+    fetch_kwargs = (
+        {"expected_kind": expected_kind} if expected_kind else {}
+    )
+    remote = await source_input.fetch_url(
+        sanitized, _remote_allowed_mimes(capability_id), **fetch_kwargs
+    )
+    inspection = source_input.inspect_source(remote)
+    original_source_url = sanitized
+    source_page_inspection = inspection
+
+    # A document investigation submitted as a landing page must analyze the
+    # report, not just the page's availability or summary text. Prefer a
+    # downloadable PDF advertised by the page and retain the landing page as
+    # provenance for the resulting document input.
+    if capability_id == "document-investigation" and remote.mime_type in source_input.HTML_MIMES:
+        links = inspection.get("links") or []
+        pdf_links = []
+        for link in links:
+            href = str((link or {}).get("href") or "").strip()
+            text = str((link or {}).get("text") or "").lower()
+            if href and (href.lower().split("?", 1)[0].endswith(".pdf") or "pdf" in text):
+                if href not in pdf_links:
+                    pdf_links.append(href)
+        for pdf_url in pdf_links:
+            try:
+                candidate = await source_input.fetch_url(pdf_url, {"application/pdf"})
+            except source_input.SourceInputError:
+                continue
+            if candidate.mime_type == "application/pdf":
+                logger.info(
+                    "document-investigation: promoted downloadable report PDF "
+                    "from source page %s to document evidence",
+                    original_source_url,
+                )
+                remote = candidate
+                inspection = source_input.inspect_source(remote)
+                inspection["sourcePageUrl"] = original_source_url
+                inspection["sourcePageInspection"] = source_page_inspection
+                break
+
+    input_type = "url" if capability_id == "source-investigation" else None
+    result = source_input.store_remote_input(
         remote,
         case_id,
         capability_id=capability_id,
         input_type=input_type,
         reused_from=reused_from,
-        inspection=source_input.inspect_source(remote),
+        inspection=inspection,
     )
+    if capability_id == "document-investigation" and original_source_url != remote.requested_url:
+        result["sourcePageUrl"] = original_source_url
+        result["sourcePageInspection"] = inspection.get("sourcePageInspection")
+    return result
 
 
 async def _build_inputs_with_sources(
@@ -197,6 +258,30 @@ async def _build_inputs_with_sources(
             ]
             inputs = [item for item in inputs if item.get("type") != "url"]
             inputs = remotes + inputs
+        elif capability_id == "document-investigation":
+            # Older document investigations stored a landing-page URL as a
+            # URL input. Re-fetch it now so reinvestigation has a document
+            # file to extract and analyze with the new question.
+            source_url = next(
+                (
+                    i.get("content")
+                    for i in (reuse_source.get("inputs") or [])
+                    if i.get("type") == "url" and i.get("content")
+                ),
+                "",
+            )
+            if source_url:
+                logger.info(
+                    "document-investigation: refetching original URL %s for "
+                    "reinvestigation %s",
+                    source_url,
+                    reuse_source.get("id"),
+                )
+                remote = await _remote_input(
+                    source_url, case_id, capability_id, reuse_source.get("id")
+                )
+                inputs = [item for item in inputs if item.get("type") != "url"]
+                inputs.insert(0, remote)
         return inputs
 
     inputs = []
@@ -378,18 +463,50 @@ def _restore_run_metadata(
 ) -> dict | None:
     """Restore request metadata after a capability runner saves its result."""
     inv = db.get_investigation(result["id"])
-    if inv and not inv.get("capability"):
-        inv["capability"] = capability_id
+    if inv:
+        identity = config.get_capability_metadata(
+            inv.get("originalCapabilityId") or inv.get("capabilityId")
+            or inv.get("capability") or capability_id
+        )
+        inv["capability"] = identity["capabilityId"]
+        inv["capabilityId"] = identity["capabilityId"]
+        inv["serviceName"] = inv.get("originalServiceName") or identity["serviceName"]
+        inv["originalCapabilityId"] = inv.get("originalCapabilityId") or identity["capabilityId"]
+        inv["originalServiceName"] = inv.get("originalServiceName") or identity["serviceName"]
         inv["capabilityPriceUsdc"] = price_usdc
         if idempotency_key:
             inv["idempotencyKey"] = idempotency_key
         db.save_investigation(inv)
-    if inv and service_name:
-        inv["requestedService"] = service_name
-        inv["title"] = service_name
+    if inv:
+        # A request label is not authoritative case identity. Keep it only as
+        # audit context and never let it rewrite the original capability.
+        if service_name:
+            inv["requestedService"] = service_name
+        inv["title"] = inv.get("originalServiceName") or inv.get("serviceName")
         db.save_investigation(inv)
     if reuse_source and inv:
         inv["reinvestigationOf"] = reuse_source.get("id")
+        inv["parentCaseId"] = reuse_source.get("id")
+        inv["originalCapabilityId"] = (
+            reuse_source.get("originalCapabilityId")
+            or reuse_source.get("capabilityId")
+            or reuse_source.get("capability")
+            or inv.get("capability")
+        )
+        inv["capabilityId"] = inv["originalCapabilityId"]
+        inv["capability"] = inv["originalCapabilityId"]
+        inv["originalServiceName"] = (
+            reuse_source.get("originalServiceName")
+            or reuse_source.get("serviceName")
+            or config.get_capability_metadata(inv["originalCapabilityId"])["serviceName"]
+        )
+        inv["serviceName"] = inv["originalServiceName"]
+        inv["title"] = inv["originalServiceName"]
+        inv["originalQuestion"] = (
+            reuse_source.get("originalQuestion")
+            or reuse_source.get("question")
+        )
+        inv["originalInputs"] = reuse_source.get("originalInputs") or reuse_source.get("inputs") or []
         db.save_investigation(inv)
     return inv
 

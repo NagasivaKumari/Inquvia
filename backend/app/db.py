@@ -464,6 +464,7 @@ def _evidence_request_to_investigation(req: dict) -> dict:
     req_id = req.get("_id") or req.get("requestId") or "req_unknown"
     claim = inp.get("claim") or inp.get("question") or res.get("claim") or res.get("question") or res.get("finding") or "Evidence Investigation"
     op = req.get("operation") or res.get("type") or "evidence-investigation"
+    identity = config.get_capability_metadata(op)
 
     verdict = str(res.get("verdict") or res.get("conclusion") or res.get("status") or "inconclusive").lower()
     raw_contradictions = res.get("contradictions") or []
@@ -576,9 +577,7 @@ def _evidence_request_to_investigation(req: dict) -> dict:
         {"check": "Verification & consistency pass", "status": "completed", "detail": "Output normalized and checked against claims."},
     ]
 
-    title = f"{op.replace('_', ' ').replace('-', ' ').title()} Check"
-    if claim and claim != "Evidence Investigation":
-        title = claim[:80]
+    title = identity["title"]
 
     return {
         "_id": req_id,
@@ -587,7 +586,13 @@ def _evidence_request_to_investigation(req: dict) -> dict:
         "userId": req.get("userId"),
         "question": claim,
         "inputType": op.replace("/api/x402/", "").replace("/api/evidence/", ""),
-        "capability": op,
+        "capability": identity["capabilityId"],
+        "capabilityId": identity["capabilityId"],
+        "serviceName": identity["serviceName"],
+        "originalCapabilityId": identity["capabilityId"],
+        "originalServiceName": identity["serviceName"],
+        "originalQuestion": claim,
+        "originalInputs": inp.get("sourceInputs") or [],
         "status": "completed",
         "currentStage": "assessment",
         "conclusion": conclusion,
