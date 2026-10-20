@@ -298,7 +298,7 @@ These are the x402 metered routes. All are prefixed with `/api/x402/` and return
 | Claim | `claim-investigation` | 0.50 USDC | Cross-source verification, contradiction detection |
 | Image | `image-investigation` | 0.50 USDC | EXIF forensics, C2PA credential verification, manipulation and AI-generation detection, OCR, PII, visual observation |
 | Image batch | `image-batch-investigation` | 0.50 USDC | Multi-file pipeline for duplicates, clusters, and common sources |
-| Video | `video-investigation` | 1.50 USDC | `ffprobe` container forensics, adaptive timestamped frame extraction, audio transcription, scene/object/person analysis, AV sync |
+| Video | `video-investigation` | 0.90 USDC | `ffprobe` container forensics, adaptive timestamped frame extraction, audio transcription, scene/object/person analysis, AV sync |
 | Audio | `audio-investigation` | 0.50 USDC | Synthetic-voice detection, transcription, speaker consistency, forensics |
 | Document | `document-investigation` | 0.50 USDC | PDF text and table extraction, structure, metadata |
 | Source | `source-investigation` | 0.50 USDC | DNS, TLS, title and content extraction, Playwright rendering |
